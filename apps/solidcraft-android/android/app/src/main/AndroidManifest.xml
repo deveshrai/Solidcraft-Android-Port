@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+
+    <!-- Fullscreen: the system bars would otherwise draw over the title bar (Android 15 and later
+         lay every app out edge to edge). -->
+    <!-- The app is Rust, loaded by NativeActivity; SolidCraftActivity adds the document pickers. -->
+    <application
+        android:icon="@mipmap/ic_launcher"
+        android:label="SolidCraft"
+        android:extractNativeLibs="false"
+        android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
+
+        <!-- The configuration changes the app handles itself (by resizing), so rotating the device
+             or showing the keyboard doesn't restart the activity and lose the design. -->
+        <activity
+            android:name=".SolidCraftActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
+            android:exported="true"
+            android:resizeableActivity="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="solidcraft_android" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

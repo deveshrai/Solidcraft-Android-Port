@@ -41,6 +41,10 @@ fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) -> Result<(), String> {
         if name.starts_with('.') || name.starts_with("target") || matches!(name.as_str(), "plan" | "dist" | "node_modules") {
             continue;
         }
+        // Gradle's output next to a Gradle build (apps/solidcraft-android/android): generated, not ours.
+        if name == "build" && dir.join("build.gradle.kts").is_file() {
+            continue;
+        }
         let p = e.path();
         let kind = e.file_type().map_err(|e| e.to_string())?;
         if kind.is_symlink() {

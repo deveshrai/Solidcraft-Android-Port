@@ -22,6 +22,11 @@ Windows builds: `cargo xwin build --release --target x86_64-pc-windows-msvc -p s
 In the browser: `cd apps/solidcraft-web && trunk build --release --public-url ./` (WebGPU, or
 WebGL2 with `?webgl`; `?sample` opens the sample part).
 
+On Android (experimental): `cd apps/solidcraft-android/android && ./gradlew assembleDebug`, then
+`adb install -r app/build/outputs/apk/debug/SolidCraft-*-debug.apk`. Needs the Android SDK and NDK,
+`cargo install cargo-ndk` and `rustup target add aarch64-linux-android x86_64-linux-android`; see
+[android.md](android.md).
+
 Agents can control the document open in a browser tab through `window.solidcraft.execute(...)`
 and `window.solidcraft.request(...)`; see the [browser command API](browser-api.md).
 
