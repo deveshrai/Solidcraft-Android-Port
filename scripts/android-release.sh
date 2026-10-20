@@ -84,5 +84,7 @@ fi
 step "Tagging $tag and publishing the release"
 git tag -a "$tag" -m "SolidCraft $name for Android"
 git push origin "$tag"
-gh release create "$tag" "$out/$apk_name" --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
+# The port's own repository (origin), not upstream's: OWNER/REPO from the remote's URL.
+repo=$(git remote get-url origin | sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##')
+gh release create "$tag" "$out/$apk_name" --repo "$repo" \
     --title "SolidCraft $name for Android" --notes-file "$notes"
