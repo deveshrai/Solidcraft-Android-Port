@@ -10,3 +10,6 @@ __pycache__/
 
 # cargo-mutants output (docs/mutation-testing.md)
 mutants.out*/
+
+# Local scripts that resume a Claude Code session.
+continue-*.sh

@@ -1,0 +1,162 @@
+diff -ruN a/src/platform_impl/android/mod.rs b/src/platform_impl/android/mod.rs
+--- a/src/platform_impl/android/mod.rs	2026-10-20 13:48:02
++++ b/src/platform_impl/android/mod.rs	2026-10-20 13:48:02
+@@ -6,7 +6,9 @@
+ use std::sync::{mpsc, Arc, Mutex};
+ use std::time::{Duration, Instant};
+ 
+-use android_activity::input::{InputEvent, KeyAction, Keycode, MotionAction};
++use android_activity::input::{
++    Axis, ButtonState, InputEvent, KeyAction, Keycode, MetaState, MotionAction, MotionEvent, ToolType,
++};
+ use android_activity::{
+     AndroidApp, AndroidAppWaker, ConfigurationRef, InputStatus, MainEvent, Rect,
+ };
+@@ -143,6 +145,10 @@
+     cause: StartCause,
+     ignore_volume_keys: bool,
+     combining_accent: Option<char>,
++    // SolidCraft: the modifiers last reported (`ModifiersChanged`) and the mouse buttons last seen
++    // held, so a mouse is reported as one (cursor, buttons, wheel) instead of as a finger.
++    modifiers: crate::keyboard::ModifiersState,
++    mouse_buttons: ButtonState,
+ }
+ 
+ #[derive(Debug, Clone, PartialEq)]
+@@ -192,6 +198,8 @@
+             cause: StartCause::Init,
+             ignore_volume_keys: attributes.ignore_volume_keys,
+             combining_accent: None,
++            modifiers: Default::default(),
++            mouse_buttons: ButtonState(0),
+         })
+     }
+ 
+@@ -376,6 +384,16 @@
+             InputEvent::MotionEvent(motion_event) => {
+                 let window_id = window::WindowId(WindowId);
+                 let device_id = event::DeviceId(DeviceId(motion_event.device_id()));
++                // SolidCraft: Shift/Ctrl/Alt held with a click or a wheel turn.
++                self.update_modifiers(motion_event.meta_state(), callback);
++                // SolidCraft: a mouse (or a touchpad driving the pointer) moves the cursor and
++                // presses buttons; only fingers and styluses are touches.
++                let mouse = motion_event.pointer_count() > 0
++                    && motion_event.pointer_at_index(0).tool_type() == ToolType::Mouse;
++                if mouse {
++                    self.handle_mouse_event(motion_event, device_id, callback);
++                    return input_status;
++                }
+ 
+                 let phase = match motion_event.action() {
+                     MotionAction::Down | MotionAction::PointerDown => {
+@@ -423,6 +441,9 @@
+                 }
+             },
+             InputEvent::KeyEvent(key) => {
++                // SolidCraft: modifiers come from the key event's meta state (Android has no
++                // separate modifier events), before the key they modify.
++                self.update_modifiers(key.meta_state(), callback);
+                 match key.key_code() {
+                     // Flag keys related to volume as unhandled. While winit does not have a way for
+                     // applications to configure what keys to flag as handled,
+@@ -481,6 +502,84 @@
+         input_status
+     }
+ 
++    // SolidCraft: report the modifiers held, when they changed.
++    fn update_modifiers<F>(&mut self, meta: MetaState, callback: &mut F)
++    where
++        F: FnMut(event::Event<T>, &RootAEL),
++    {
++        let modifiers = modifiers_from_meta(meta);
++        if modifiers != self.modifiers {
++            self.modifiers = modifiers;
++            let event = event::Event::WindowEvent {
++                window_id: window::WindowId(WindowId),
++                event: event::WindowEvent::ModifiersChanged(modifiers.into()),
++            };
++            callback(event, self.window_target());
++        }
++    }
++
++    // SolidCraft: a mouse event as the cursor's position, the buttons that went down or up since
++    // the last one and the wheel, as winit reports a mouse on the desktop.
++    fn handle_mouse_event<F>(
++        &mut self,
++        motion_event: &MotionEvent<'_>,
++        device_id: event::DeviceId,
++        callback: &mut F,
++    ) where
++        F: FnMut(event::Event<T>, &RootAEL),
++    {
++        let window_id = window::WindowId(WindowId);
++        let pointer = motion_event.pointer_at_index(0);
++        let position = PhysicalPosition { x: pointer.x() as f64, y: pointer.y() as f64 };
++        let action = motion_event.action();
++        let mut send = |event, this: &Self| {
++            callback(event::Event::WindowEvent { window_id, event }, this.window_target())
++        };
++        match action {
++            MotionAction::HoverExit => {
++                send(event::WindowEvent::CursorLeft { device_id }, self);
++                return;
++            },
++            MotionAction::HoverEnter => send(event::WindowEvent::CursorEntered { device_id }, self),
++            _ => {},
++        }
++        send(event::WindowEvent::CursorMoved { device_id, position }, self);
++        if action == MotionAction::Scroll {
++            // Android: positive VSCROLL is the wheel turned away from the user, positive HSCROLL
++            // a scroll to the right; winit: positive moves the content right and down.
++            let v = pointer.axis_value(Axis::Vscroll);
++            let h = pointer.axis_value(Axis::Hscroll);
++            if v != 0.0 || h != 0.0 {
++                let delta = event::MouseScrollDelta::LineDelta(-h, v);
++                let phase = event::TouchPhase::Moved;
++                send(event::WindowEvent::MouseWheel { device_id, delta, phase }, self);
++            }
++            return;
++        }
++        // Every button whose state changed, from the state the event carries (a cancelled
++        // gesture lets go of them all).
++        let now = if action == MotionAction::Cancel {
++            ButtonState(0)
++        } else {
++            motion_event.button_state()
++        };
++        let before = self.mouse_buttons;
++        self.mouse_buttons = now;
++        for (button, was, is) in [
++            (event::MouseButton::Left, before.primary(), now.primary()),
++            (event::MouseButton::Right, before.secondary(), now.secondary()),
++            (event::MouseButton::Middle, before.teriary(), now.teriary()),
++            (event::MouseButton::Back, before.back(), now.back()),
++            (event::MouseButton::Forward, before.forward(), now.forward()),
++        ] {
++            if was != is {
++                let state =
++                    if is { event::ElementState::Pressed } else { event::ElementState::Released };
++                send(event::WindowEvent::MouseInput { device_id, state, button }, self);
++            }
++        }
++    }
++
+     pub fn run<F>(mut self, event_handler: F) -> Result<(), EventLoopError>
+     where
+         F: FnMut(event::Event<T>, &event_loop::ActiveEventLoop),
+@@ -1138,4 +1237,15 @@
+     pub fn monitor(&self) -> MonitorHandle {
+         self.monitor.clone()
+     }
++}
++
++// SolidCraft: the modifier keys an Android meta state holds.
++fn modifiers_from_meta(meta: MetaState) -> crate::keyboard::ModifiersState {
++    use crate::keyboard::ModifiersState;
++    let mut m = ModifiersState::empty();
++    m.set(ModifiersState::SHIFT, meta.shift_on());
++    m.set(ModifiersState::CONTROL, meta.ctrl_on());
++    m.set(ModifiersState::ALT, meta.alt_on());
++    m.set(ModifiersState::SUPER, meta.meta_on());
++    m
+ }
