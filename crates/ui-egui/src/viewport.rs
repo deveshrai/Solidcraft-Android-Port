@@ -88,6 +88,9 @@ pub struct ViewportState {
     /// The preset's navigation for the left-button drag under way (Alias: Shift+Alt), taken
     /// when the button went down, so the drag neither selects nor moves sketch geometry.
     pub primary_nav: Option<NavMode>,
+    /// A touch had two fingers down (pan and pinch): until every finger lifts, the first finger
+    /// neither orbits nor selects.
+    pub(crate) touch_gesture: bool,
     /// Button-free gesture and its last owned pointer position, kept through pauses.
     pub(crate) modifier_nav: Option<(NavMode, Pos2)>,
     /// What a click would pick now (after the active command's filter).
@@ -5631,6 +5634,119 @@ mod tests {
         let stopped = h.app.cam;
         h.frame();
         assert_eq!(h.app.cam, stopped, "noise must leave the camera still");
+    }
+
+    /// A finger as egui-winit reports one: the touch, and for the first finger the pointer too.
+    fn finger(h: &mut crate::scenario::Harness, id: u64, phase: egui::TouchPhase, pos: Pos2) {
+        h.app.synthetic.push(egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos, force: None });
+        if id == 0 {
+            h.app.synthetic.push(egui::Event::PointerMoved(pos));
+            let button =
+                |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            match phase {
+                egui::TouchPhase::Start => h.app.synthetic.push(button(true)),
+                egui::TouchPhase::End | egui::TouchPhase::Cancel => {
+                    h.app.synthetic.push(button(false));
+                    h.app.synthetic.push(egui::Event::PointerGone);
+                }
+                egui::TouchPhase::Move => {}
+            }
+        }
+    }
+
+    #[test]
+    fn one_finger_drag_orbits_instead_of_box_selecting() {
+        let mut h = crate::scenario::Harness::new();
+        let before = h.app.cam;
+        finger(&mut h, 0, egui::TouchPhase::Start, pos2(700.0, 500.0));
+        h.frame();
+        for step in 1..=6 {
+            finger(&mut h, 0, egui::TouchPhase::Move, pos2(700.0 + 20.0 * step as f32, 500.0));
+            h.frame();
+            assert!(h.app.viewport.boxsel.is_none(), "a finger's drag is no box selection");
+        }
+        finger(&mut h, 0, egui::TouchPhase::End, pos2(820.0, 500.0));
+        h.frame();
+        assert_ne!(h.app.cam.yaw, before.yaw, "a finger's drag orbits");
+        assert!(h.app.session.selection.is_empty());
+        // The mouse still box-selects.
+        h.app.synthetic.push(egui::Event::PointerMoved(pos2(700.0, 500.0)));
+        h.app.synthetic.push(egui::Event::PointerButton {
+            pos: pos2(700.0, 500.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.frame();
+        let turned = h.app.cam;
+        for step in 1..=6 {
+            h.app.synthetic.push(egui::Event::PointerMoved(pos2(700.0 + 20.0 * step as f32, 500.0 + 10.0 * step as f32)));
+            h.frame();
+        }
+        assert!(h.app.viewport.boxsel.is_some(), "a mouse drag still draws a selection box");
+        assert_eq!(h.app.cam, turned);
+    }
+
+    #[test]
+    fn a_tap_selects_what_is_under_the_finger() {
+        // egui-winit ends a touch with PointerGone in the frame of the release, as here: the
+        // click must still pick where the finger was, though nothing hovers any more.
+        let ctx = egui::Context::default();
+        let mut app = device_face_app(false);
+        hover_frame(&mut app, &ctx, vec![]);
+        let at = projection(&app, app.viewport.rect.unwrap()).to_screen(Vec3::ZERO).unwrap() + vec2(15.0, 0.0);
+        let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase, pos: at, force: None };
+        let button =
+            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        hover_frame(&mut app, &ctx, vec![touch(egui::TouchPhase::Start), egui::Event::PointerMoved(at), button(true)]);
+        hover_frame(&mut app, &ctx, vec![touch(egui::TouchPhase::End), button(false), egui::Event::PointerGone]);
+        assert!(
+            matches!(app.session.selection.as_slice(), [Sel::Face { .. }]),
+            "a tap selects the face under the finger, got {:?}",
+            app.session.selection
+        );
+    }
+
+    #[test]
+    fn two_fingers_pan_and_pinch_without_orbiting() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.preferences.zoom_to_cursor = false;
+        let before = h.app.cam;
+        finger(&mut h, 0, egui::TouchPhase::Start, pos2(700.0, 500.0));
+        h.frame();
+        finger(&mut h, 1, egui::TouchPhase::Start, pos2(900.0, 500.0));
+        h.frame();
+        // Spread: zoom in.
+        for step in 1..=5 {
+            let d = 15.0 * step as f32;
+            finger(&mut h, 0, egui::TouchPhase::Move, pos2(700.0 - d, 500.0));
+            finger(&mut h, 1, egui::TouchPhase::Move, pos2(900.0 + d, 500.0));
+            h.frame();
+            assert!(h.app.viewport.boxsel.is_none());
+        }
+        let zoomed = h.app.cam;
+        assert!(zoomed.half_height() < before.half_height(), "spreading two fingers zooms in");
+        assert_eq!((zoomed.yaw, zoomed.pitch), (before.yaw, before.pitch), "two fingers never orbit");
+        // Both down: pan.
+        for step in 1..=5 {
+            let d = 12.0 * step as f32;
+            finger(&mut h, 0, egui::TouchPhase::Move, pos2(625.0, 500.0 + d));
+            finger(&mut h, 1, egui::TouchPhase::Move, pos2(975.0, 500.0 + d));
+            h.frame();
+        }
+        assert_ne!(h.app.cam.target, zoomed.target, "two fingers moved together pan");
+        assert_eq!((h.app.cam.yaw, h.app.cam.pitch), (before.yaw, before.pitch));
+        // One finger lifts, the other keeps moving: still the two-finger gesture, no orbit.
+        finger(&mut h, 1, egui::TouchPhase::End, pos2(975.0, 560.0));
+        h.frame();
+        let panned = h.app.cam;
+        finger(&mut h, 0, egui::TouchPhase::Move, pos2(700.0, 600.0));
+        h.frame();
+        assert_eq!(h.app.cam, panned, "the finger left behind doesn't orbit");
+        finger(&mut h, 0, egui::TouchPhase::End, pos2(700.0, 600.0));
+        h.frame();
+        assert!(!h.app.viewport.touch_gesture);
+        assert!(h.app.session.selection.is_empty(), "the gesture selects nothing");
     }
 
     #[test]

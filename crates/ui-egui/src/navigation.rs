@@ -261,7 +261,9 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
     let picking = caps.pick;
     let (hover, scroll, mods, middle, secondary_down, primary_down, primary_pressed, primary_released, delta) = ui.input(|i| {
         (
-            i.pointer.hover_pos(),
+            // A finger lifting ends the pointer in the same frame (egui-winit's PointerGone), so
+            // a tap's click has no hover: it happened where the finger was.
+            i.pointer.hover_pos().or_else(|| i.pointer.any_released().then(|| i.pointer.interact_pos()).flatten()),
             i.smooth_scroll_delta.y,
             i.modifiers,
             i.pointer.middle_down(),
@@ -280,7 +282,10 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
     // hit test also counts the model as under the pointer a few points past its own edge and
     // inside a window's or a list's edge (#678), so the pointer must be in the viewport too,
     // with no window or menu above it.
-    let inside = resp.contains_pointer() && ui.rect_contains_pointer(rect) && hover.is_some_and(|p| !axes.contains(p));
+    // A lifted finger is no longer over anything; the view had it when it took the click.
+    let lifted = ui.input(|i| i.pointer.hover_pos().is_none());
+    let over = if lifted { resp.clicked() || resp.drag_stopped() } else { resp.contains_pointer() && ui.rect_contains_pointer(rect) };
+    let inside = over && hover.is_some_and(|p| rect.contains(p) && !axes.contains(p));
     app.viewport.mouse = hover.filter(|_| inside);
     // Sketch snap suppression is set once in `viewport::show` from preferences.
     middle_double_click(app, ui, inside);
@@ -361,9 +366,34 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
             app.cam.pan(f64::from(pan.x), f64::from(pan.y), h);
         }
     }
+    // Fingers: two pan the model with them and pinch zooms about their centre; one orbits
+    // (below). From the second finger on, the touch is that gesture until every finger lifts.
+    let (touching, touch) = ui.input(|i| (i.any_touches(), i.multi_touch()));
+    if let Some(t) = touch.filter(|t| t.num_touches >= 2 && (inside || app.viewport.touch_gesture)) {
+        app.viewport.touch_gesture = true;
+        app.viewport.orbit_snap = None;
+        app.viewport.orbit_free = None;
+        app.cancel_view_animation();
+        let moved = t.translation_delta;
+        if moved != egui::Vec2::ZERO && moved.is_finite() {
+            app.cam.pan(f64::from(moved.x * crate::prefs::pan_sign_x(app)), f64::from(moved.y), h);
+        }
+        if t.zoom_delta != 1.0 && t.zoom_delta.is_finite() && t.zoom_delta > 0.0 {
+            // Spread zooms in, as the trackpad's pinch.
+            let f = f64::from(t.zoom_delta).powf(-crate::prefs::zoom_sign(app)).clamp(0.05, 20.0);
+            let anchor = zoom_anchor(app, rect, Some(t.center_pos), caps.orbit);
+            app.cam.zoom_at(f, anchor);
+        }
+    } else if !touching {
+        app.viewport.touch_gesture = false;
+    }
+    // The first finger follows the fingers' gesture, not the model: no orbit, no box.
+    let delta = if app.viewport.touch_gesture { egui::Vec2::ZERO } else { delta };
     // A left press with the preset's keys (Alias: Shift+Alt) navigates until the button is let
     // go (kept through the release frame, so the end of the drag doesn't select either).
-    if primary_pressed && inside {
+    if app.viewport.touch_gesture {
+        app.viewport.primary_nav = Some(NavMode::Pan);
+    } else if primary_pressed && inside {
         let empty_space = |app: &SolveApp| {
             app.viewport.context_menu.is_none()
                 && hover.is_some_and(|p| {
@@ -384,7 +414,20 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
         // Ctrl+left drag from empty space orbits in every preset (Cmd on macOS). A Ctrl+click
         // still selects, and Ctrl on geometry still drags it without snapping.
         let ctrl_orbit = (mods.ctrl || mods.command) && !mods.shift && !mods.alt && empty_space(app);
-        app.viewport.primary_nav = preset.or(ctrl_orbit.then_some(NavMode::Orbit));
+        // A finger dragged on the model orbits, over bodies too (a tap still selects): except
+        // where it draws or moves something, which a finger must reach as the mouse does.
+        let touch_orbit = touching
+            && caps.orbit
+            && app.tool.is_none()
+            && app.session.active_sketch.is_none()
+            && app.viewport.context_menu.is_none()
+            && hover.is_some_and(|p| {
+                !picking
+                    || (!crate::canvas::owns_pointer(app, &projection(app, rect), p)
+                        && crate::dim_view::hit(p).is_none()
+                        && crate::sketch_tools::glyph_at(p).is_none())
+            });
+        app.viewport.primary_nav = preset.or((ctrl_orbit || touch_orbit).then_some(NavMode::Orbit));
     } else if !primary_down && !primary_released {
         app.viewport.primary_nav = None;
     }
