@@ -266,3 +266,15 @@ SolidCraft changes:
   and the frame is skipped with a repaint asked for when it is due. The streak and the deadline
   survive a recreate; a configure the device takes ends the streak, a recreate it asked for
   included. A recreate for a lost surface goes ahead as before.
+
+## winit 0.30.13 (Apache-2.0, the winit contributors, https://github.com/rust-windowing/winit)
+
+Changes, all in `src/platform_impl/android/mod.rs` (the other platforms are untouched):
+- A motion event from a mouse (tool type mouse, which includes a touchpad driving the pointer)
+  is reported as `CursorEntered`/`CursorMoved`/`CursorLeft`, `MouseInput` for every button
+  whose state changed (left, right, middle, back, forward) and `MouseWheel` for the scroll
+  axes, as winit reports a mouse on the desktop. Upstream sent every motion event as a touch,
+  so there was no hover, no right or middle button and no wheel.
+- Key and motion events report `ModifiersChanged` from their meta state when Shift, Ctrl, Alt
+  or Meta changed: Android has no separate modifier events, and upstream sent none, so
+  shortcuts with a modifier never matched.

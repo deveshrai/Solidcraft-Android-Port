@@ -151,6 +151,9 @@ matext4cgmath = { path = "vendor/matext4cgmath" }
 # Keep OpenGL pipelines, resolve textures and CAD callbacks at the same safe sample count.
 egui-wgpu = { path = "vendor/egui-wgpu" }
 
+# Android: a mouse as a mouse (cursor, every button, the wheel) and the keyboard's modifiers.
+winit = { path = "vendor/winit" }
+
 # Mutation testing (cargo-mutants, docs/mutation-testing.md): the ci profile with incremental
 # builds, since every mutant rebuilds the crates above the one it changes.
 [profile.mutants]

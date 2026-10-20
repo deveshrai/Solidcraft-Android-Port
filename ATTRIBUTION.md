@@ -498,3 +498,11 @@ A frame whose meshes the GPU refuses to stage (device lost or out of memory) is
 skipped with a warning instead of panicking (#1469).
 Paint callbacks are prepared only after a drawable is acquired, so a skipped
 surface frame cannot strand cached meshes without their GPU initialization.
+
+## Vendored windowing fix for Android input
+
+`vendor/winit` is winit 0.30.13 from https://github.com/rust-windowing/winit (Apache-2.0;
+the original licence text is included). Rust sources only; no images or other artwork are
+copied. SolidCraft's patch, in the Android backend only, reports a mouse as a mouse (cursor
+position, every button, the wheel) instead of as a finger, and reports the keyboard's
+modifier keys (vendor/README.md).
