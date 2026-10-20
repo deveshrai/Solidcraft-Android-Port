@@ -29,6 +29,7 @@ pub trait Clipboard {
 /// The system's clipboard.
 pub struct System;
 
+#[cfg(not(target_os = "android"))]
 impl Clipboard for System {
     fn files(&mut self) -> Vec<PathBuf> {
         arboard::Clipboard::new().and_then(|mut c| c.get().file_list()).unwrap_or_default()
@@ -36,6 +37,17 @@ impl Clipboard for System {
     fn picture(&mut self) -> Option<Picture> {
         let i = arboard::Clipboard::new().and_then(|mut c| c.get_image()).ok()?;
         Some(Picture { width: i.width, height: i.height, rgba: i.bytes.into_owned() })
+    }
+}
+
+/// Android's clipboard (through the host) holds text only.
+#[cfg(target_os = "android")]
+impl Clipboard for System {
+    fn files(&mut self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+    fn picture(&mut self) -> Option<Picture> {
+        None
     }
 }
 

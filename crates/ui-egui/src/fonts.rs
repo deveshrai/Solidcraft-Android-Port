@@ -526,6 +526,13 @@ fn find_system_cjk_font() -> Option<Vec<u8>> {
         }
     }
 
+    #[cfg(target_os = "android")]
+    {
+        if let Some(bytes) = scan_dir_for_font(std::path::Path::new("/system/fonts"), 1, is_cjk_font_name) {
+            return Some(bytes);
+        }
+    }
+
     None
 }
 
