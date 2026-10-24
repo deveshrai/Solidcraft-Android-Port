@@ -47,7 +47,11 @@ git log --oneline -20
 git push origin HEAD
 ```
 
-Options: `--no-build` (no APK), `--check-only` (no fetch or merge: check the tree as it is),
+To follow an upstream **release** rather than `main`, merge its tag: upstream cuts releases on
+their own line (v0.21.0 is not on `main`), so `scripts/android-sync.sh --to v0.21.0` merges
+exactly that release and the APK gets its version. Merging `main` later is fine; both are merges.
+
+Options: `--to <tag>` (merge that upstream tag), `--no-build` (no APK), `--check-only` (no fetch or merge: check the tree as it is),
 `--revendor X.Y.Z` (below). `UPSTREAM_REMOTE` / `UPSTREAM_BRANCH` override `upstream` / `main`.
 
 How often: whenever you want the new features; upstream lands several changes a day, and
