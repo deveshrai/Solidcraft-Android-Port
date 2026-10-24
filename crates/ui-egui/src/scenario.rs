@@ -231,6 +231,27 @@ impl Harness {
         self.output = out.platform_output;
     }
 
+    /// One frame with exactly these platform `events` (a platform's own batching, such as
+    /// egui-winit ending a touch with its release and PointerGone in one frame), queued
+    /// synthetic events left for later frames.
+    pub fn frame_with(&mut self, events: Vec<egui::Event>) {
+        self.time += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
+            time: Some(self.time),
+            focused: true,
+            events,
+            ..Default::default()
+        };
+        let app = &mut self.app;
+        let mut out = self.ctx.run_ui(raw, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        out.textures_delta.clear();
+        self.output = out.platform_output;
+    }
+
     pub fn frames(&mut self, n: usize) {
         for _ in 0..n {
             self.frame();

@@ -610,6 +610,42 @@ fn value_box_with(ui: &mut egui::Ui, label: &str, value: &mut String, at: Pos2, 
 
 /// How far (logical points) from an arrow's stem a press still takes the arrow.
 const ARROW_STEM_REACH: f32 = 6.0;
+/// How far from an arrow a finger's press still takes it: a fingertip covers far more than a
+/// pointer, and has no hover to show the arrow where it will land.
+const ARROW_TOUCH_REACH: f32 = 24.0;
+
+/// The drag arrows drawn in the last frame, as screen segments (base to tip), with the frame.
+#[derive(Clone, Default)]
+struct ArrowStems {
+    frame: u64,
+    stems: Vec<(Pos2, Pos2)>,
+}
+
+fn arrow_stems_id() -> egui::Id {
+    egui::Id::new("sc_arrow_stems")
+}
+
+/// Whether a finger pressed at `p` would take a drag arrow (one drawn this frame or the last):
+/// navigation leaves such a press to the arrow, which has no hover to claim it ahead of time.
+pub(crate) fn arrow_at_touch(ctx: &egui::Context, p: Pos2) -> bool {
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data(|d| d.get_temp::<ArrowStems>(arrow_stems_id()))
+        .filter(|s| s.frame + 1 >= frame)
+        .is_some_and(|s| s.stems.iter().any(|&(a, b)| to_segment(p, a, b) <= ARROW_TOUCH_REACH))
+}
+
+/// Note an arrow drawn this frame (see [`arrow_at_touch`]).
+fn note_arrow(ctx: &egui::Context, a: Pos2, b: Pos2) {
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data_mut(|d| {
+        let s = d.get_temp_mut_or_default::<ArrowStems>(arrow_stems_id());
+        if s.frame != frame {
+            s.frame = frame;
+            s.stems.clear();
+        }
+        s.stems.push((a, b));
+    });
+}
 
 /// The distance from `p` to the segment from `a` to `b` on screen.
 fn to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
@@ -650,8 +686,22 @@ fn drag_arrow(
     let r = ui.interact(area, id, egui::Sense::drag());
     // How far along the arrow the press was short of its end: the drag keeps that gap.
     let grab = id.with("stem grab");
-    if r.drag_started() {
-        let gap = on_stem.zip(r.interact_pointer_pos()).and_then(|(_, p)| along(proj, p, base, n)).map(|v| v - l);
+    // A finger: no hover put the arrow's area under it before the press, so the press is the
+    // arrow's when it lands near the stem or the tip, and the drag follows it until it lifts.
+    let touch = id.with("touch grab");
+    let (touching, pressed, down, origin) =
+        ui.input(|i| (i.any_touches(), i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.press_origin()));
+    let finger_took = touching && pressed && origin.is_some_and(|p| to_segment(p, bs, ts) <= ARROW_TOUCH_REACH);
+    if finger_took {
+        ui.data_mut(|d| d.insert_temp(touch, true));
+    } else if !down {
+        ui.data_mut(|d| d.remove::<bool>(touch));
+    }
+    let finger = ui.data(|d| d.get_temp::<bool>(touch).unwrap_or(false));
+    if r.drag_started() || finger_took {
+        let at_tip_press = origin.is_some_and(|p| p.distance(ts) <= 10.0);
+        let press = if finger_took { origin.filter(|_| !at_tip_press) } else { on_stem.and(r.interact_pointer_pos()) };
+        let gap = press.and_then(|p| along(proj, p, base, n)).map(|v| v - l);
         ui.data_mut(|d| {
             if let Some(g) = gap.filter(|g| g.is_finite()) {
                 d.insert_temp(grab, g);
@@ -660,8 +710,9 @@ fn drag_arrow(
             }
         });
     }
-    if r.dragged()
-        && let Some(p) = r.interact_pointer_pos()
+    let pointer = if finger { ui.input(|i| i.pointer.interact_pos()) } else { r.interact_pointer_pos() };
+    if (r.dragged() || (finger && down))
+        && let Some(p) = pointer
         && let Some(v) = along(proj, p, base, n)
     {
         crate::tool_modifiers::set_manipulator_dragging(true);
@@ -678,7 +729,8 @@ fn drag_arrow(
     // Paint the value just read from this frame's pointer, including the value box anchor.
     // Using the old distance here made both trail the drag by another frame.
     crate::scenario::publish_handle(if id == egui::Id::new("sc_manipulator") { "arrow" } else { "arrow2" }, ts);
-    let hot = r.hovered() || r.dragged();
+    note_arrow(ui.ctx(), bs, ts);
+    let hot = r.hovered() || r.dragged() || finger;
     let col = if hot { t.accent } else { t.manipulator };
     arrow(painter, bs, ts, col);
     if hot {

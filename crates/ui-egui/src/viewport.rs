@@ -110,6 +110,9 @@ pub struct ViewportState {
     /// A touch had two fingers down (pan and pinch): until every finger lifts, the first finger
     /// neither orbits nor selects.
     pub(crate) touch_gesture: bool,
+    /// A finger pressed on a dialog's drag arrow: the arrow takes the drag, the view neither
+    /// orbits nor draws a selection box under it.
+    pub(crate) touch_handle: bool,
     /// Button-free gesture and its last owned pointer position, kept through pauses.
     pub(crate) modifier_nav: Option<(NavMode, Pos2)>,
     /// What a click would pick now (after the active command's filter).
@@ -3366,6 +3369,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     // Box selection: a primary drag on the model when no navigation mode is on.
     if app.tool.is_none()
         && !held
+        && !app.viewport.touch_handle
         && primary_nav.is_none()
         && mode.is_none()
         && app.viewport.point_drag.is_none()
@@ -7077,6 +7081,46 @@ mod tests {
             "a tap selects the face under the finger, got {:?}",
             app.session.selection
         );
+    }
+
+    #[test]
+    fn a_tap_picks_a_profile_for_a_dialog_opened_by_finger() {
+        // Extrude opened from the ribbon by a finger, then a tap on a profile in the view picks it
+        // (a dialog's picks, not the orbit a finger's drag makes). Each tap as egui-winit sends
+        // it: the press in one frame, the release and PointerGone in the next.
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        // As on a device: the viewport drawn on the GPU (the target alone; no device is needed).
+        h.app.viewport.gpu = Some(GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false });
+        for (id, p) in [("sketch.create", json!({"plane": "XY"})), ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [60, 20]}))] {
+            h.app.run(id, p).unwrap();
+        }
+        h.app.finish_sketch();
+        h.frames(3);
+        let tap = |h: &mut crate::scenario::Harness, at: Pos2| {
+            let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase, pos: at, force: None };
+            let button =
+                |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            h.frame_with(vec![touch(egui::TouchPhase::Start), egui::Event::PointerMoved(at), button(true)]);
+            h.frame_with(vec![touch(egui::TouchPhase::End), button(false), egui::Event::PointerGone]);
+        };
+        // Extrude from the ribbon, by finger.
+        let [x, y] = h.widget("Extrude").expect("the Extrude button");
+        tap(&mut h, pos2(x as f32, y as f32));
+        h.frame_with(vec![]);
+        assert!(h.app.dialog.is_some(), "Extrude opened");
+        if let Some(d) = h.app.dialog.as_mut() {
+            for i in &mut d.inputs {
+                i.items.clear();
+            }
+        }
+        h.frame_with(vec![]);
+        let picked = |h: &crate::scenario::Harness| h.app.dialog.as_ref().map(|d| d.inputs.iter().map(|i| i.items.len()).sum::<usize>());
+        assert_eq!(picked(&h), Some(0));
+        let at = projection(&h.app, h.app.viewport.rect.unwrap()).to_screen(Vec3::new(45.0, 15.0, 0.0)).unwrap();
+        tap(&mut h, at);
+        h.frame_with(vec![]);
+        assert_eq!(picked(&h), Some(1), "the first tap picks the profile under the finger");
     }
 
     #[test]

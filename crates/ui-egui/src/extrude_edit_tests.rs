@@ -457,6 +457,51 @@ fn a_click_on_the_extrude_arrow_stem_keeps_the_profile() {
     assert!((dialog_distance(&h) - distance).abs() < 1e-9, "{} for {distance}", dialog_distance(&h));
 }
 
+/// A finger on the Extrude arrow's stem drags the distance, as the mouse does: with no hover
+/// before the press, the arrow's area was only its tip, so the press went to the view, which
+/// orbited. Found on a phone.
+#[test]
+fn a_finger_on_the_arrow_stem_drags_the_distance_without_orbiting() {
+    let mut h = Harness::new();
+    h.app.home.open = false;
+    for (id, p) in [
+        ("sketch.create", json!({"plane": "XY"})),
+        ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [60, 20]})),
+        ("sketch.finish", json!({})),
+        ("solid.extrude", json!({"distance": 10})),
+        ("sketch.create", json!({"plane": {"origin": [0, 0, 10], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}})),
+        ("sketch.rectangle.two_point", json!({"p0": [5, 5], "p1": [15, 15]})),
+    ] {
+        h.app.run(id, p).unwrap();
+    }
+    h.app.finish_sketch();
+    h.app.start("solid.extrude");
+    h.frames(4);
+    let before = dialog_distance(&h);
+    let cam = h.app.cam;
+    let proj = crate::viewport::projection(&h.app, h.app.viewport.rect.unwrap());
+    let (base, normal) = crate::canvas::anchor(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
+    let screen = |at: f64| proj.to_screen(base + normal.unwrap() * at).unwrap();
+    // On the stem, a third of the way up, then along the arrow by finger.
+    let from = screen(before * 0.33);
+    let to = screen(before * 0.33 + 8.0);
+    let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase, pos, force: None };
+    let button = |pressed, pos| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    // As egui-winit sends a finger: no pointer before the press.
+    h.frame_with(vec![egui::Event::PointerGone]);
+    h.frame_with(vec![touch(egui::TouchPhase::Start, from), egui::Event::PointerMoved(from), button(true, from)]);
+    for k in 1..=8 {
+        let at = from + (to - from) * (k as f32 / 8.0);
+        h.frame_with(vec![touch(egui::TouchPhase::Move, at), egui::Event::PointerMoved(at)]);
+    }
+    h.frame_with(vec![touch(egui::TouchPhase::End, to), button(false, to), egui::Event::PointerGone]);
+    h.frames(2);
+    assert_eq!(h.app.cam, cam, "the view did not orbit");
+    assert!(h.app.viewport.boxsel.is_none());
+    let after = dialog_distance(&h);
+    assert!((after - (before + 8.0)).abs() < 1.5, "the distance followed the finger: {before} → {after}");
+}
+
 /// The volume of the body `name`.
 fn volume(h: &Harness, name: &str) -> f64 {
     let state = h.app.session.world_state();

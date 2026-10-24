@@ -123,6 +123,7 @@ cargo xtask assets || fail "cargo xtask assets"
 step "Android tests (touch input, document names)"
 cargo test -q -p solidcraft-android
 cargo test -q -p solidcraft-ui-egui --lib -- one_finger_drag_orbits two_fingers_pan_and_pinch a_tap_selects pinch_gesture \
+    a_tap_picks_a_profile a_finger_on_the_arrow_stem \
     || fail "touch tests"
 
 # ---- APK ---------------------------------------------------------------------------------------

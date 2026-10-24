@@ -495,6 +495,11 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
     let delta = if app.viewport.touch_gesture { egui::Vec2::ZERO } else { delta };
     // A left press with the preset's keys (Alias: Shift+Alt) navigates until the button is let
     // go (kept through the release frame, so the end of the drag doesn't select either).
+    if primary_pressed {
+        app.viewport.touch_handle = touching && hover.is_some_and(|p| crate::canvas::arrow_at_touch(ui.ctx(), p));
+    } else if !primary_down && !primary_released {
+        app.viewport.touch_handle = false;
+    }
     if app.viewport.touch_gesture {
         app.viewport.primary_nav = Some(NavMode::Pan);
     } else if primary_pressed && inside {
@@ -521,6 +526,7 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
         // A finger dragged on the model orbits, over bodies too (a tap still selects): except
         // where it draws or moves something, which a finger must reach as the mouse does.
         let touch_orbit = touching
+            && !app.viewport.touch_handle
             && caps.orbit
             && app.tool.is_none()
             && app.session.active_sketch.is_none()
