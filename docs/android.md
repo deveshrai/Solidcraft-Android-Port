@@ -25,7 +25,9 @@ Tested on an Android 16 tablet emulator (Pixel Tablet, arm64, Vulkan through Mol
 | Modelling | The kernel runs on the device: sketches, features, the timeline, every workspace |
 | Mouse | Hover highlighting, click to select, the navigation preset's buttons (default Fusion: middle drag pans, Shift+middle and right drag orbit), the wheel zooms to the cursor, the right-click menu |
 | Keyboard | Shortcuts with and without modifiers (tested: Ctrl+Z, Ctrl+S, Ctrl+O, E, Esc, S to search), typing into fields |
-| Touch | One finger orbits, a tap selects, two fingers pan, a pinch zooms about the fingers |
+| Touch | One finger orbits, a tap selects, two fingers pan, a pinch zooms about the fingers; a finger drags a dialog's arrows (Extrude distance, Fillet radius…) |
+| Back | Closes the open dialog, menu, tool, sketch or keyboard, as Escape; with nothing open, the app goes to the background as Home does, designs kept |
+| Tested devices | Pixel Tablet emulator (Android 16); Galaxy Z Fold (SM-F971B, Android 17, Adreno 840): inner screen, landscape and portrait |
 | Files | Open, Open Recent, Save, Save As, Insert STEP/Mesh/Design, Save as mesh (STL, 3MF…), Export STEP/OBJ/DXF/URDF/JSON, from and to any documents provider (device, SD card, Drive…) |
 
 ## Building and installing
@@ -241,8 +243,8 @@ multi-touch screen through Android's `uinput` tool (usage in the file). `adb exe
 
 ## Not there yet
 
-- **On-screen keyboard**: `NativeActivity` doesn't show it for egui's text fields; a hardware
-  keyboard works. (GameActivity, with its IME support, would also bring accessibility.)
+- **On-screen keyboard**: it shows when a text field takes focus and typing works, but it covers
+  the lower half of the screen instead of the app moving above it.
 - **Phone layout**: the layout is the desktop one; it fits a tablet, a phone is cramped.
 - **Recovery autosaves** and other per-user folders are found from `HOME`/`XDG_*`, which Android
   doesn't set; crash reports and settings are kept (in the app's folder), autosaves are not.

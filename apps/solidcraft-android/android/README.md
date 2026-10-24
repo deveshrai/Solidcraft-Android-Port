@@ -59,8 +59,7 @@ renamed `part (1).step` where the provider allows it.
 
 - A glTF file whose buffers are separate `.bin` files: only the file picked is copied in (GLB works).
 - Opening a file from another app (a file manager's "Open with"): the app registers no file types yet.
-- The on-screen keyboard: NativeActivity doesn't show it for text fields (a hardware keyboard
-  works, shortcuts included).
+- The on-screen keyboard covers the lower half of the screen instead of the app moving above it.
 - Phone layout: the layout is the desktop one; it fits a tablet, a phone is cramped.
 - Recovery autosaves and other per-user folders: they are found from `HOME`/`XDG_*`, which
   Android doesn't set, so only crash reports and settings (in the app's own folder) are kept.
