@@ -7,7 +7,7 @@ use truck_modeling as mt;
 use std::collections::HashMap;
 
 use crate::body::{Body, Solid, from_p3};
-use crate::boolean_diagnostics::{BooleanFallback, BooleanStrategy, capture_boolean_diagnostics, merge, record};
+use crate::boolean_diagnostics::{BooleanFallback, BooleanStrategy, capture_boolean_diagnostics, merge, record, reject};
 use crate::boolean_record::{self as recorded, Traced};
 use crate::{KernelError, Result, guard, record};
 
@@ -1289,6 +1289,9 @@ where
         _ => (volume(a), volume(b)),
     };
     let slack = 2e-3 * (va + vb) + 1e-9;
+    // Where a result's edges can run: a candidate with an edge far outside the operands is
+    // discarded before it is meshed (#3020), as meshing such a face may never finish.
+    let reach = crate::candidate_reach::Reach::new(a, b, (meshes.0.as_ref(), meshes.1.as_ref()), size);
     // Volume bounds, then membership against the operands (catches misclassified pieces), on
     // one mesh of the result. Returns (plausible, volume).
     // Shells that touch were never fused: coincident back-to-back faces leave the intersection
@@ -1306,6 +1309,10 @@ where
             && crate::coplanar::faces_touch(a, b)
     };
     let check = |r: &Body| -> (bool, f64) {
+        if let Some(reason) = reach.as_ref().and_then(|reach| reach.runaway(r)) {
+            reject(reason);
+            return (false, f64::NAN);
+        }
         let Ok(mr) = r.tessellate_with(tol_m, true) else { return (false, f64::NAN) };
         let v = mr.measure().volume;
         let bounds = plausible(v, op, va, vb, slack);
@@ -1792,6 +1799,21 @@ where
     if let Some(body) = fine(&mut last) {
         return Ok(Some(body));
     }
+    // An intersection keeps what lies in both bodies: when the sampled answer keeps one of them
+    // whole and is contradicted by facets that cross well past their faceting error, keeping it
+    // would keep exactly what the intersection was asked to trim (#3244: teeth standing 0.27 mm
+    // out of a trimming cylinder came back untrimmed). It fails instead, and the model is kept.
+    // An empty answer stays reported as unverified: the clearance checks measure it another way.
+    let deep = 2.0 * 3.0 * tol_m;
+    if op == BoolOp::Intersect
+        && matches!(doubted, Some(Some(_)))
+        && let (Some(ma), Some(mb)) = &meshes
+        && ma.crosses(mb, deep)
+    {
+        return Err(KernelError::Failed(format!(
+            "boolean {op:?}: the bodies pass through each other by more than {deep:.3e} mm where they could not be intersected; {last}"
+        )));
+    }
     match doubted {
         Some(r) => {
             let mut event = BooleanFallback::new(BooleanStrategy::UnverifiedShortcut);
@@ -2088,8 +2110,30 @@ pub(crate) fn rigid_placement(m: &[[f64; 4]; 4]) -> bool {
 
 /// Affine transform by a column-major 4x4 matrix (rotations, translations, reflections).
 pub fn transform_matrix(body: &Body, m: [[f64; 4]; 4]) -> Result<Body> {
+    transform_matrix_keeping(body, m, false)
+}
+
+/// [`transform_matrix`] for showing a body where an assembly places it (world placement): the
+/// revolved faces stay turned the way the body has them instead of being searched again for
+/// every placed copy (#3044). A modelling operation keeps using [`transform_matrix`]: where a
+/// face wraps all the way round, the turn it finds depends on the copy's own coordinates, and
+/// booleans on the copy depend on that.
+pub fn place_matrix(body: &Body, m: [[f64; 4]; 4]) -> Result<Body> {
+    transform_matrix_keeping(body, m, body.phased)
+}
+
+fn transform_matrix_keeping(body: &Body, m: [[f64; 4]; 4], phased: bool) -> Result<Body> {
     if m.iter().flatten().any(|x| !x.is_finite()) {
         return Err(KernelError::Invalid("non-finite transform".into()));
+    }
+    // A perspective row or a flattening (from a design file or a command's parameters) leaves
+    // no solid: refused rather than built into faces that mesh to nonsense.
+    let scale = (0..3).map(|c| Vec3::new(m[c][0], m[c][1], m[c][2]).len()).fold(0.0, f64::max);
+    if m[0][3].abs() > 1e-12 || m[1][3].abs() > 1e-12 || m[2][3].abs() > 1e-12 || (m[3][3] - 1.0).abs() > 1e-12 {
+        return Err(KernelError::Invalid("the transform is not affine: its last row must be 0, 0, 0, 1".into()));
+    }
+    if det3(&m).abs() <= 1e-12 * scale.powi(3) {
+        return Err(KernelError::Invalid("the transform flattens the body: its linear part is singular".into()));
     }
     if let Some(placed) = body.mesh_transformed(&m) {
         let history = crate::history::History::identity(&placed);
@@ -2122,6 +2166,7 @@ pub fn transform_matrix(body: &Body, m: [[f64; 4]; 4]) -> Result<Body> {
             edges.as_ref(),
             det3(&m) < 0.0,
             rigid_placement(&m).then_some(body.coarse_missing).flatten(),
+            phased,
         )?;
         Ok(placed.with_color(body.color()).with_paint(body.paint().cloned()).with_face_sources(sources).inherit_regularization_protection(body))
     })

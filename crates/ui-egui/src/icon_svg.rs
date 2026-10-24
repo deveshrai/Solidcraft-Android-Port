@@ -23,6 +23,54 @@ include!(concat!(env!("OUT_DIR"), "/icon_data.rs"));
 /// The id drawn for every icon that has no master yet.
 pub const PLACEHOLDER: &str = "placeholder";
 
+/// Opt-in icon discovery on the UI thread. Disabled rendering only checks a thread-local flag.
+pub mod audit {
+    use std::cell::{Cell, RefCell};
+    use std::collections::BTreeMap;
+
+    /// One requested semantic id and the artwork actually selected by the renderer.
+    #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+    pub struct Requested {
+        pub name: String,
+        pub master: String,
+        pub placeholder: bool,
+    }
+
+    thread_local! {
+        static ACTIVE: Cell<bool> = const { Cell::new(false) };
+        static REQUESTS: RefCell<BTreeMap<String, Requested>> = const { RefCell::new(BTreeMap::new()) };
+    }
+
+    /// Enable collection and reset the accumulated names.
+    pub fn start() {
+        REQUESTS.with(|requests| requests.borrow_mut().clear());
+        ACTIVE.set(true);
+    }
+
+    /// Drain sorted, unique requests; collection stays enabled until `stop`.
+    pub fn take() -> Vec<Requested> {
+        REQUESTS.with(|requests| std::mem::take(&mut *requests.borrow_mut()).into_values().collect())
+    }
+
+    /// Disable collection, releasing any requests that were not taken.
+    pub fn stop() {
+        ACTIVE.set(false);
+        REQUESTS.with(|requests| requests.borrow_mut().clear());
+    }
+
+    pub(super) fn record(name: &str, resolved: super::Resolved) {
+        if ACTIVE.get() {
+            REQUESTS.with(|requests| {
+                requests.borrow_mut().entry(name.to_owned()).or_insert_with(|| Requested {
+                    name: name.to_owned(),
+                    master: resolved.master.to_owned(),
+                    placeholder: resolved.placeholder,
+                });
+            });
+        }
+    }
+}
+
 /// How a shape is painted.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Paint {
@@ -422,6 +470,33 @@ impl Look {
     }
 }
 
+/// Explicit whole-glyph tinting maps shaded passive faces to the selected active ramp.
+/// Keep ink, guides, literal mask colours and knockouts in their original roles.
+#[derive(Clone, Copy)]
+struct PaintLook {
+    look: Look,
+    tint_passive: bool,
+}
+
+impl PaintLook {
+    fn resolve(self, paint: Paint) -> Option<[u8; 3]> {
+        if self.tint_passive
+            && let Paint::Role(role) = paint
+        {
+            let active = match ROLE_NAMES.get(role).copied() {
+                Some("passive-1") => Some("active-1"),
+                Some("passive-2") => Some("active-2"),
+                Some("passive-3") => Some("active-3"),
+                _ => None,
+            };
+            if let Some(role) = active.and_then(|name| ROLE_NAMES.iter().position(|role| *role == name)) {
+                return Some(self.look.rgb(role));
+            }
+        }
+        self.look.resolve(paint)
+    }
+}
+
 fn paint_of(c: [u8; 3], alpha: f32) -> sk::Paint<'static> {
     let mut p = sk::Paint::default();
     p.set_color_rgba8(c[0], c[1], c[2], (alpha.clamp(0.0, 1.0) * 255.0).round() as u8);
@@ -429,7 +504,7 @@ fn paint_of(c: [u8; 3], alpha: f32) -> sk::Paint<'static> {
     p
 }
 
-fn shape_paint(paint: Paint, look: Look, alpha: f32) -> Option<sk::Paint<'static>> {
+fn shape_paint(paint: Paint, look: PaintLook, alpha: f32) -> Option<sk::Paint<'static>> {
     if paint == Paint::Knockout {
         let mut paint = paint_of([0, 0, 0], alpha);
         paint.blend_mode = sk::BlendMode::DestinationOut;
@@ -439,7 +514,7 @@ fn shape_paint(paint: Paint, look: Look, alpha: f32) -> Option<sk::Paint<'static
     }
 }
 
-fn draw_node(pm: &mut sk::Pixmap, n: &Node, look: Look, tf: sk::Transform, doc: &Doc, clip: Option<&sk::Mask>, opacity: f32) {
+fn draw_node(pm: &mut sk::Pixmap, n: &Node, look: PaintLook, tf: sk::Transform, doc: &Doc, clip: Option<&sk::Mask>, opacity: f32) {
     let own;
     let mask = if let Some(m) = n.mask {
         own = doc.masks.get(m).and_then(|nodes| {
@@ -475,7 +550,7 @@ fn draw_node(pm: &mut sk::Pixmap, n: &Node, look: Look, tf: sk::Transform, doc: 
     }
 }
 
-fn draw_items(pm: &mut sk::Pixmap, items: &[Item], look: Look, tf: sk::Transform, doc: &Doc, clip: Option<&sk::Mask>, opacity: f32) {
+fn draw_items(pm: &mut sk::Pixmap, items: &[Item], look: PaintLook, tf: sk::Transform, doc: &Doc, clip: Option<&sk::Mask>, opacity: f32) {
     for item in items {
         match item {
             Item::Node(n) => draw_node(pm, n, look, tf, doc, clip, opacity),
@@ -495,6 +570,15 @@ fn draw_items(pm: &mut sk::Pixmap, items: &[Item], look: Look, tf: sk::Transform
 
 /// Rasterise `doc` into a square `px` × `px` premultiplied RGBA image.
 pub fn render(doc: &Doc, look: Look, px: u32) -> Option<sk::Pixmap> {
+    render_with_look(doc, PaintLook { look, tint_passive: false }, px)
+}
+
+/// Tint passive faces through the active ramp while retaining shading and all geometry.
+pub(crate) fn render_tinted(doc: &Doc, look: Look, px: u32) -> Option<sk::Pixmap> {
+    render_with_look(doc, PaintLook { look, tint_passive: true }, px)
+}
+
+fn render_with_look(doc: &Doc, look: PaintLook, px: u32) -> Option<sk::Pixmap> {
     let mut pm = sk::Pixmap::new(px, px)?;
     let s = px as f32 / 64.0;
     draw_items(&mut pm, &doc.items, look, sk::Transform::from_scale(s, s), doc, None, 1.0);
@@ -534,7 +618,7 @@ pub struct Resolved {
     pub placeholder: bool,
 }
 
-fn accent_index(name: &str) -> Option<usize> {
+pub(crate) fn accent_index(name: &str) -> Option<usize> {
     if name.is_empty() { None } else { ACCENT_NAMES.iter().position(|a| *a == name) }
 }
 
@@ -561,6 +645,12 @@ pub(crate) fn role_colour(name: &str, look: Look) -> egui::Color32 {
 /// The master and accent for an app icon id: an alias (with its accent), a master of that name,
 /// or the placeholder.
 pub fn resolve(name: &str) -> Resolved {
+    let resolved = resolve_master(name);
+    audit::record(name, resolved);
+    resolved
+}
+
+fn resolve_master(name: &str) -> Resolved {
     let (big, _) = table();
     let placeholder = Resolved { master: PLACEHOLDER, accent: None, placeholder: true };
     if let Some((_, master, accent)) = ALIASES.iter().find(|(a, _, _)| *a == name) {
@@ -585,6 +675,7 @@ pub fn doc_for(master: &str, px: u32) -> Option<&'static Doc> {
 }
 
 /// Every master id (not the small variants), for tests and tooling.
+#[cfg(test)]
 pub fn master_ids() -> Vec<&'static str> {
     let mut v: Vec<_> = table().0.keys().copied().collect();
     v.sort_unstable();
@@ -890,5 +981,37 @@ mod tests {
         assert!(ROLE_NAMES.contains(&"line"));
         assert_eq!(PALETTE.len(), 2);
         assert!(PALETTE.iter().all(|p| p.len() == ROLE_NAMES.len()));
+    }
+
+    #[test]
+    fn danger_tint_preserves_faces_outlines_and_transparent_details() {
+        for dark in [false, true] {
+            for vision in crate::theme::ColorVision::ALL {
+                let look = Look { dark, accent: accent_index("constraint"), vision };
+                for id in ["delete", "new", "extrude"] {
+                    for px in [16, 20, 64] {
+                        let doc = doc_for(id, px).unwrap();
+                        let normal = render(doc, look, px).unwrap();
+                        let tinted = render_tinted(doc, look, px).unwrap();
+                        assert!(
+                            normal.pixels().iter().zip(tinted.pixels()).all(|(a, b)| a.alpha() == b.alpha()),
+                            "{id}/{px}: preserve contours, handle, slat cutouts and masks"
+                        );
+                        if id == "delete" && px == 64 {
+                            let image = egui::ColorImage::from_rgba_premultiplied([64, 64], tinted.data());
+                            for role in ["ink", "active-2", "active-3"] {
+                                assert!(
+                                    image.pixels.contains(&role_colour(role, look)),
+                                    "{role}, dark={dark}/{vision:?}: retain separate face and outline colours"
+                                );
+                            }
+                            for role in ["passive-2", "passive-3"] {
+                                assert!(!image.pixels.contains(&role_colour(role, look)), "{role}: bin faces must take the red ramp");
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

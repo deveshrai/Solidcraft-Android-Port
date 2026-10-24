@@ -1,6 +1,5 @@
 # cargo-nextest settings for CI (`cargo xtask test` does not use nextest).
-# CI builds the tests once and runs them in shards: 2 for a pull request, 4 for main and the nightly
-# (.github/workflows/ci.yml).
+# CI builds the tests once and runs them in one job on a 32 vCPU runner (.github/workflows/ci.yml).
 
 [profile.ci]
 # Heavy tests (one to twelve minutes each on a CI runner) that pull requests skip. They run on
@@ -34,12 +33,14 @@ slow-timeout = { period = "60s" }
 [profile.ci.junit]
 path = "junit.xml"
 
-# The action matrix sample runs its designs in parallel worker processes, one per CPU. Run with
-# other tests beside it (the heavy ones on main), a pi-case hole that takes 8 s alone (#952 makes
-# it a real hole) went past the matrix's 90 s action limit. It runs on its own.
+# The action matrix sample runs its designs in parallel workers (ACTION_MATRIX_JOBS, set to match in
+# ci.yml). Its workers reserve that many of nextest's threads, so the cores are not oversubscribed
+# (a pi-case hole that takes 8 s alone went past the matrix's 90 s action limit when they were),
+# and it starts first, beside the other slow tests.
 [[profile.ci.overrides]]
 filter = "binary(action_matrix) & test(=action_matrix_sample)"
-threads-required = "num-cpus"
+threads-required = 12
+priority = 100
 
 
 # The slowest tests start first, so a shard does not end with one of them running alone on a

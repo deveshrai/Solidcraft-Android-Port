@@ -64,7 +64,7 @@ fn reads_only(id: &str) -> bool {
         || id.starts_with("model.")
         || id.ends_with(".inspect")
         || id.ends_with(".list")
-        || matches!(id, "edit.checkpoint" | "render.status" | "render.backends" | "render.settings.get" | "file.slicers")
+        || matches!(id, "edit.checkpoint" | "render.status" | "render.backends" | "render.settings.get" | "file.slicers" | "engine.describe")
 }
 
 /// Commands that read or write a file by their nature: any string they are given in a path
@@ -235,6 +235,7 @@ mod tests {
         assert_eq!(exec("sketch.inspect", json!({"sketch": 1})), Verdict::Run { change: false });
         assert_eq!(exec("inspect.measure", json!({})), Verdict::Run { change: false });
         assert_eq!(request("document.inspect", &json!({}), 0), Verdict::Run { change: false });
+        assert_eq!(exec("engine.describe", json!({"command": "solid.box"})), Verdict::Run { change: false });
     }
 
     #[test]

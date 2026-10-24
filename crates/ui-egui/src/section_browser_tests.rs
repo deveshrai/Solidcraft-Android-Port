@@ -6,6 +6,7 @@ use serde_json::json;
 
 use crate::context_menu::{self, Target};
 use crate::scenario::Harness;
+use crate::test_support::click;
 
 fn harness() -> Harness {
     let mut h = Harness::new();
@@ -13,12 +14,6 @@ fn harness() -> Harness {
     h.app.ui.show_browser = true;
     h.frames(3);
     h
-}
-
-fn click(h: &mut Harness, handle: &str) {
-    assert!(crate::scenario::handle_at(handle).is_some(), "{handle} is not drawn: {:?}", crate::scenario::handles(""));
-    h.step(&json!({"click": {"handle": handle}})).unwrap();
-    h.frames(3);
 }
 
 fn menu(h: &mut Harness, label: &str) {
@@ -90,4 +85,91 @@ fn edit_opens_the_section_dialog() {
     h.frames(3);
     menu(&mut h, "Edit Section Analysis");
     assert!(h.app.dialog.is_some(), "the Section Analysis dialog opens");
+}
+
+fn section_dialog(h: &Harness) -> (String, bool, Vec<solidcraft_engine::Sel>) {
+    let d = h.app.dialog.as_ref().expect("the Section Analysis dialog");
+    let crate::dialogs::Kind::Section { offset, flip, .. } = &d.kind else { panic!("not the section dialog: {:?}", d.kind) };
+    (offset.clone(), *flip, d.inputs.first().map(|i| i.items.clone()).unwrap_or_default())
+}
+
+fn ok(h: &mut Harness) {
+    h.frames(2);
+    h.step(&json!({"widget":"OK"})).unwrap();
+    h.frames(3);
+    assert!(h.app.dialog.is_none(), "OK closes the dialog");
+}
+
+/// Editing a section reopens its dialog at the plane and distance it was left at, so the cut
+/// moves on from there instead of jumping back to the plane.
+#[test]
+fn edit_starts_from_the_section_as_it_was_left() {
+    let mut h = harness();
+    h.app.run("solid.box", json!({"length":40,"width":30,"height":20})).unwrap();
+    h.app.session.selection = vec![solidcraft_engine::Sel::Plane { name: "XY".into() }];
+    h.app.start("inspect.section");
+    if let Some(crate::dialogs::Kind::Section { offset, .. }) = h.app.dialog.as_mut().map(|d| &mut d.kind) {
+        *offset = "12 mm".into();
+    }
+    ok(&mut h);
+    let cut = h.app.session.section.expect("a section");
+    assert!((cut.0.z - 12.0).abs() < 1e-9, "{cut:?}");
+
+    // The toolbar starts a new section (in place of this one), not an edit of it.
+    h.app.session.selection.clear();
+    h.app.start("inspect.section");
+    let (offset, _, plane) = section_dialog(&h);
+    assert_eq!(offset, "0 mm", "a new section starts at its plane");
+    assert!(plane.is_empty(), "a new section picks its own plane: {plane:?}");
+    crate::dialogs::cancel(&mut h.app);
+    h.frames(2);
+    assert!(h.app.session.section.is_some_and(|c| (c.0.z - 12.0).abs() < 1e-9), "cancelling keeps the section");
+
+    menu(&mut h, "Edit Section Analysis");
+    let (offset, flip, plane) = section_dialog(&h);
+    assert_eq!((offset.as_str(), flip), ("12 mm", false));
+    assert_eq!(plane, vec![solidcraft_engine::Sel::Plane { name: "XY".into() }]);
+    crate::dialogs::cancel(&mut h.app);
+    h.frames(2);
+
+    // Hidden and shown again, it is still the section the dialog made.
+    click(&mut h, "eye:Section Analysis");
+    click(&mut h, "eye:Section Analysis");
+    menu(&mut h, "Edit Section Analysis");
+    assert_eq!(section_dialog(&h).0, "12 mm");
+    crate::dialogs::cancel(&mut h.app);
+    h.frames(2);
+
+    // A section made some other way (here a command) is not the dialog's: Edit starts afresh.
+    h.app.run("inspect.section", json!({"plane": "XZ", "offset": 5})).unwrap();
+    h.frames(3);
+    menu(&mut h, "Edit Section Analysis");
+    let (offset, _, plane) = section_dialog(&h);
+    assert_eq!(offset, "0 mm");
+    assert!(plane.is_empty());
+}
+
+/// The dialog's Hatch option: the preview follows it, OK makes the section with it, and the
+/// section keeps it when hidden and shown again or edited.
+#[test]
+fn the_hatch_option_carries_through_the_section() {
+    let mut h = harness();
+    h.app.run("solid.box", json!({"length":40,"width":30,"height":20})).unwrap();
+    h.app.session.selection = vec![solidcraft_engine::Sel::Plane { name: "XY".into() }];
+    h.app.start("inspect.section");
+    assert!(crate::viewport::section_hatch(&h.app), "a new section is hatched");
+    if let Some(crate::dialogs::Kind::Section { hatch, .. }) = h.app.dialog.as_mut().map(|d| &mut d.kind) {
+        *hatch = false;
+    }
+    h.frames(2);
+    assert!(!crate::viewport::section_hatch(&h.app), "the preview follows the option");
+    ok(&mut h);
+    assert!(h.app.session.section.is_some() && !h.app.session.section_hatch);
+
+    click(&mut h, "eye:Section Analysis");
+    click(&mut h, "eye:Section Analysis");
+    assert!(h.app.session.section.is_some() && !h.app.session.section_hatch, "shown again, still plain");
+    menu(&mut h, "Edit Section Analysis");
+    let d = h.app.dialog.as_ref().map(|d| &d.kind);
+    assert!(matches!(d, Some(crate::dialogs::Kind::Section { hatch: false, .. })), "{d:?}");
 }

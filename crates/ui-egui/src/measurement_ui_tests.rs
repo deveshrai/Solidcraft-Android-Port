@@ -42,6 +42,22 @@ fn component_rects() -> Vec<egui::Rect> {
 }
 
 #[test]
+fn measure_dialog_shows_the_obtuse_corner_of_selected_lines() {
+    let mut h = Harness::new();
+    h.app.home.open = false;
+    h.app.run("sketch.create", json!({"plane": "XY"})).unwrap();
+    h.app.run("sketch.line", json!({"points": [[40, 0], [0, 0], [-24, 32]]})).unwrap();
+    h.app.session.selection = ["l1", "l2"].into_iter().map(|id| Sel::SketchCurve { id: id.into() }).collect();
+    h.app.start("inspect.measure");
+    for layout in ["floating", "compact"] {
+        h.call("ui.set", json!({"layout": layout}));
+        let texts = painted_text(&mut h);
+        assert!(texts.contains(&"126.870°".into()), "{layout}: {texts:?}");
+        assert!(!texts.contains(&"53.130°".into()), "the supplementary angle must not replace the corner: {texts:?}");
+    }
+}
+
+#[test]
 fn measurement_axis_distances_follow_the_upstream_centre_min_and_max_choices() {
     let mut h = Harness::new();
     h.app.home.open = false;
@@ -127,10 +143,18 @@ fn measurement_axis_distances_can_be_disabled_saved_and_restored_in_preferences(
     let mut h = vertex_measurement([0., 0., 0.], [-3., 4., -12.]);
     let measurement = result(&h).clone();
     h.call("ui.prefs", json!({"open":"Graphics"}));
-    // The graphics page scrolls; the checkbox sits below the fold since the graphics preset
-    // and ambient occlusion rows were added, so scroll to it as the scenario tests do.
-    h.call("ui.scroll", json!({"x":800.0,"y":500.0,"delta":-3000.0}));
-    let checkbox = crate::scenario::rect_of("prefs:measure_axis_distances").unwrap().center();
+    // The kit's 24 pt rows scroll inside the bounded Preferences page.
+    let page = crate::scenario::rect_of("prefs:page_body").unwrap();
+    for _ in 0..8 {
+        if page.contains_rect(crate::scenario::rect_of("prefs:measure_axis_distances").unwrap()) {
+            break;
+        }
+        h.call("ui.scroll", json!({"x":page.center().x,"y":page.center().y,"delta":-100}));
+        h.frames(12);
+    }
+    let checkbox_rect = crate::scenario::rect_of("prefs:measure_axis_distances").unwrap();
+    assert!(page.contains_rect(checkbox_rect), "the toggle must be visible before clicking: {checkbox_rect:?} in {page:?}");
+    let checkbox = checkbox_rect.center();
     h.call("ui.click", json!({"x":checkbox.x,"y":checkbox.y}));
     assert!(!h.app.preferences.measure_axis_distances);
     assert!(crate::scenario::handle_at("measure:label").is_some(), "total stays visible");

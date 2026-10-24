@@ -40,6 +40,89 @@ pub fn set_custom(custom: Option<Custom>) -> bool {
     CUSTOM.with(|c| c.replace(custom) != custom)
 }
 
+/// A tab's selection colours. This is deliberately separate from the global widget style:
+/// application chrome, checkboxes, status colours and dialog actions retain their own tokens.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TabAccent {
+    pub color: Color32,
+    pub ink: Color32,
+    pub soft: Color32,
+}
+
+/// Palette ramp for icons on a surface explicitly accented by its active tab.
+pub(crate) fn icon_accent_for_tab(tab: &str) -> Option<&'static str> {
+    match tab {
+        "SKETCH" => Some("sketch"),
+        "SURFACE" => Some("surface"),
+        "MESH" => Some("mesh"),
+        "FORM" => Some("form"),
+        _ => None,
+    }
+}
+
+/// WCAG contrast of two opaque sRGB colours.
+pub(crate) fn contrast_ratio(a: Color32, b: Color32) -> f64 {
+    let luminance = |c: Color32| {
+        let linear = |v: u8| {
+            let v = f64::from(v) / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * linear(c.r()) + 0.7152 * linear(c.g()) + 0.0722 * linear(c.b())
+    };
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+impl TabAccent {
+    pub fn for_tab(t: &Tokens, tab: &str) -> Self {
+        let (color, ink, soft) = match tab {
+            "SKETCH" => (t.sketch_accent, t.sketch_ink, t.sketch_soft),
+            "SURFACE" => (t.surface_fill, t.surface_ink, t.surface_soft),
+            "MESH" => (t.mesh_fill, t.mesh_ink, t.mesh_soft),
+            "FORM" => (t.form_fill, t.form_tab_ink, t.form_soft),
+            "SHEET METAL" => (t.sheet_fill, t.sheet_ink, t.sheet_soft),
+            "RENDER" => (t.render_fill, t.render_ink, t.render_soft),
+            // Model and shared utility tabs retain their existing selection exactly.
+            _ => (t.accent, t.selected_ink, t.accent_soft),
+        };
+        Self { color, ink, soft }
+    }
+
+    /// Small text on a tab's solid pill. Brighter fills need dark ink in either theme.
+    pub fn on_fill(self, t: &Tokens) -> Color32 {
+        if contrast_ratio(t.on_accent, self.color) >= 4.5 { t.on_accent } else { t.tab_on_fill_dark }
+    }
+
+    pub fn current(ctx: &egui::Context) -> Self {
+        ctx.data(|d| d.get_temp::<Self>(egui::Id::new("sc_tab_accent"))).unwrap_or_else(|| Self::for_tab(&Tokens::get(), "MODEL"))
+    }
+
+    pub fn current_icon_accent(ctx: &egui::Context) -> Option<&'static str> {
+        ctx.data(|d| d.get_temp::<Option<&'static str>>(egui::Id::new("sc_tab_icon_accent"))).flatten()
+    }
+
+    pub fn publish(app: &crate::SolveApp, ctx: &egui::Context) {
+        let accent = Self::for_tab(&Tokens::get(), &app.ui.tab);
+        ctx.data_mut(|d| {
+            d.insert_temp(egui::Id::new("sc_tab_accent"), accent);
+            d.insert_temp(egui::Id::new("sc_tab_icon_accent"), icon_accent_for_tab(&app.ui.tab));
+            d.insert_temp(egui::Id::new("sc_sketch_open"), app.session.active_sketch.is_some());
+            d.insert_temp(egui::Id::new("sc_tool_accent"), app.tool.is_some() || app.dialog.is_some());
+        });
+    }
+
+    /// Paint only the focused numeric editor, without changing sibling buttons or checkboxes.
+    pub fn number_focus(ui: &egui::Ui, response: &egui::Response) {
+        let active = ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new("sc_tool_accent"))).unwrap_or(false);
+        let t = Tokens::get();
+        let sketch = ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new("sc_sketch_open"))).unwrap_or(false);
+        let color = if sketch { t.sketch_accent } else { Self::current(ui.ctx()).color };
+        if active && response.has_focus() && color != t.accent {
+            ui.painter().rect_stroke(response.rect, t.radius_sm, Stroke::new(1.0, color), egui::StrokeKind::Inside);
+        }
+    }
+}
+
 /// Is the dark theme on?
 pub fn is_dark() -> bool {
     DARK.get()
@@ -132,45 +215,138 @@ pub fn srgb(c: [f32; 3]) -> Color32 {
 /// the same as when they were literals in the WGSL). The light theme's are the headless default.
 pub use solidcraft_engine::render::AnalysisColors;
 
-/// The colours icons draw of their own (`icons::paint` takes ink, fill and accent from its
-/// caller). Every icon colour is a token so a colour vision mode can reach it.
+/// Colours for native viewport markers and the agent pointer. Command artwork uses the SVG palette.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IconColors {
-    /// Surface sheets: a sheet, a second sheet beside it, a lighter sheet, iso lines and teeth.
-    pub sheet: Color32,
-    pub sheet_2: Color32,
-    pub sheet_light: Color32,
-    pub sheet_line: Color32,
-    /// Highlights (and the white ink of markers and the agent pointer), and the sphere's glint.
     pub highlight: Color32,
-    pub glint: Color32,
-    pub folder: Color32,
-    pub plane: Color32,
-    pub fold: Color32,
-    /// Zebra stripes, and the environment map's sky and floor.
-    pub stripe: Color32,
-    pub sky: Color32,
-    pub floor: Color32,
-    /// Appearance: red, blue and yellow paint dabs.
-    pub paint: [Color32; 3],
-    /// Origin: X, Y and Z arrows.
-    pub axes: [Color32; 3],
-    /// Accessibility: reachable, blocked. Draft: positive, between. Curvature: flat, middle,
-    /// tight.
-    pub access: [Color32; 2],
-    pub draft: [Color32; 2],
-    pub curvature: [Color32; 3],
-    pub interference: Color32,
-    pub warning: Color32,
-    /// The pointer an AI agent moves.
     pub agent: Color32,
-    /// The dark halo under viewport markers (snap points).
     pub marker_halo: Color32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {
+    /// File/start presentation, with explicit foreground/background pairs.
+    pub file_dim: Color32,
+    pub file_recovery_well: Color32,
+    pub file_action_height: f32,
+    pub file_back_height: f32,
+    pub file_recovery_icon: f32,
+    pub file_grid_gap: f32,
+    pub file_background: Color32,
+    pub file_surface: Color32,
+    pub file_border: Color32,
+    /// Neutral multiplication tint for File-view model thumbnails.
+    pub file_image_tint: Color32,
+    pub file_rail: Color32,
+    pub file_rail_ink: Color32,
+    pub file_rail_hover: Color32,
+    pub file_primary: Color32,
+    pub file_primary_ink: Color32,
+    pub file_primary_border: Color32,
+    pub file_recovery: Color32,
+    pub file_recovery_ink: Color32,
+    pub file_recovery_border: Color32,
+    pub file_nav_width: f32,
+    pub file_nav_height: f32,
+    pub file_tile_height: f32,
+    pub file_tile_icon: f32,
+    pub file_recent_height: f32,
+    pub file_sample_image_height: f32,
+    pub file_content_inset_x: f32,
+    pub file_content_inset_y: f32,
+    pub file_section_gap: f32,
+    pub font_start_title: f32,
+    // Shared dimensions in logical pixels; identical in both themes.
+    pub space_2: f32,
+    pub space_3: f32,
+    pub space_4: f32,
+    pub space_6: f32,
+    pub space_8: f32,
+    pub space_10: f32,
+    pub space_12: f32,
+    pub space_14: f32,
+    pub space_16: f32,
+    pub space_24: f32,
+    pub radius_sm: u8,
+    pub radius_md: u8,
+    pub radius_lg: u8,
+    pub radius_xl: u8,
+    pub font_badge: f32,
+    pub font_micro: f32,
+    pub font_panel: f32,
+    pub font_small: f32,
+    pub font_caption: f32,
+    pub font_body: f32,
+    pub font_label: f32,
+    pub font_button: f32,
+    pub font_heading: f32,
+    /// Tiny world-axis triad letters.
+    pub font_triad: f32,
+    /// Bold letters on the navigation compass discs.
+    pub font_compass: f32,
+    /// Home section titles, home actions and update titles.
+    pub font_subtitle: f32,
+    /// Introductory text on the home page.
+    pub font_intro: f32,
+    /// Top-level headings in assistant Markdown.
+    pub font_article_heading: f32,
+    /// Application title in the About dialog.
+    pub font_title: f32,
+    /// Application name on the home page.
+    pub font_display: f32,
+    /// Height of dense form controls and rows.
+    pub control_height: f32,
+    /// Card text, hint, primary and validation colours.
+    pub form_ink: Color32,
+    pub form_dim: Color32,
+    pub form_primary: Color32,
+    pub form_error: Color32,
+    pub form_error_fill: Color32,
+    /// Successful validation text and its badge surface.
+    pub form_success: Color32,
+    pub form_success_fill: Color32,
+    /// Corner radius of dense form controls and actions.
+    pub control_radius: u8,
+    /// Width of the dense form label column.
+    pub form_label_width: f32,
+    /// Vertical gap between dense form rows.
+    pub form_gap_y: f32,
+    /// Height of the full-width dense form footer.
+    pub form_footer_height: f32,
+    /// Height of the dense form header.
+    pub form_header_height: f32,
+    /// Outer width of a dense feature card.
+    pub form_card_width: f32,
+    /// Size of the icon in a dense form header.
+    pub form_icon_size: f32,
+    /// Size of the dense form close button.
+    pub form_close_size: f32,
+    /// Text inset in controls and gap after the header icon.
+    pub form_inset: f32,
+    /// Inset of artwork inside a dense form icon button.
+    pub form_icon_inset: f32,
+    /// Size of the section disclosure chevron.
+    pub form_section_icon_size: f32,
+    /// Height of a dense form checkbox row.
+    pub form_checkbox_height: f32,
+    /// Minimum height of a dense form footer action.
+    pub form_button_height: f32,
+    /// Outer width of the sketch options card.
+    pub sketch_palette_width: f32,
+    /// Square creation-mode button size and radius.
+    pub sketch_mode_size: f32,
+    pub sketch_mode_radius: u8,
+    pub sketch_mode_border: f32,
+    /// Opacity of the sketch card and its selected accent tint.
+    pub sketch_palette_alpha: f32,
+    pub sketch_mode_tint: f32,
+    /// Footer navigation icon size.
+    pub sketch_footer_icon_size: f32,
+    /// Extra section heading letter spacing as a fraction of font size.
+    pub font_section_tracking: f32,
     pub app_bar: Color32,
+    /// Dividers between the application bar groups.
+    pub app_bar_separator: Color32,
     pub toolbar: Color32,
     pub panel: Color32,
     pub panel_header: Color32,
@@ -180,10 +356,39 @@ pub struct Tokens {
     pub accent: Color32,
     pub accent_soft: Color32,
     pub sketch_accent: Color32,
+    pub surface_accent: Color32,
+    pub mesh_accent: Color32,
+    pub form_accent: Color32,
+    pub render_accent: Color32,
+    /// Per-tab fills, small-text inks and selected-row tints. Sketch reuses sketch_accent.
+    /// The other fill keys preserve the legacy *_accent values used by other surfaces.
+    pub sketch_ink: Color32,
+    pub sketch_soft: Color32,
+    pub surface_fill: Color32,
+    pub surface_ink: Color32,
+    pub surface_soft: Color32,
+    pub mesh_fill: Color32,
+    pub mesh_ink: Color32,
+    pub mesh_soft: Color32,
+    pub form_fill: Color32,
+    pub form_tab_ink: Color32,
+    pub form_soft: Color32,
+    pub sheet_fill: Color32,
+    pub sheet_ink: Color32,
+    pub sheet_soft: Color32,
+    pub render_fill: Color32,
+    pub render_ink: Color32,
+    pub render_soft: Color32,
+    /// Dark text for tab pills whose fill has insufficient contrast with on_accent.
+    pub tab_on_fill_dark: Color32,
+    /// Ink on accent-filled buttons and selection chips.
+    pub on_accent: Color32,
+    /// Agent status on the dark application bar, in either theme.
+    pub agent_ok: Color32,
+    pub agent_busy: Color32,
     pub error: Color32,
     pub warning: Color32,
     pub icon: Color32,
-    pub icon_fill: Color32,
     pub timeline: Color32,
     pub hover: Color32,
     // ---- viewport selection feedback ----
@@ -259,10 +464,6 @@ pub struct Tokens {
     pub dialog_bg: Color32,
     pub dialog_border: Color32,
     pub chip: Color32,
-    /// Band behind a panel's heading and, lighter, behind its section headings (both set off
-    /// from `dialog_bg`).
-    pub heading_bg: Color32,
-    pub subheading_bg: Color32,
     /// Inside of bodies cut by a section.
     pub section_cap: Color32,
     /// Closed sketch profiles (translucent fill).
@@ -279,6 +480,21 @@ pub struct Tokens {
     pub app_bar_text: Color32,
     /// A hovered tab on the application bar (keeps `app_bar_text` readable).
     pub app_bar_hover: Color32,
+    pub app_bar_hover_subtle: Color32,
+    pub app_bar_hover_button: Color32,
+    pub app_bar_hover_strong: Color32,
+    /// The active document tab: a solid surface lifted from the bar.
+    pub app_bar_tab_active: Color32,
+    /// Dense feature dialogs: the body surface, the footer band, the dividers, input controls
+    /// (fill and border), field labels, and the selected-element foreground and background.
+    pub dialog_body: Color32,
+    pub dialog_footer: Color32,
+    pub dialog_rule: Color32,
+    pub control_fill: Color32,
+    pub control_border: Color32,
+    pub dialog_label: Color32,
+    pub selected_ink: Color32,
+    pub selected_bg: Color32,
     /// Timeline items: normal and failed.
     pub timeline_item: Color32,
     pub timeline_item_error: Color32,
@@ -310,13 +526,17 @@ pub struct Tokens {
     pub continuity: [Color32; 4],
     pub analysis: AnalysisColors,
     pub icons: IconColors,
-    /// The application bar's buttons: ink, fill and accent of their icons.
-    pub app_bar_icon: [Color32; 3],
-    /// The SolidCraft mark on the application bar: light, mid and dark faces, and its edge.
-    pub logo: [Color32; 4],
+    /// The SolidCraft mark on the application bar: light, mid and dark faces (the gaps between
+    /// them show the bar).
+    pub logo: [Color32; 3],
 }
 
 impl Tokens {
+    /// Subtle shell elevation, derived from the semantic application-bar colour.
+    pub(crate) fn shell_shadow(self) -> egui::Shadow {
+        egui::Shadow { offset: [0, self.space_2 as i8], blur: self.space_8 as u8, spread: 0, color: self.app_bar.gamma_multiply(0.18) }
+    }
+
     /// The tokens of the current theme and colour vision mode.
     pub fn get() -> Tokens {
         Tokens::themed(is_dark(), vision())
@@ -386,7 +606,7 @@ fn visuals(dark: bool) -> egui::Visuals {
     v.widgets.hovered.bg_fill = t.hover;
     // egui uses the open-state fill for a movable window's active title bar.
     v.widgets.open.weak_bg_fill = t.panel_header;
-    v.window_corner_radius = egui::CornerRadius::same(6);
+    v.window_corner_radius = egui::CornerRadius::same(t.radius_md);
     v
 }
 
@@ -394,14 +614,130 @@ pub fn apply(ctx: &egui::Context) {
     let dark = is_dark();
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
     ctx.set_visuals(visuals(dark));
+    let t = Tokens::get();
     ctx.global_style_mut(|s| {
-        s.spacing.item_spacing = egui::vec2(6.0, 4.0);
-        s.spacing.button_padding = egui::vec2(6.0, 3.0);
+        s.spacing.item_spacing = egui::vec2(t.space_6, t.space_4);
+        s.spacing.button_padding = egui::vec2(t.space_6, t.space_3);
     });
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn file_view_foreground_pairs_hold_small_text_contrast_without_changing_accent() {
+        for dark in [false, true] {
+            for vision in super::ColorVision::ALL {
+                let t = super::Tokens::themed(dark, vision);
+                for (ink, surface) in [
+                    (t.file_rail_ink, t.file_rail),
+                    (t.file_rail_ink, t.file_rail_hover),
+                    (t.file_primary_ink, t.file_primary),
+                    (t.file_primary_ink, t.file_background),
+                    (t.file_recovery_ink, t.file_recovery),
+                    (t.form_ink, t.file_surface),
+                    (t.file_dim, t.file_surface),
+                    (t.file_dim, t.file_background),
+                    (t.file_dim, t.file_primary),
+                ] {
+                    assert!(super::contrast_ratio(ink, surface) >= 4.5, "dark={dark}: {ink:?} on {surface:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tab_accents_map_explicit_tokens_without_changing_model() {
+        for dark in [false, true] {
+            for vision in super::ColorVision::ALL {
+                let t = super::Tokens::themed(dark, vision);
+                // Explicit palette tints and text replace the old gamma lerps. They can be
+                // overridden independently by theme files and hold small-text contrast.
+                for (tab, color, ink, soft) in [
+                    ("SKETCH", t.sketch_accent, t.sketch_ink, t.sketch_soft),
+                    ("SURFACE", t.surface_fill, t.surface_ink, t.surface_soft),
+                    ("MESH", t.mesh_fill, t.mesh_ink, t.mesh_soft),
+                    ("FORM", t.form_fill, t.form_tab_ink, t.form_soft),
+                    ("SHEET METAL", t.sheet_fill, t.sheet_ink, t.sheet_soft),
+                    ("RENDER", t.render_fill, t.render_ink, t.render_soft),
+                ] {
+                    let accent = super::TabAccent::for_tab(&t, tab);
+                    assert_eq!(accent, super::TabAccent { color, ink, soft });
+                    assert_ne!(accent.soft, color);
+                    assert_ne!(accent.soft, t.panel);
+                }
+                for tab in ["MODEL", "SOLID", "ASSEMBLE", "INSERT", "INSPECT", "MANAGE", "VIEW", "unknown"] {
+                    assert_eq!(super::TabAccent::for_tab(&t, tab), super::TabAccent { color: t.accent, ink: t.selected_ink, soft: t.accent_soft });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tab_accents_match_approved_palette() {
+        let rgb = |hex: u32| egui::Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
+        for (tab, light, dark) in [
+            ("SKETCH", [0x057f45, 0x057f45, 0xedf7f1], [0x128d45, 0x46be78, 0x1f3b2b]),
+            ("SURFACE", [0xa45000, 0xa45000, 0xfbebd8], [0xb26a14, 0xe0914a, 0x45331e]),
+            ("MESH", [0xe0b200, 0x8a6d00, 0xfff8dc], [0xc6a800, 0xd4b726, 0x41391a]),
+            ("FORM", [0x7349cd, 0x7349cd, 0xeee8fa], [0x8a6fcc, 0xb39bee, 0x372f4f]),
+            ("SHEET METAL", [0x1e6f96, 0x1e6f96, 0xe1f0f7], [0x2a7fa8, 0x4fb3d9, 0x1f3a47]),
+            ("RENDER", [0xa8326e, 0xa8326e, 0xf8e6ef], [0xc8588f, 0xe074ae, 0x402336]),
+        ] {
+            for (t, values) in [(super::Tokens::light(), light), (super::Tokens::dark(), dark)] {
+                let [color, ink, soft] = values.map(rgb);
+                assert_eq!(super::TabAccent::for_tab(&t, tab), super::TabAccent { color, ink, soft }, "{tab}");
+            }
+            let accent = super::TabAccent::for_tab(&super::Tokens::light(), tab);
+            assert_eq!(accent.ink != accent.color, tab == "MESH", "only light Mesh separates ink from fill");
+        }
+        // These existing Model values intentionally take precedence over the board's proposal.
+        for (t, values) in [(super::Tokens::light(), [0x2678da, 0x1a507f, 0xd6e6fa]), (super::Tokens::dark(), [0x3a88ee, 0x9cc7f5, 0x2a466e])] {
+            let [color, ink, soft] = values.map(rgb);
+            assert_eq!(super::TabAccent::for_tab(&t, "MODEL"), super::TabAccent { color, ink, soft });
+        }
+    }
+
+    #[test]
+    fn tab_accents_hold_wcag_small_text_contrast_in_both_themes() {
+        for (dark, t) in [(false, super::Tokens::light()), (true, super::Tokens::dark())] {
+            for tab in ["MODEL", "SKETCH", "SURFACE", "MESH", "FORM", "SHEET METAL", "RENDER"] {
+                let accent = super::TabAccent::for_tab(&t, tab);
+                let card = if dark { t.panel } else { egui::Color32::WHITE };
+                for (name, ink, ground) in [
+                    ("ink on card", accent.ink, card),
+                    ("ink on panel", accent.ink, t.panel),
+                    ("ink on soft", accent.ink, accent.soft),
+                    ("text on fill", accent.on_fill(&t), accent.color),
+                ] {
+                    let ratio = super::contrast_ratio(ink, ground);
+                    assert!(ratio >= 4.5, "{tab} dark={dark}: {name} is {ratio:.4}:1 ({ink:?} on {ground:?})");
+                }
+                let white_ok = super::contrast_ratio(t.on_accent, accent.color) >= 4.5;
+                assert_eq!(accent.on_fill(&t), if white_ok { t.on_accent } else { t.tab_on_fill_dark });
+            }
+        }
+    }
+
+    #[test]
+    fn tab_accent_context_is_per_app_and_does_not_change_widget_visuals() {
+        let mut harness = crate::scenario::Harness::new();
+        let app = &mut harness.app;
+        let first = crate::fonts::test_context();
+        let second = crate::fonts::test_context();
+        let before = first.style_of(egui::Theme::Dark).visuals.clone();
+        app.ui.tab = "SURFACE".into();
+        super::TabAccent::publish(app, &first);
+        assert_eq!(super::TabAccent::current(&first).color, super::Tokens::get().surface_fill);
+        assert_eq!(super::TabAccent::current(&second).color, super::Tokens::get().accent);
+        assert_eq!(super::TabAccent::current_icon_accent(&first), Some("surface"));
+        assert_eq!(super::TabAccent::current_icon_accent(&second), None);
+        assert_eq!(first.style_of(egui::Theme::Dark).visuals, before, "dialog OK, checkboxes and status styles must not inherit the tab");
+        app.ui.tab = "MODEL".into();
+        super::TabAccent::publish(app, &first);
+        assert_eq!(super::TabAccent::current(&first).soft, super::Tokens::get().accent_soft);
+        assert_eq!(super::TabAccent::current_icon_accent(&first), None);
+    }
+
     #[test]
     fn concurrent_ui_renderers_keep_their_own_theme_and_vision() {
         let barrier = std::sync::Barrier::new(2);
@@ -418,59 +754,5 @@ mod tests {
                 });
             }
         });
-    }
-
-    /// Title and section bands stand out from a dialog, the title more than its sections.
-    #[test]
-    fn heading_bands_are_darker_than_the_dialog_in_order() {
-        let luma = |c: egui::Color32| u32::from(c.r()) * 3 + u32::from(c.g()) * 6 + u32::from(c.b());
-        for t in [super::Tokens::light(), super::Tokens::dark()] {
-            assert!(luma(t.heading_bg) < luma(t.subheading_bg), "{t:?}");
-            assert!(luma(t.subheading_bg) < luma(t.dialog_bg), "{t:?}");
-        }
-    }
-
-    #[test]
-    fn active_movable_window_header_uses_theme_panel_header() {
-        for dark in [false, true] {
-            let ctx = egui::Context::default();
-            ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
-            ctx.set_visuals(super::visuals(dark));
-            let mut output = egui::FullOutput::default();
-            for _ in 0..3 {
-                let raw = egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))),
-                    ..Default::default()
-                };
-                output = ctx.run_ui(raw, |ui| {
-                    crate::frame::window(ui.ctx(), crate::i18n::tr_label("Parameters"), crate::frame::Width::Normal).fade_in(false).show(
-                        ui.ctx(),
-                        |ui| {
-                            ui.label(crate::i18n::tr_label("Parameter values"));
-                        },
-                    );
-                });
-                output.textures_delta.clear();
-            }
-            let title = output
-                .shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == "Parameters" => Some(text.pos + text.galley.rect.center().to_vec2()),
-                    _ => None,
-                })
-                .expect("window title must be drawn");
-            let header = output
-                .shapes
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Rect(rect) if rect.fill.a() > 0 && rect.rect.contains(title) => Some(rect),
-                    _ => None,
-                })
-                .min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
-                .expect("window header must be drawn behind its title");
-            let expected = if dark { super::Tokens::dark() } else { super::Tokens::light() };
-            assert_eq!(header.fill, expected.panel_header, "active title bar should follow the {dark} palette");
-        }
     }
 }

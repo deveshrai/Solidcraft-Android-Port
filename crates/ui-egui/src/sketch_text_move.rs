@@ -29,16 +29,10 @@ pub(crate) fn valid(app: &SolveApp, k: &TextMove) -> bool {
 }
 
 pub(crate) fn rows(ui: &mut egui::Ui, k: &mut TextMove) -> bool {
-    let mut enter = false;
-    for (label, value) in ["Distance X", "Distance Y", "Angle"].iter().zip(&mut k.values) {
-        crate::dialogs::row_label(ui, label);
-        enter |= crate::dialogs::field(ui, value);
-        ui.end_row();
-    }
-    crate::dialogs::row_label(ui, "Create Copy");
-    let response = ui.checkbox(&mut k.copy, "");
-    crate::scenario::publish_handle("dialog:Create Copy", response.rect.center());
-    ui.end_row();
+    let [x, y, angle] = &mut k.values;
+    let mut enter = crate::ui_kit::value_pair(ui, "Position", [x, y], ["X", "Y"], Some(["Distance X", "Distance Y"]));
+    enter |= crate::ui_kit::row(ui, "Angle", |ui| crate::ui_kit::field(ui, angle));
+    crate::ui_kit::options(ui, "text_move_options", &mut [("Create Copy", &mut k.copy)]);
     enter
 }
 
@@ -105,15 +99,11 @@ mod tests {
     use solidcraft_engine::sketch::LinkSource;
 
     fn setup() -> (Harness, String) {
-        let mut h = Harness::new();
-        h.app.home.open = false;
-        h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
-        let result = h.app.run("sketch.text", json!({"text":"II","at":[3,4],"height":10})).unwrap();
-        h.app.session.selection = vec![Sel::SketchCurve { id: result["curves"][0].as_str().unwrap().into() }];
+        let (mut h, link, _) = crate::test_support::selected_text("II", [3, 4]);
         h.app.start("sketch.move");
         h.frames(3);
         assert!(matches!(h.app.dialog.as_ref().map(|d| &d.kind), Some(Kind::TextMove(_))));
-        (h, result["link"].as_str().unwrap().into())
+        (h, link)
     }
 
     fn replace(h: &mut Harness, field: &str, value: &str) {

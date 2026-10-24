@@ -7,13 +7,7 @@ use serde_json::json;
 
 use crate::SolveApp;
 
-/// Every shape in `s`, the parts of a list of shapes too.
-fn each(s: &Shape, f: &mut impl FnMut(&Shape)) {
-    match s {
-        Shape::Vec(v) => v.iter().for_each(|s| each(s, f)),
-        s => f(s),
-    }
-}
+use crate::test_support::each_shape as each;
 
 /// The sample with Fillet1 failing (the plate made narrower than its fillets).
 fn failing_sample() -> SolveApp {
@@ -32,11 +26,9 @@ fn features(app: &SolveApp) -> Vec<(String, bool)> {
 /// (the sample has no warnings, so every such image is an error mark).
 fn error_discs(app: &mut SolveApp, draw: fn(&mut SolveApp, &mut egui::Ui)) -> Vec<Pos2> {
     crate::scenario::clear_handles();
-    let ctx = egui::Context::default();
+    let ctx = crate::fonts::test_context();
     let screen = Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0));
-    let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| draw(app, ui));
-    // Icons upload textures; dropping their deltas unapplied would panic.
-    out.textures_delta.clear();
+    let out = crate::test_support::frame(&ctx, egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| draw(app, ui));
     let mut found = Vec::new();
     for clipped in &out.shapes {
         each(&clipped.shape, &mut |s| {

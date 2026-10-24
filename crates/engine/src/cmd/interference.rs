@@ -31,6 +31,8 @@ const MAX_BUDGET_S: f64 = 86_400.0;
 /// How many chord tolerances apart (of both meshes together) two meshes must be to clear a pair
 /// without intersecting it: twice what the tolerances allow, for meshers that sag a little more.
 const MESH_MARGIN: f64 = 4.0;
+/// Why a mesh body is listed under `unchecked` (here and in `inspect.clearance`).
+pub(super) const MESH_NOT_CHECKED: &str = "mesh body: not checked";
 /// Most pairs listed under `slowest`.
 const SLOWEST: usize = 8;
 
@@ -73,8 +75,8 @@ pub(super) fn interference(s: &mut Session, p: &Value) -> Result<Value> {
     let budget = std::time::Duration::from_secs_f64(budget_s);
     let want = string_list(p, "bodies");
     let st = s.world_state();
-    let bodies: Vec<&solidcraft_doc::ModelBody> =
-        st.bodies.iter().filter(|b| want.is_empty() || want.contains(&b.name)).filter(|b| !b.body.is_mesh()).collect();
+    let (meshes_left, bodies): (Vec<&solidcraft_doc::ModelBody>, Vec<&solidcraft_doc::ModelBody>) =
+        st.bodies.iter().filter(|b| want.is_empty() || want.contains(&b.name)).partition(|b| b.body.is_mesh());
 
     // The bodies' display meshes, made once (in parallel) and kept on the bodies: a design open
     // in the app has them already.
@@ -152,7 +154,9 @@ pub(super) fn interference(s: &mut Session, p: &Value) -> Result<Value> {
     let (done, threads) = run_jobs(jobs, left);
     let waited_ms = waited.elapsed().as_secs_f64() * 1000.0;
 
-    let (mut hits, mut unchecked, mut timed) = (Vec::new(), Vec::new(), Vec::new());
+    // Mesh bodies are not intersected: say so, rather than let `count: 0` read as "no overlap".
+    let mut unchecked: Vec<Value> = meshes_left.iter().map(|b| json!({"a": b.name, "b": null, "reason": MESH_NOT_CHECKED})).collect();
+    let (mut hits, mut timed) = (Vec::new(), Vec::new());
     let (mut not_checked, mut boolean_ms, mut tessellate_ms) = (0usize, 0.0, 0.0);
     for ((a, b), d) in done {
         let Some(d) = d else {

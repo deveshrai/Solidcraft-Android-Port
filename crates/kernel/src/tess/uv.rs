@@ -19,9 +19,12 @@ pub(crate) fn domain(s: &EvalSurface) -> Domain {
     let tau = std::f64::consts::TAU;
     match s {
         EvalSurface::Plane { .. } => Domain { range: [None, None], period: [None, None] },
-        EvalSurface::Nurbs { degree, knots, count, .. } => {
-            let r = |d: usize| Some((*knots[d].get(degree[d])?, *knots[d].get(count[d])?));
-            Domain { range: [r(0), r(1)], period: [None, None] }
+        EvalSurface::Nurbs { degree, knots, count, closed, .. } => {
+            let r = |d: usize| Some((*knots.get(d)?.get(*degree.get(d)?)?, *knots.get(d)?.get(*count.get(d)?)?));
+            // A direction the surface joins itself along is periodic: a boundary that runs
+            // across the join is unwrapped past the range's end, and the evaluator wraps it back.
+            let p = |d: usize| closed.get(d).copied().unwrap_or(false).then(|| r(d).map(|(a, b)| b - a)).flatten().filter(|x| *x > 0.0);
+            Domain { range: [r(0), r(1)], period: [p(0), p(1)] }
         }
         EvalSurface::Revolved { profile, swap, .. } => {
             let r = (|| Some((*profile.knots.get(profile.degree)?, *profile.knots.get(profile.ctrl.len())?)))();
@@ -109,11 +112,11 @@ pub(crate) fn project(s: &EvalSurface, dom: &Domain, p: Vec3, hint: Option<[f64;
         best = Some((uv, d));
     }
     let (ur, vr) = (dom.range[0]?, dom.range[1]?);
-    const N: usize = 16;
-    let mut starts: Vec<(f64, [f64; 2])> = Vec::with_capacity((N + 1) * (N + 1));
-    for i in 0..=N {
-        for j in 0..=N {
-            let uv = [ur.0 + (ur.1 - ur.0) * i as f64 / N as f64, vr.0 + (vr.1 - vr.0) * j as f64 / N as f64];
+    let [nu, nv] = start_lines(s);
+    let mut starts: Vec<(f64, [f64; 2])> = Vec::with_capacity((nu + 1) * (nv + 1));
+    for i in 0..=nu {
+        for j in 0..=nv {
+            let uv = [ur.0 + (ur.1 - ur.0) * i as f64 / nu as f64, vr.0 + (vr.1 - vr.0) * j as f64 / nv as f64];
             if let Some((q, _, _)) = s.derivs(uv[0], uv[1]) {
                 starts.push(((q - p).len2(), uv));
             }
@@ -128,6 +131,28 @@ pub(crate) fn project(s: &EvalSurface, dom: &Domain, p: Vec3, hint: Option<[f64;
         }
     }
     best.filter(|(_, d)| *d <= accept).map(|(uv, _)| uv)
+}
+
+/// Most starts [`project`] tries along one direction, and over the whole domain.
+const MAX_START_LINES: usize = 4096;
+const MAX_STARTS: usize = 16_384;
+
+/// How many divisions of each direction [`project`] starts from: 16, or two per span of a
+/// spline with more. A long spline (a thread's helical flank, as other CAD systems write it to
+/// STEP: hundreds of spans along the helix) turns many times between 16 starts, and from the
+/// nearest of them Newton settles on another turn, so a point of its boundary was taken as off
+/// the surface and the body lost its display plan.
+fn start_lines(s: &EvalSurface) -> [usize; 2] {
+    const N: usize = 16;
+    let spans = |d: usize| match s {
+        EvalSurface::Nurbs { degree, count, .. } => count.get(d).zip(degree.get(d)).map_or(0, |(c, g)| c.saturating_sub(*g)),
+        _ => 0,
+    };
+    let mut lines = [0, 1].map(|d| (2 * spans(d)).clamp(N, MAX_START_LINES));
+    // The longer direction keeps its spans; the other gives way to the cap on starts.
+    let (long, short) = if lines[0] >= lines[1] { (0, 1) } else { (1, 0) };
+    lines[short] = lines[short].min((MAX_STARTS / (lines[long] + 1)).max(N));
+    lines
 }
 
 /// `x` moved by whole periods to lie within half a period of `near`.
@@ -288,15 +313,37 @@ mod tests {
     #[test]
     fn divides_the_turn_but_not_the_straight_direction() {
         let s = cylinder();
-        let turn =
-            divide(&s, 1, (0.0, std::f64::consts::TAU), (0.0, 1.0), &Rules { tol: 0.01, max_len: f64::INFINITY, turn: None }, f64::INFINITY, 10_000);
-        let along =
-            divide(&s, 0, (0.0, 1.0), (0.0, std::f64::consts::TAU), &Rules { tol: 0.01, max_len: f64::INFINITY, turn: None }, f64::INFINITY, 10_000);
+        let turn = divide(
+            &s,
+            1,
+            (0.0, std::f64::consts::TAU),
+            (0.0, 1.0),
+            &Rules { tol: 0.01, max_len: f64::INFINITY, extent: 0.0, turn: None, boundary_tol: None },
+            f64::INFINITY,
+            10_000,
+        );
+        let along = divide(
+            &s,
+            0,
+            (0.0, 1.0),
+            (0.0, std::f64::consts::TAU),
+            &Rules { tol: 0.01, max_len: f64::INFINITY, extent: 0.0, turn: None, boundary_tol: None },
+            f64::INFINITY,
+            10_000,
+        );
         assert_eq!(along, vec![0.0, 1.0]);
         // Chord sag r(1 − cos(θ/2)) ≤ 0.01 with r = 3 needs θ ≤ 0.163: at least 39 segments.
         assert!(turn.len() >= 40 && turn.len() < 80, "{}", turn.len());
         // With a longest side the straight direction is divided too: 4 mm in sides ≤ 0.5.
-        let along = divide(&s, 0, (0.0, 1.0), (0.0, std::f64::consts::TAU), &Rules { tol: 0.01, max_len: f64::INFINITY, turn: None }, 0.5, 10_000);
+        let along = divide(
+            &s,
+            0,
+            (0.0, 1.0),
+            (0.0, std::f64::consts::TAU),
+            &Rules { tol: 0.01, max_len: f64::INFINITY, extent: 0.0, turn: None, boundary_tol: None },
+            0.5,
+            10_000,
+        );
         assert_eq!(along.len(), 9);
     }
 
@@ -306,7 +353,15 @@ mod tests {
     #[test]
     fn divides_with_the_ends_exactly() {
         let (a0, a1) = (-1.010485317689877, 1.083909784703316);
-        let lines = divide(&cylinder(), 1, (a0, a1), (0.0, 1.0), &Rules { tol: 0.01, max_len: f64::INFINITY, turn: None }, f64::INFINITY, 10_000);
+        let lines = divide(
+            &cylinder(),
+            1,
+            (a0, a1),
+            (0.0, 1.0),
+            &Rules { tol: 0.01, max_len: f64::INFINITY, extent: 0.0, turn: None, boundary_tol: None },
+            f64::INFINITY,
+            10_000,
+        );
         assert_eq!(lines.first().copied(), Some(a0));
         assert_eq!(lines.last().copied(), Some(a1));
     }

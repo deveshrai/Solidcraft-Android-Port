@@ -15,6 +15,9 @@ use super::CommandSpec;
 use crate::params::{bad, str_, vec3};
 use crate::{EngineError, Result, Session};
 
+#[path = "component_extract.rs"]
+mod extract;
+
 #[cfg(test)]
 #[path = "component_relink_tests.rs"]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -35,6 +38,19 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("component.break_link", "Break Link", break_link)
         .icon("break")
         .params("component: id or name of a linked component — keeps its bodies as they are and forgets the design file"),
+    CommandSpec::new("component.extract", "Extract to File", extract::extract).icon("export").params(
+        "component: id or name of a component that is not linked; path: the .solidcraft design to write → its history, subcomponents and their joints \
+         move to that design, and the component becomes linked to it (as component.insert_design makes it); returns path, file, feature, bodies, \
+         notices (what stays behind), warnings and copies (components that build the same bodies: see component.replace_with_link)",
+    ),
+    CommandSpec::new("component.copies", "Find Identical Copies", extract::copies).icon("inspect").noundo().params(
+        "component: id or name of a linked component → copies: [{component, name}], the components not linked whose own history builds the same bodies",
+    ),
+    CommandSpec::new("component.replace_with_link", "Replace with Link", extract::replace_with_link).icon("chain").params(
+        "component or components: [ids or names] of components that are not linked; with: a linked component, or path: a .solidcraft design \
+         (its link here, else a new linked component) → each component's history goes and its placements become placements of the linked \
+         component; refused when its bodies are not the same as the link's; returns component, name, replaced and warnings",
+    ),
     CommandSpec::new("component.links", "List Links", list_links)
         .icon("chain")
         .noundo()
@@ -112,8 +128,12 @@ fn linked_bodies(file: &Path, own: Option<&str>) -> Result<(String, solidcraft_i
     }
     let bytes = solidcraft_io::vfs::read(&shown, solidcraft_io::MAX_DESIGN_BYTES).map_err(|e| EngineError::Other(format!("{shown}: {e}")))?;
     let doc = solidcraft_io::read_design(&bytes).map_err(|e| EngineError::Other(format!("{shown}: {e}")))?;
-    let name = doc.name.clone();
-    let part = Session::new(doc);
+    session_bodies(&Session::new(doc), &shown)
+}
+
+/// The solid bodies of `part`, the design saved as `shown`, as an Import feature.
+fn session_bodies(part: &Session, shown: &str) -> Result<(String, solidcraft_io::StepFeature)> {
+    let name = part.doc.name.clone();
     if let Some(e) = part.model.results.iter().find_map(|r| r.error.clone()) {
         return Err(EngineError::Other(format!("{shown}: the design has a feature that fails ({e}); fix it before linking it")));
     }
@@ -124,7 +144,7 @@ fn linked_bodies(file: &Path, own: Option<&str>) -> Result<(String, solidcraft_i
     }
     let step = solidcraft_io::export(&part.doc.painted(&world), &solids, solidcraft_io::Format::Step, &name)
         .map_err(|e| EngineError::Other(format!("{shown}: {e}")))?;
-    let mut feature = solidcraft_io::step_import_feature(&step, &shown).map_err(|e| EngineError::Other(format!("{shown}: {e}")))?;
+    let mut feature = solidcraft_io::step_import_feature(&step, shown).map_err(|e| EngineError::Other(format!("{shown}: {e}")))?;
     if world.bodies.len() > solids.len() {
         feature.warnings.push(format!("{} mesh bodies of {shown} are not linked", world.bodies.len() - solids.len()));
     }

@@ -1,19 +1,13 @@
 //! Constraint tools accept a selected curve pair as well as tool-first clicks.
 
+mod support;
+
 use serde_json::json;
 use solidcraft_engine::{Sel, sketch::ConstraintKind};
 use solidcraft_ui_egui::scenario::Harness;
 
 fn lines() -> Harness {
-    let mut h = Harness::new();
-    h.run(&json!([
-        {"call":"engine.execute","params":{"command":"sketch.create","params":{"plane":"XY"}}},
-        {"call":"engine.execute","params":{"command":"sketch.line","params":{"points":[[10,10],[40,10]],"infer":false}}},
-        {"call":"engine.execute","params":{"command":"sketch.line","params":{"points":[[10,30],[40,35]],"infer":false}}},
-        {"call":"ui.view","params":{"view":"top"}}
-    ]))
-    .unwrap();
-    h
+    support::sketch_lines(&[[[10, 10], [40, 10]], [[10, 30], [40, 35]]], None)
 }
 
 fn select_lines(h: &mut Harness) {

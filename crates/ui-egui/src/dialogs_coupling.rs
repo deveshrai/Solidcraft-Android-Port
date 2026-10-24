@@ -4,6 +4,7 @@
 //! face also picks the joint it turns on. Play turns the driving joint so the coupling shows its
 //! motion before OK.
 
+use crate::ui_kit::{choice_row, expr_row};
 use egui::RichText;
 use serde_json::{Value, json};
 use solidcraft_engine::Sel;
@@ -11,7 +12,7 @@ use solidcraft_engine::Session;
 use solidcraft_engine::doc::expr::Kind as ValueKind;
 
 use crate::SolveApp;
-use crate::dialogs::{check, combo, field, row_label};
+use crate::dialogs::{field, form_row};
 use crate::dialogs_assembly::Asm;
 use crate::selection::{EDGES, FACES, SelInput};
 use crate::theme::Tokens;
@@ -119,9 +120,7 @@ fn size(s: &Session, f: &CouplingForm, inputs: &[SelInput], i: usize) -> Option<
 fn joint_row(ui: &mut egui::Ui, label: &str, salt: &str, list: &[(u64, String)], sel: &mut u64) {
     let labels: Vec<&str> = list.iter().map(|j| j.1.as_str()).collect();
     let mut pos = list.iter().position(|j| j.0 == *sel).unwrap_or(0);
-    row_label(ui, label);
-    combo(ui, salt, &labels, &mut pos);
-    ui.end_row();
+    choice_row(ui, label, salt, &mut pos, &labels);
     *sel = list.get(pos).map(|j| j.0).unwrap_or(0);
 }
 
@@ -132,10 +131,10 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, f: &mut CouplingForm, inputs:
     let ([role_a, role_b], turn_b) = roles(f.command);
     let (la, lb) = (joints_that(s, true), joints_that(s, turn_b));
     if la.is_empty() || lb.is_empty() {
-        row_label(ui, "");
-        let need = if turn_b { "needs two joints that turn" } else { "needs a joint that turns and one that slides" };
-        ui.label(RichText::new(crate::i18n::tr_label(need)).color(t.text_dim));
-        ui.end_row();
+        form_row(ui, "", |ui| {
+            let need = if turn_b { "needs two joints that turn" } else { "needs a joint that turns and one that slides" };
+            ui.label(RichText::new(crate::i18n::tr_label(need)).color(t.text_dim));
+        });
         return false;
     }
     // A face picked on a part chooses the joint that part turns on, once.
@@ -157,18 +156,18 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, f: &mut CouplingForm, inputs:
     }
     let mut enter = false;
     let size_row = |ui: &mut egui::Ui, label: &str, i: usize, text: &mut String, enter: &mut bool| {
-        row_label(ui, label);
-        match (pick(inputs, i), picked_radius(s, inputs, i)) {
-            (_, Some(r)) => {
-                ui.label(format!("{} mm  ({})", trim(r), crate::i18n::tr_label("picked")));
+        form_row(ui, label, |ui| {
+            match (pick(inputs, i), picked_radius(s, inputs, i)) {
+                (_, Some(r)) => {
+                    ui.label(format!("{} mm  ({})", trim(r), crate::i18n::tr_label("picked")));
+                }
+                // A pick on a flat face or a straight edge has no radius: say so rather than fail on OK.
+                (Some(_), None) => {
+                    ui.label(RichText::new(crate::i18n::tr_label("not a round face")).color(t.warning));
+                }
+                (None, None) => *enter |= field(ui, text),
             }
-            // A pick on a flat face or a straight edge has no radius: say so rather than fail on OK.
-            (Some(_), None) => {
-                ui.label(RichText::new(crate::i18n::tr_label("not a round face")).color(t.warning));
-            }
-            (None, None) => *enter |= field(ui, text),
-        }
-        ui.end_row();
+        });
     };
     joint_row(ui, role_a, "cp_a", &la, &mut f.a);
     let [s0, s1] = &mut f.sizes;
@@ -177,9 +176,6 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, f: &mut CouplingForm, inputs:
             size_row(ui, "Radius 1", 0, s0, &mut enter);
             joint_row(ui, role_b, "cp_b", &lb, &mut f.b);
             size_row(ui, "Radius 2", 1, s1, &mut enter);
-            row_label(ui, "Internal gear");
-            check(ui, &mut f.internal);
-            ui.end_row();
         }
         "joint.rack_pinion" => {
             size_row(ui, "Radius", 0, s0, &mut enter);
@@ -187,14 +183,14 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, f: &mut CouplingForm, inputs:
         }
         _ => {
             joint_row(ui, role_b, "cp_b", &lb, &mut f.b);
-            row_label(ui, "Pitch");
-            enter |= field(ui, s0);
-            ui.end_row();
+            enter |= expr_row(ui, "Pitch", s0);
         }
     }
-    row_label(ui, "Reverse");
-    check(ui, &mut f.reverse);
-    ui.end_row();
+    if f.command == "joint.gear" {
+        crate::ui_kit::options(ui, "coupling_options", &mut [("Internal gear", &mut f.internal), ("Reverse", &mut f.reverse)]);
+    } else {
+        crate::ui_kit::options(ui, "coupling_options", &mut [("Reverse", &mut f.reverse)]);
+    }
     // What the coupling does, as joint.list gives a link's ratio.
     let sign = |neg: bool| if neg { -1.0 } else { 1.0 };
     let shown = match f.command {
@@ -204,17 +200,18 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, f: &mut CouplingForm, inputs:
         "joint.rack_pinion" => size(s, f, inputs, 0).map(|r| format!("{} mm / deg", trim(r.to_radians() * sign(f.reverse)))),
         _ => size(s, f, inputs, 0).map(|p| format!("{} mm / deg", trim(p / 360.0 * sign(f.reverse)))),
     };
-    row_label(ui, "Ratio");
-    ui.label(RichText::new(shown.unwrap_or_else(|| "-".into())).color(t.text_dim));
-    ui.end_row();
-    row_label(ui, "Animate");
-    let label = if f.animate { "■ Stop" } else { "▶ Play" };
-    let r = ui.button(label).on_hover_text(crate::i18n::tr_label("Play the joint's motion in the view"));
-    crate::scenario::publish_handle("dialog:Animate", r.rect.center());
-    if r.clicked() {
-        f.animate = !f.animate;
-    }
-    ui.end_row();
+    form_row(ui, "Ratio", |ui| {
+        ui.label(RichText::new(shown.unwrap_or_else(|| "-".into())).color(t.text_dim));
+    });
+    form_row(ui, "Animate", |ui| {
+        let label = if f.animate { "■ Stop" } else { "▶ Play" };
+        let r = crate::ui_kit::button(ui, label, crate::ui_kit::Button::Normal)
+            .on_hover_text(crate::i18n::tr_label("Play the joint's motion in the view"));
+        crate::scenario::publish_handle("dialog:Animate", r.rect.center());
+        if r.clicked() {
+            f.animate = !f.animate;
+        }
+    });
     if f.animate {
         let now = ui.input(|i| i.time);
         // 48 steps over 4 s: each one a preview.
@@ -225,7 +222,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, f: &mut CouplingForm, inputs:
 }
 
 /// A number without trailing zeros.
-fn trim(v: f64) -> String {
+pub(crate) fn trim(v: f64) -> String {
     let s = format!("{v:.4}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s == "-0" { "0".into() } else { s.into() }

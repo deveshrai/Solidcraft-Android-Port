@@ -3,17 +3,20 @@
 //! the design. OK applies the edited fields through one `document.metadata.set` (one undo step);
 //! Cancel and the close button change nothing. File → Design Properties…, the Browser's
 //! Document Settings, the root component's menu and `ui.start` of `document.metadata` or
-//! `document.metadata.set` open it.
+//! `document.metadata.set` open it. [`show_object`] draws the Properties card (mass, volume, area,
+//! centre of mass, bounding box, counts) of the body or component a menu asked about; both are
+//! `ui_kit::Window` cards.
 
-use egui::RichText;
 use serde_json::{Map, Value};
 use solidcraft_engine::doc::metadata::{DESCRIPTION, WELL_KNOWN};
 
 use crate::SolveApp;
-use crate::theme::Tokens;
+use crate::ui_kit;
 
 /// Longest preview of another tool's value in the list.
 const PREVIEW_CHARS: usize = 80;
+/// Rows of other tools' data shown before the list scrolls.
+const OTHERS_ROWS: f32 = 6.0;
 
 /// What is being typed; the properties themselves live in the document.
 pub struct DesignProperties {
@@ -85,66 +88,85 @@ fn preview(v: &Value) -> String {
 /// Draw the window when it is open. Called once per frame.
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let Some(mut d) = app.design_properties.take() else { return };
-    let t = Tokens::get();
-    let mut open = true;
-    let (mut ok, mut cancel) = (false, false);
     let metadata = app.session.doc.metadata.clone();
-    let title = RichText::new(crate::i18n::tr_label("Design Properties")).strong().size(13.0);
-    crate::frame::window(ctx, title, crate::frame::Width::Normal)
-        .id(egui::Id::new("sc_design_properties"))
-        .open(&mut open)
-        .resizable(false)
-        .min_width(420.0)
-        .show(ctx, |ui| {
-            egui::Grid::new("sc_design_properties_grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                for (i, key) in WELL_KNOWN.iter().enumerate() {
-                    ui.label(label(key));
-                    let Some(field) = d.fields.get_mut(i) else { continue };
-                    ui.vertical(|ui| {
-                        let edit =
-                            if *key == DESCRIPTION { egui::TextEdit::multiline(field).desired_rows(3) } else { egui::TextEdit::singleline(field) };
-                        ui.add(edit.desired_width(280.0));
-                        // Saved by another tool as something other than text: kept unless typed over.
-                        if metadata.get(key).is_some() && metadata.text(key).is_none() && d.opened.get(i).is_some_and(String::is_empty) {
-                            ui.label(RichText::new(crate::i18n::tr("ui.design_properties.not_text")).small().color(t.text_dim));
-                        }
-                    });
-                    ui.end_row();
-                }
-            });
-            ui.add_space(4.0);
-            ui.label(RichText::new(crate::i18n::tr("ui.design_properties.exports")).small().color(t.text_dim));
-            let others: Vec<(&String, &Value)> = metadata.others().collect();
-            if !others.is_empty() {
-                ui.add_space(4.0);
-                egui::CollapsingHeader::new(format!("{} ({})", crate::i18n::tr("ui.design_properties.others"), others.len()))
-                    .id_salt("sc_design_properties_others")
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(crate::i18n::tr("ui.design_properties.others_note")).small().color(t.text_dim));
-                        egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
-                            for (k, v) in others {
-                                ui.label(RichText::new(k).monospace().size(12.0).color(t.text));
-                                ui.label(RichText::new(preview(v)).monospace().small().color(t.text_dim));
-                            }
-                        });
-                    });
+    let title = crate::i18n::tr_label("Design Properties");
+    let (closed, action) = ui_kit::Window::new(egui::Id::new("sc_design_properties"), "settings", title).fields().show(ctx, true, |ui| {
+        for (i, key) in WELL_KNOWN.iter().enumerate() {
+            let label = label(key);
+            let Some(field) = d.fields.get_mut(i) else { continue };
+            if *key == DESCRIPTION {
+                ui_kit::multiline_text_field(ui, label, egui::Id::new(("sc_design_properties", key)), field);
+            } else {
+                ui_kit::row(ui, label, |ui| ui_kit::text_field(ui, field, ""));
             }
-            if let Some(e) = &d.error {
-                ui.label(RichText::new(e).color(t.error));
+            // Saved by another tool as something other than text: kept unless typed over.
+            if metadata.get(key).is_some() && metadata.text(key).is_none() && d.opened.get(i).is_some_and(String::is_empty) {
+                ui_kit::caption(ui, label, crate::i18n::tr("ui.design_properties.not_text"));
             }
-            ui.separator();
-            // OK and Cancel flush right, as in every dialog.
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    cancel = ui.button(crate::i18n::tr("ui.cancel")).clicked();
-                    ok = ui.button(crate::i18n::tr("ui.heading_ok")).clicked();
+        }
+        ui_kit::text(ui, crate::i18n::tr("ui.design_properties.exports"), ui_kit::Text::Note("exports"));
+        let others: Vec<(&String, &Value)> = metadata.others().collect();
+        if !others.is_empty() {
+            let heading = format!("{} ({})", crate::i18n::tr("ui.design_properties.others"), others.len());
+            ui_kit::section(ui, "sc_design_properties_others", &heading, false, |ui| {
+                ui_kit::text(ui, crate::i18n::tr("ui.design_properties.others_note"), ui_kit::Text::Note("others"));
+                egui::ScrollArea::vertical().max_height(ui_kit::row_height() * OTHERS_ROWS).show(ui, |ui| {
+                    for (key, value) in others {
+                        ui_kit::row(ui, key, |ui| ui_kit::text(ui, &preview(value), ui_kit::Text::Cell));
+                    }
                 });
             });
-        });
-    if !open || cancel || (ok && apply(app, &mut d)) {
+        }
+        if let Some(error) = &d.error {
+            ui_kit::text(ui, error, ui_kit::Text::Report("error", true));
+        }
+    });
+    if closed || action == ui_kit::Action::Cancel || (action == ui_kit::Action::Ok && apply(app, &mut d)) {
         return;
     }
     app.design_properties = Some(d);
+}
+
+/// Draw the Properties window of the body or component the menu asked about (mass, volume,
+/// area, centre of mass, bounding box and counts), when it is open. Close dismisses it.
+pub fn show_object(app: &mut SolveApp, ctx: &egui::Context) {
+    let Some((title, v)) = app.menu.props.clone() else { return };
+    let number = |x: &Value, k: &str| x.get(k).and_then(Value::as_f64).unwrap_or(f64::NAN);
+    let mut rows: Vec<(&str, String)> = Vec::new();
+    let total = &v["total"];
+    let bodies = v["bodies"].as_array().cloned().unwrap_or_default();
+    if let [b] = bodies.as_slice() {
+        // The engine names every body's material, measured or not: nothing to guess here.
+        rows.push(("Material", b["material"].as_str().unwrap_or_default().to_string()));
+        rows.push(("Density", format!("{:.3} g/cm³", number(b, "density_g_cm3"))));
+    }
+    rows.push(("Mass", format!("{:.3} g", number(total, "mass_g"))));
+    rows.push(("Volume", crate::prefs::show_mm(app, number(total, "volume_mm3"), 3)));
+    rows.push(("Area", crate::prefs::show_mm(app, number(total, "area_mm2"), 2)));
+    let geometry = if total.get("center_of_mass").is_some() { Some(total) } else { bodies.first().filter(|_| bodies.len() == 1) };
+    if let Some(b) = geometry {
+        let unit = crate::prefs::unit_scale(&app.session.doc.units).1;
+        if let Some(c) = b["center_of_mass"].as_array() {
+            let c: Vec<String> = c.iter().map(|x| crate::prefs::show_mm_bare(app, x.as_f64().unwrap_or(f64::NAN))).collect();
+            rows.push(("Center of mass", format!("({}) {unit}", c.join(", "))));
+        }
+        let (mn, mx) = (&b["bbox"]["min"], &b["bbox"]["max"]);
+        if let (Some(a), Some(z)) = (mn.as_array(), mx.as_array()) {
+            let d: Vec<String> =
+                a.iter().zip(z).map(|(a, z)| crate::prefs::show_mm_bare(app, z.as_f64().unwrap_or(0.0) - a.as_f64().unwrap_or(0.0))).collect();
+            rows.push(("Bounding box", format!("{} {unit}", d.join(" × "))));
+        }
+    }
+    rows.push(("Faces / edges / vertices", format!("{} / {} / {}", total["faces"], total["edges"], total["vertices"])));
+    let heading = crate::i18n::format("properties.title", &[("name", &title)]);
+    let (closed, action) = ui_kit::Window::new(egui::Id::new("sc_props"), "settings", &heading).actions("", "Close", None).show(ctx, true, |ui| {
+        for (label, value) in &rows {
+            ui_kit::row(ui, crate::i18n::tr_label(label), |ui| ui_kit::text(ui, value, ui_kit::Text::Cell));
+        }
+    });
+    if closed || action == ui_kit::Action::Cancel {
+        app.menu.props = None;
+    }
 }
 
 #[cfg(test)]

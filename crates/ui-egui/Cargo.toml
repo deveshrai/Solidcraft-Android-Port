@@ -36,6 +36,13 @@ tiny-skia = { workspace = true }
 # updated by its installer (MIT; already in the tree as a build dependency).
 winreg = "0.56"
 
+[dev-dependencies]
+# Parse the source guard structurally, including code after inline test modules.
+syn = { workspace = true, features = ["visit"] }
+# The catalog guard reads every UI source file as Rust tokens; already in the tree through
+# crates/derive and the workspace lockfile.
+proc-macro2 = { workspace = true }
+
 # Pictures pasted into the agent chat; already in the tree, with the same features, through
 # egui-winit's clipboard. arboard has no Android backend: there, a paste gives text only.
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]

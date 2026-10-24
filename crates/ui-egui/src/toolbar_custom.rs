@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 use solidcraft_engine::{CommandSpec, command_specs};
 
-use crate::SolveApp;
 use crate::context_menu::Item;
+use crate::{SolveApp, ui_kit};
 
 /// The only workspace so far.
 pub const WORKSPACE: &str = "DESIGN";
@@ -30,10 +30,12 @@ pub struct ToolbarCustom {
 
 impl ToolbarCustom {
     pub fn prefs(&self) -> Value {
-        json!(self.panels)
+        json!({"version": 2, "panels": self.panels})
     }
     pub fn load(&mut self, v: &Value) {
-        self.panels = v
+        let current = v.get("version").and_then(Value::as_u64) == Some(2);
+        let panels = if current { v.get("panels").unwrap_or(&Value::Null) } else { v };
+        self.panels = panels
             .as_object()
             .map(|o| {
                 o.iter()
@@ -45,6 +47,63 @@ impl ToolbarCustom {
                     .collect()
             })
             .unwrap_or_default();
+        if !current {
+            self.migrate();
+        }
+    }
+    fn migrate(&mut self) {
+        use std::collections::BTreeSet;
+        let specs = command_specs();
+        let mut pins: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut removals: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let old = std::mem::take(&mut self.panels);
+        for (k, ids) in old {
+            let parts: Vec<_> = k.split('/').collect();
+            let ["DESIGN", tab, panel] = parts.as_slice() else {
+                self.panels.insert(k, ids);
+                continue;
+            };
+            if crate::workspace::legacy_panel(tab, panel).is_none() {
+                self.panels.insert(k, ids);
+                continue;
+            }
+            if let Some((t, p)) = crate::workspace::legacy_panel(tab, panel) {
+                pins.entry(key(t, p)).or_default();
+            }
+            for id in crate::workspace::legacy_buttons(tab, panel) {
+                if !ids.iter().any(|x| x == id)
+                    && let Some((t, p)) = crate::workspace::legacy_destination(tab, panel, id)
+                {
+                    removals.entry(key(t, p)).or_default().insert(id.into());
+                }
+            }
+            for id in ids {
+                if let Some((t, p)) = crate::workspace::legacy_destination(tab, panel, &id) {
+                    let list = pins.entry(key(t, p)).or_default();
+                    if !list.contains(&id) {
+                        list.push(id);
+                    }
+                }
+            }
+        }
+        let touched: BTreeSet<_> = pins.keys().chain(removals.keys()).cloned().collect();
+        for k in touched {
+            if self.panels.contains_key(&k) {
+                continue;
+            } // An existing new destination wins.
+            let mut ids = pins.remove(&k).unwrap_or_default();
+            let parts: Vec<_> = k.split('/').collect();
+            if let [_, tab, panel] = parts.as_slice()
+                && let Some((cmds, n)) = crate::workspace::layout(tab, panel, &specs)
+            {
+                for c in cmds.iter().take(n) {
+                    if !ids.iter().any(|id| id == c.id) && !removals.get(&k).is_some_and(|r| r.contains(c.id)) {
+                        ids.push(c.id.into());
+                    }
+                }
+            }
+            self.panels.insert(k, ids);
+        }
     }
 }
 
@@ -60,18 +119,27 @@ pub fn buttons(app: &SolveApp, tab: &str, panel: &str, cmds: &[&'static CommandS
     }
 }
 
+/// A tab's panels with their commands and default button counts.
+pub type PanelLists = Vec<(&'static str, Vec<&'static CommandSpec>, usize)>;
+
 /// The panels of a tab with their commands and default button counts (what the toolbar draws).
-pub fn panel_lists(tab: &str) -> Vec<(&'static str, Vec<&'static CommandSpec>, usize)> {
+/// Made from the command registry and the ribbon's layout, which never change while the app
+/// runs, so each tab's lists are worked out once: the toolbar asks for them every frame, and
+/// working them out matches every command against every section (about a millisecond a frame).
+pub fn panel_lists(tab: &str) -> PanelLists {
+    static LISTS: std::sync::Mutex<BTreeMap<String, PanelLists>> = std::sync::Mutex::new(BTreeMap::new());
+    let Ok(mut lists) = LISTS.lock() else { return panel_lists_of(tab) };
+    lists.entry(tab.to_string()).or_insert_with(|| panel_lists_of(tab)).clone()
+}
+
+/// [`panel_lists`] worked out from the registry.
+fn panel_lists_of(tab: &str) -> PanelLists {
     let specs = command_specs();
     crate::toolbar::panels(tab)
         .iter()
-        .map(|panel| {
-            let (cmds, promote) = match crate::workspace::layout(tab, panel, &specs) {
-                Some(l) => l,
-                None => (specs.iter().filter(|c| c.tab == tab && c.panel == *panel).copied().collect(), crate::toolbar::promoted(tab, panel)),
-            };
-            let cmds = crate::sketch_tools::also_in(tab, panel, cmds, &specs);
-            (*panel, cmds, promote)
+        .filter_map(|panel| {
+            let (cmds, n) = crate::workspace::layout(tab, panel, &specs)?;
+            (!cmds.is_empty() || *panel == "SELECT").then_some((*panel, cmds, n))
         })
         .collect()
 }
@@ -158,22 +226,22 @@ pub fn command_items(app: &SolveApp, id: &str) -> Vec<Item> {
     let fav = app.sbox.pinned.iter().any(|p| p == id);
     let mut v = Vec::new();
     v.push(if on {
-        Item::action("ui.toolbarRemove", "Remove from Toolbar", "").with(json!({ "command": id }))
+        Item::action("ui.toolbarRemove", "Remove from Toolbar", "close").with(json!({ "command": id }))
     } else {
-        Item::action("ui.toolbarPin", "Pin to Toolbar", "").with(json!({ "command": id }))
+        Item::action("ui.toolbarPin", "Pin to Toolbar", "plus").with(json!({ "command": id }))
     });
-    v.push(Item::action("ui.shortcutPin", if fav { "Unpin from Shortcuts" } else { "Pin to Shortcuts" }, "").with(json!({ "command": id })));
+    v.push(Item::action("ui.shortcutPin", if fav { "Unpin from Shortcuts" } else { "Pin to Shortcuts" }, "star").with(json!({ "command": id })));
     v.push(Item::sep());
-    v.push(Item::action("ui.toolbarCustomize", "Customize Toolbar…", ""));
-    v.push(Item::action("ui.toolbarReset", "Reset Toolbar", "").with(json!({ "tab": tab })));
+    v.push(Item::action("ui.toolbarCustomize", "Customize Toolbar…", "settings"));
+    v.push(Item::action("ui.toolbarReset", "Reset Toolbar", "restore").with(json!({ "tab": tab })));
     v
 }
 
 /// The toolbar's own menu (right-click on its empty space).
 pub fn toolbar_items(app: &SolveApp) -> Vec<Item> {
     vec![
-        Item::action("ui.toolbarCustomize", "Customize Toolbar…", ""),
-        Item::action("ui.toolbarReset", "Reset Toolbar", "").with(json!({ "tab": app.ui.tab })),
+        Item::action("ui.toolbarCustomize", "Customize Toolbar…", "settings"),
+        Item::action("ui.toolbarReset", "Reset Toolbar", "restore").with(json!({ "tab": app.ui.tab })),
     ]
 }
 
@@ -223,48 +291,46 @@ pub fn window(app: &mut SolveApp, ctx: &egui::Context) {
     if !app.toolbar_custom.customizing {
         return;
     }
-    let t = crate::theme::Tokens::get();
     let tab = app.ui.tab.clone();
-    let mut open = true;
     let mut changes: Vec<(&'static str, bool)> = Vec::new();
     let mut reset_tab = false;
-    crate::frame::window(ctx, crate::i18n::tr_label("Customize Toolbar"), crate::frame::Width::Normal)
-        .id(egui::Id::new("sc_toolbar_customize"))
-        .open(&mut open)
-        .default_height(520.0)
-        .show(ctx, |ui| {
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} tab. Tick a command to give it a toolbar button. You can also drag a row of a panel's drop-down onto the toolbar, drag a button off the toolbar to remove it, or use the pin on a drop-down row.",
-                    app.tr_label(&tab)
-                ))
-                .color(t.text_dim),
-            );
-            ui.separator();
-            egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                for (panel, cmds, n) in panel_lists(&tab) {
-                    if cmds.is_empty() {
-                        continue;
-                    }
-                    ui.label(egui::RichText::new(app.tr_label(panel)).strong().size(11.0));
-                    let shown = buttons(app, &tab, panel, &cmds, n);
-                    for c in &cmds {
-                        let mut on = shown.iter().any(|b| b.id == c.id) || pinned_on(app, &tab, c.id).is_some();
-                        let r = ui.checkbox(&mut on, app.tr_label(c.label));
-                        crate::scenario::publish_handle(&format!("customize:{}", c.id), r.rect.left_center() + egui::vec2(8.0, 0.0));
-                        if r.changed() {
-                            changes.push((c.id, on));
+    let t = crate::theme::Tokens::get();
+    // This long card grows as sections open. A top-left pivot keeps its controls at their
+    // published positions instead of shifting them after egui measures the taller content.
+    let origin =
+        egui::pos2((ctx.content_rect().center().x - t.form_card_width).max(ctx.content_rect().left()), ctx.content_rect().top() + t.space_24 * 2.0);
+    let (closed, action) = ui_kit::Window::new(egui::Id::new("sc_toolbar_customize"), "settings", crate::i18n::tr_label("Customize Toolbar"))
+        .placed(egui::Align2::LEFT_TOP, origin)
+        .cards(2.0)
+        .actions("", "Close", None)
+        .show(ctx, true, |ui| {
+            ui_kit::text(ui, &crate::i18n::format("toolbar.customize_note", &[("tab", app.tr_label(&tab))]), ui_kit::Text::Note("customize"));
+            egui::ScrollArea::vertical()
+                .max_height(
+                    (ctx.content_rect().height() - crate::theme::Tokens::get().control_height * 8.0)
+                        .min(crate::theme::Tokens::get().control_height * 20.0),
+                )
+                .show(ui, |ui| {
+                    for (panel, cmds, n) in panel_lists(&tab) {
+                        if cmds.is_empty() {
+                            continue;
                         }
+                        ui_kit::section(ui, panel, app.tr_label(panel), true, |ui| {
+                            let shown = buttons(app, &tab, panel, &cmds, n);
+                            for c in &cmds {
+                                let mut on = shown.iter().any(|b| b.id == c.id) || pinned_on(app, &tab, c.id).is_some();
+                                let r = ui_kit::checkbox(ui, app.tr_label(c.label), &mut on);
+                                crate::scenario::publish_handle(&format!("customize:{}", c.id), r.rect.center());
+                                if r.changed() {
+                                    changes.push((c.id, on));
+                                }
+                            }
+                        });
                     }
-                    ui.add_space(4.0);
-                }
-            });
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button(crate::i18n::tr_label("Reset Toolbar")).clicked() {
-                    reset_tab = true;
-                }
-            });
+                });
+            let reset = ui_kit::button(ui, crate::i18n::tr_label("Reset Toolbar"), ui_kit::Button::Normal);
+            crate::scenario::publish_target("customize:reset", reset.rect);
+            reset_tab |= reset.clicked();
         });
     for (id, on) in changes {
         if on {
@@ -278,5 +344,59 @@ pub fn window(app: &mut SolveApp, ctx: &egui::Context) {
     if reset_tab {
         reset(app, &tab);
     }
-    app.toolbar_custom.customizing = open;
+    app.toolbar_custom.customizing = !closed && action != ui_kit::Action::Cancel;
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    /// Each tab's panel lists are worked out once and come back the same as worked out anew,
+    /// for every tab the ribbon has (and an unknown one).
+    #[test]
+    fn panel_lists_are_kept_and_match_the_registry() {
+        let tabs: std::collections::BTreeSet<&str> = crate::workspace::SECTIONS.iter().map(|s| s.tab).chain(["NO SUCH TAB"]).collect();
+        let ids = |l: &PanelLists| l.iter().map(|(p, cmds, n)| (*p, cmds.iter().map(|c| c.id).collect::<Vec<_>>(), *n)).collect::<Vec<_>>();
+        for tab in tabs {
+            let fresh = panel_lists_of(tab);
+            assert_eq!(ids(&panel_lists(tab)), ids(&fresh), "{tab}");
+            assert_eq!(ids(&panel_lists(tab)), ids(&fresh), "{tab}, kept");
+        }
+    }
+
+    #[test]
+    fn legacy_pins_split_merge_and_preserve_removals_and_unknown_keys() {
+        let mut custom = ToolbarCustom::default();
+        custom.load(&json!({
+            "DESIGN/SOLID/CREATE":["solid.hole","solid.revolve","solid.move"],
+            "DESIGN/PLASTIC/CREATE":["plastic.boss","plastic.rest","sketch.create"],
+            "DESIGN/SOLID/MODIFY":["solid.chamfer"],
+            "DESIGN/UTILITIES/SELECT":[],
+            "DESIGN/future/panel":["future.command"],
+            "OTHER/SOLID/CREATE":["solid.extrude"]
+        }));
+        let create = &custom.panels["DESIGN/MODEL/CREATE"];
+        assert_eq!(create, &["plastic.boss", "plastic.rest", "solid.hole", "solid.revolve"]);
+        assert!(!create.iter().any(|id| id == "solid.extrude"));
+        assert!(custom.panels["DESIGN/MODEL/ARRANGE"].contains(&"solid.move".into()));
+        assert!(!custom.panels["DESIGN/MODEL/MODIFY"].contains(&"solid.fillet".into()));
+        assert!(custom.panels["DESIGN/MODEL/MODIFY"].contains(&"solid.chamfer".into()));
+        assert_eq!(custom.panels["DESIGN/future/panel"], vec!["future.command"]);
+        assert!(custom.panels.contains_key("OTHER/SOLID/CREATE"));
+        assert!(!custom.panels.contains_key("DESIGN/SOLID/CREATE"));
+        let saved = custom.prefs();
+        let mut reloaded = ToolbarCustom::default();
+        reloaded.load(&saved);
+        assert_eq!(custom, reloaded, "migration runs once, even for unchanged SKETCH/SURFACE keys");
+    }
+
+    #[test]
+    fn empty_old_panels_keep_default_button_removals() {
+        let mut custom = ToolbarCustom::default();
+        custom.load(&json!({"DESIGN/SOLID/CREATE":[],"DESIGN/SKETCH/CONSTRAINTS":[],"DESIGN/PLASTIC/SETUP":[]}));
+        assert!(!custom.panels["DESIGN/MODEL/SKETCH"].contains(&"sketch.create".into()));
+        assert!(!custom.panels["DESIGN/MODEL/CREATE"].contains(&"solid.extrude".into()));
+        assert!(!custom.panels["DESIGN/MANAGE/RULES"].contains(&"plastic.manage_rules".into()));
+        assert_eq!(custom.panels["DESIGN/SKETCH/CONSTRAIN"], vec!["sketch.dimension"]);
+    }
 }

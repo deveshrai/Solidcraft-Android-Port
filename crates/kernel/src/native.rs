@@ -37,6 +37,10 @@ struct Runtime {
     size: f64,
     /// The orientation mesh's missing-face count at its tolerance.
     coarse_missing: Option<(f64, u64)>,
+    /// [`Body::boundary_tol`]: the accuracy the file it was read from declares. Written only
+    /// when there is one, so a body without it is stored as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    boundary_tol: Option<f64>,
 }
 fn invalid(detail: impl std::fmt::Display) -> KernelError {
     KernelError::Invalid(format!("native B-rep: {detail}"))
@@ -66,7 +70,8 @@ pub fn encode_native_body(body: &Body) -> Result<Vec<u8>> {
         if body.mesh.is_some() {
             return Err(invalid("mesh bodies are source blobs, not B-rep"));
         }
-        let runtime = Runtime { size: body.size, coarse_missing: body.coarse_missing.map(|(tol, n)| (tol, n as u64)) };
+        let runtime =
+            Runtime { size: body.size, coarse_missing: body.coarse_missing.map(|(tol, n)| (tol, n as u64)), boundary_tol: body.boundary_tol };
         let saved = SavedBody { solid: adapter::encode(&body.solid)?, metadata: metadata::encode(body)?, runtime };
         // Structural validation does not invoke another geometric reconstruction.
         validate_topology(&saved)?;
@@ -98,13 +103,17 @@ pub fn decode_native_body(bytes: &[u8]) -> Result<Body> {
         let saved: SavedBody = serde_json::from_value(value).map_err(invalid)?;
         validate_topology(&saved)?;
         let solid = adapter::decode(saved.solid)?;
-        let Runtime { size, coarse_missing } = saved.runtime;
-        if !(size.is_finite() && size >= 0.0) || coarse_missing.is_some_and(|(tol, n)| !tol.is_finite() || n > MAX_ITEMS as u64) {
+        let Runtime { size, coarse_missing, boundary_tol } = saved.runtime;
+        if !(size.is_finite() && size >= 0.0)
+            || coarse_missing.is_some_and(|(tol, n)| !tol.is_finite() || n > MAX_ITEMS as u64)
+            || boundary_tol.is_some_and(|t| !(t.is_finite() && t > 0.0))
+        {
             return Err(invalid("runtime values"));
         }
         let mut body = Body {
             solid: Arc::new(solid),
             size,
+            boundary_tol,
             volume: Some(std::sync::Arc::new(std::sync::Mutex::new(None))),
             coarse_missing: coarse_missing.map(|(tol, n)| (tol, n as usize)),
             mesh: None,
@@ -115,6 +124,7 @@ pub fn decode_native_body(bytes: &[u8]) -> Result<Body> {
             history: None,
             display_of: None,
             meshes: None,
+            phased: false,
             regularization_protected: false,
         };
         metadata::apply(&mut body, saved.metadata)?;
@@ -226,6 +236,18 @@ mod tests {
             let b = crate::boolean(&decoded, &bore, crate::BoolOp::Cut).unwrap().unwrap();
             assert!((crate::measure(&a).unwrap().volume - crate::measure(&b).unwrap().volume).abs() < 1e-7);
         }
+    }
+    /// A body read from a file keeps the accuracy the file declares through the model cache, so
+    /// a reopened design plans its faces as the import did; one without it is stored as before.
+    #[test]
+    fn a_files_declared_accuracy_survives_the_model_cache() {
+        let cube = crate::box_solid(Vec3::ZERO, Vec3::new(4., 3., 1.)).unwrap();
+        let plain = encode_native_body(&cube).unwrap();
+        assert_eq!(decode_native_body(&plain).unwrap().boundary_tol, None);
+        let read = cube.with_boundary_tol(Some(1e-5));
+        let bytes = encode_native_body(&read).unwrap();
+        assert_ne!(bytes, plain);
+        assert_eq!(decode_native_body(&bytes).unwrap().boundary_tol, Some(1e-5));
     }
     #[test]
     fn native_spheres_tori_and_open_faces_round_trip_without_conversion() {

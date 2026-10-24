@@ -13,5 +13,5 @@
   <path d="M26.03 34.5L17.85 53.09" fill="none" stroke="#236ead" stroke-width="4.25" stroke-linejoin="round" stroke-linecap="round"/>
   <path d="M15.03 59.5L13.97 47.02L24.95 51.85Z" fill="#236ead"/>
   <circle cx="26.03" cy="34.5" r="9" fill="#ffffff"/>
-  <circle cx="26.03" cy="34.5" r="6.3" fill="#34465b"/>
+  <circle cx="26.03" cy="34.5" r="6.3" fill="currentColor"/>
 </svg>

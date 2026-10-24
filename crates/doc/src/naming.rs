@@ -46,6 +46,9 @@ pub struct NameCell {
     legacy: Arc<OnceLock<Arc<Vec<String>>>>,
     /// The body this one is a moved copy of (its legacy names are that body's).
     copy_of: Option<Arc<ModelBody>>,
+    /// How deep the chain of features that named it is, for names taken from a saved model
+    /// (which has no origin): see [`NameCell::depth`].
+    saved_depth: Option<usize>,
 }
 
 impl NameCell {
@@ -68,6 +71,30 @@ impl NameCell {
     /// component, a placed instance) does not name every face of every moved body up front.
     pub fn same(body: &ModelBody) -> Self {
         NameCell { copy_of: Some(Arc::new(body.clone())), ..NameCell::default() }
+    }
+    /// Names a saved model kept (worked out when it was saved), at `depth` in the chain of
+    /// features that named them.
+    pub(crate) fn saved(names: Arc<Names>, depth: Option<usize>) -> Self {
+        NameCell { saved_depth: depth, ..Self::shared(names) }
+    }
+    /// How deep the chain of features that named the body is (`None`: not made by a feature).
+    pub(crate) fn depth(&self) -> Option<usize> {
+        self.origin.as_ref().map(|o| o.depth).or(self.saved_depth)
+    }
+    /// Identity of the names: clones of a cell share them.
+    pub(crate) fn id(&self) -> usize {
+        Arc::as_ptr(&self.names) as usize
+    }
+    /// The same origin, lineage and depth with nothing worked out yet: for a body given a new
+    /// name, whose faces' names may be made from it.
+    pub(crate) fn renamed(&self) -> Self {
+        NameCell {
+            origin: self.origin.clone(),
+            lineage: self.lineage.clone(),
+            copy_of: self.copy_of.clone(),
+            saved_depth: self.saved_depth,
+            ..NameCell::default()
+        }
     }
     fn shared(names: Arc<Names>) -> Self {
         let cell = OnceLock::new();
@@ -202,6 +229,23 @@ pub fn face_name_exact(b: &ModelBody, index: usize) -> bool {
     names(b).verified(index)
 }
 
+/// Prepare only names not yet known before a lookup reads several bodies. A ready cell is
+/// shared by snapshots and poses: dispatching threads just to read it costs more than a lookup.
+pub(crate) fn warm_names<'a>(bodies: impl Iterator<Item = &'a ModelBody>) {
+    let bodies: Vec<_> = bodies.filter(|b| b.names.names.get().is_none()).collect();
+    #[cfg(test)]
+    tests::record_warm_jobs(bodies.len());
+    match bodies.as_slice() {
+        [] => {}
+        [body] => {
+            let _ = names(body);
+        }
+        _ => solidcraft_kernel::for_each_on_threads(&bodies, 16, |b| {
+            let _ = names(b);
+        }),
+    }
+}
+
 /// A body's names, with what finding them again needs: from the history of the feature that
 /// made it where it reports one, else from geometry (unverified).
 pub(crate) fn names(b: &ModelBody) -> Arc<Names> {
@@ -214,13 +258,11 @@ pub(crate) fn names(b: &ModelBody) -> Arc<Names> {
         .get_or_init(|| {
             // Exact history needs no mesh; geometry does (its face count is the mesh's).
             let names = match b.names.origin.as_ref() {
-                Some(o) if o.depth < MAX_DEPTH => b
-                    .names
-                    .lineage
-                    .as_ref()
-                    .and_then(|l| crate::history_names::derive(b, o, l))
-                    .unwrap_or_else(|| Names::unverified(geometric_names(b, o, face_count(b)), &mesh_adjacency(b))),
-                _ => Names::unverified((0..face_count(b)).map(|k| format!("{}:face:{k}", b.name)).collect(), &[]),
+                Some(o) if o.depth < MAX_DEPTH => b.names.lineage.as_ref().and_then(|l| crate::history_names::derive(b, o, l)).unwrap_or_else(|| {
+                    let centres = || face_centres(b);
+                    Names::unverified(geometric_names(b, o, face_count(b)), &mesh_adjacency(b), crate::history_names::by_place(&o.feature, &centres))
+                }),
+                _ => Names::unverified((0..face_count(b)).map(|k| format!("{}:face:{k}", b.name)).collect(), &[], None),
             };
             Arc::new(names)
         })
@@ -492,40 +534,52 @@ fn number_pieces(names: &mut [String], pts: &[Vec<Vec3>], mark: char) {
             let ps = pts.get(j).cloned().unwrap_or_default();
             ps.iter().fold(Vec3::ZERO, |a, p| a + *p) * (1.0 / ps.len().max(1) as f64)
         };
-        let cs: Vec<(usize, Vec3)> = same.iter().map(|j| (*j, centre(*j))).collect();
-        let ext = cs.iter().map(|(_, c)| *c).collect::<Aabb3>().size();
-        let key = |c: Vec3| {
-            if ext.x >= ext.y && ext.x >= ext.z {
-                (c.x, c.y, c.z)
-            } else if ext.y >= ext.z {
-                (c.y, c.z, c.x)
-            } else {
-                (c.z, c.x, c.y)
-            }
-        };
-        let mut order = cs.clone();
-        // Pieces lying almost level along the sort axis differ only in the last bits of their centre:
-        // the centre is the mean of a tessellated boundary, and that depends on where the loop's
-        // polyline starts, which can differ between processes. Comparing the keys with a tolerance
-        // makes those pieces equal, so the stable sort keeps the order they arrived in and a name
-        // keeps its number across runs (solidcraft#569). total_cmp keeps a NaN deterministic.
-        let tol = ext.x.max(ext.y).max(ext.z).max(1.0) * 1e-9;
-        let bucket = |c: Vec3| {
-            let k = key(c);
-            // Rounding onto the grid, rather than comparing with a tolerance, is what keeps this a
-            // total order: `a` and `b` in one bucket and `b` and `c` in the next must not leave `a`
-            // and `c` in different ones, or the sort has no order to work with. Since Rust 1.81
-            // `sort_by` may panic on a comparator that is not one. Two pieces can still flip when
-            // they straddle a bucket edge; that is the price of a key that ignores their low bits.
-            ((k.0 / tol).round() as i64, (k.1 / tol).round() as i64, (k.2 / tol).round() as i64)
-        };
-        order.sort_by_key(|a| bucket(a.1));
-        for (k, (j, _)) in order.iter().enumerate() {
+        let order = along_spread(same.iter().map(|j| (*j, centre(*j))).collect());
+        for (k, j) in order.iter().enumerate() {
             if let Some(slot) = names.get_mut(*j) {
                 *slot = format!("{n}{mark}{}", k + 1);
             }
         }
     }
+}
+
+/// The items of `cs` (index, centre) ordered along the longest axis of their centres' spread,
+/// then the next: how the pieces of one face or edge are numbered, the same on every run
+/// whatever order the kernel gives them in.
+pub(crate) fn along_spread(cs: Vec<(usize, Vec3)>) -> Vec<usize> {
+    let ext = cs.iter().map(|(_, c)| *c).collect::<Aabb3>().size();
+    let key = |c: Vec3| {
+        if ext.x >= ext.y && ext.x >= ext.z {
+            (c.x, c.y, c.z)
+        } else if ext.y >= ext.z {
+            (c.y, c.z, c.x)
+        } else {
+            (c.z, c.x, c.y)
+        }
+    };
+    let mut order = cs;
+    // Pieces lying almost level along the sort axis differ only in the last bits of their centre:
+    // the centre is the mean of a tessellated boundary, and that depends on where the loop's
+    // polyline starts, which can differ between processes. Comparing the keys with a tolerance
+    // makes those pieces equal, so the stable sort keeps the order they arrived in and a name
+    // keeps its number across runs (solidcraft#569).
+    let tol = ext.x.max(ext.y).max(ext.z).max(1.0) * 1e-9;
+    let bucket = |c: Vec3| {
+        let k = key(c);
+        // Rounding onto the grid, rather than comparing with a tolerance, is what keeps this a
+        // total order: `a` and `b` in one bucket and `b` and `c` in the next must not leave `a`
+        // and `c` in different ones, or the sort has no order to work with. Since Rust 1.81
+        // `sort_by` may panic on a comparator that is not one. Two pieces can still flip when
+        // they straddle a bucket edge; that is the price of a key that ignores their low bits.
+        ((k.0 / tol).round() as i64, (k.1 / tol).round() as i64, (k.2 / tol).round() as i64)
+    };
+    order.sort_by_key(|a| bucket(a.1));
+    order.into_iter().map(|(j, _)| j).collect()
+}
+
+/// Each face's centre: the mean of the sampled centres of its triangles.
+pub(crate) fn face_centres(b: &ModelBody) -> Vec<Vec3> {
+    samples(&b.mesh(), face_count(b)).into_iter().map(|ps| ps.iter().fold(Vec3::ZERO, |a, p| a + *p) * (1.0 / ps.len().max(1) as f64)).collect()
 }
 
 /// The name of a face new to `f`.
@@ -546,7 +600,9 @@ fn role_name(f: &Feature, before: &ModelState, ps: &[Vec3], ns: &[Vec3], fi: usi
         }
         FeatureKind::Revolve { sketch, axis, .. } => {
             let Some(ss) = before.sketch(sketch.0) else { return format!("F{fid}:face:{fi}") };
-            let Ok((o2, d2)) = crate::eval::revolve_axis(ss, axis) else { return format!("F{fid}:face:{fi}") };
+            let Ok((o2, d2)) = crate::eval::revolve_axis(ss, axis, &|name| crate::eval::construction_axis_in(None, before, name, 0)) else {
+                return format!("F{fid}:face:{fi}");
+            };
             let (o, d) = (ss.plane.to_world(o2), (ss.plane.to_world(o2 + d2) - ss.plane.to_world(o2)).normalized().unwrap_or(Vec3::Z));
             // A flat face holding the axis is an angle cap: on the sketch plane, or the far one.
             let flat = !ns.is_empty() && ns.windows(2).all(|w| w[0].cross(w[1]).len() < 1e-6) && ns.iter().all(|m| m.dot(d).abs() < 1e-6);
@@ -833,6 +889,85 @@ pub fn face_on_body(body: &ModelBody, name: &str, p: Vec3) -> Option<(usize, Vec
 
 #[cfg(test)]
 mod tests {
+    thread_local! {
+        static WARM_JOBS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(super) fn record_warm_jobs(n: usize) {
+        WARM_JOBS.with(|jobs| jobs.set(jobs.get() + n));
+    }
+
+    fn take_warm_jobs() -> usize {
+        WARM_JOBS.with(|jobs| jobs.replace(0))
+    }
+
+    fn lookup_bodies() -> ModelState {
+        let body = solidcraft_kernel::box_solid(Vec3::ZERO, Vec3::new(4., 2., 1.)).unwrap();
+        let mut st = ModelState::default();
+        st.bodies = (0..13).map(|i| ModelBody::new(format!("Part{i}"), body.clone(), i + 1)).collect();
+        st
+    }
+
+    fn same_hit(a: &FaceHit, b: &FaceHit) {
+        assert_eq!((a.body, a.face, a.point), (b.body, b.face, b.point));
+        assert_eq!((a.split, a.merged, a.verified, a.on_point, a.legacy), (b.split, b.merged, b.verified, b.on_point, b.legacy));
+    }
+
+    #[test]
+    fn cached_face_lookups_schedule_no_name_warmup() {
+        let st = lookup_bodies();
+        for b in &st.bodies {
+            let _ = face_names(b);
+        }
+        let name = face_names(&st.bodies[0])[0].clone();
+        let picked = locate_face(&st, &name, Vec3::ZERO).unwrap();
+        let unique = locate_one(&st, None, &name).unwrap();
+        take_warm_jobs();
+        // The two public lookup paths used by picked origins and named-face commands.
+        for _ in 0..145 {
+            same_hit(&locate_face(&st, &name, Vec3::ZERO).unwrap(), &picked);
+            same_hit(&locate_one(&st, None, &name).unwrap(), &unique);
+        }
+        assert!(locate_face(&st, "absent:face:0", Vec3::ZERO).is_none());
+        assert!(locate_one(&st, None, "absent:face:0").is_err());
+        assert_eq!(take_warm_jobs(), 0, "cached names must not dispatch preparation work");
+    }
+
+    #[test]
+    fn face_lookup_warms_only_cold_and_invalidated_names() {
+        // Exercise both entry points as the first reader of a partly named model.
+        for picked in [false, true] {
+            let mut st = lookup_bodies();
+            let name = face_names(&st.bodies[0])[0].clone();
+            let lookup = |st: &ModelState, name: &str| {
+                if picked { locate_face(st, name, Vec3::ZERO).unwrap() } else { locate_one(st, None, name).unwrap() }
+            };
+            take_warm_jobs();
+            let hit = lookup(&st, &name);
+            assert_eq!(take_warm_jobs(), 12, "only the other bodies need names");
+            let snapshot = st.clone();
+            same_hit(&lookup(&snapshot, &name), &hit);
+            assert_eq!(take_warm_jobs(), 0, "snapshots share ready names");
+
+            st.bodies[0].name = "Renamed".into();
+            st.bodies[0].names = st.bodies[0].names.renamed();
+            let renamed = lookup(&st, "Renamed:face:0");
+            same_hit(&renamed, &hit);
+            assert_eq!(take_warm_jobs(), 1, "a rename invalidates only its own names");
+            assert!(locate_face(&st, &name, Vec3::ZERO).is_none());
+            same_hit(&lookup(&snapshot, &name), &hit);
+            assert_eq!(take_warm_jobs(), 0, "the retained snapshot stays ready");
+
+            let source = st.bodies[1].clone();
+            st.bodies[1].names = NameCell::same(&source);
+            same_hit(&lookup(&st, "Renamed:face:0"), &renamed);
+            assert_eq!(take_warm_jobs(), 1, "a lazy moved copy is prepared once");
+            assert!(Arc::ptr_eq(&names(&st.bodies[1]), &names(&source)));
+            same_hit(&lookup(&st, "Renamed:face:0"), &renamed);
+            assert_eq!(take_warm_jobs(), 0);
+        }
+    }
+
     /// Pieces lying almost level along the sort axis must keep the order they arrived in, whatever
     /// the low bits of their centres do. The centre is the mean of a tessellated boundary, so those
     /// bits depend on where the loop's polyline starts and can differ between processes — which is

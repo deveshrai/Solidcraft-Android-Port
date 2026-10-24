@@ -34,7 +34,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("view.delete", "Delete Named View", view_delete).icon("delete").params("view: name"),
     CommandSpec::new("view.list", "List Named Views", view_list).icon("list").noundo().doc_only(),
     CommandSpec::new("view.apply", "Restore Named View", view_apply).icon("camera").noundo().params(
-        "view?: front|back|top|bottom|left|right|iso|home (frames the model) | a named view's name; or camera?: {target: [x,y,z], yaw, pitch, distance, fov?} (radians, mm) → camera. The viewport (and the MCP screenshot) moves there. View state: not saved, not an undo step",
+        "view?: front|back|top|bottom|left|right|iso|home (frames the model) | a named view's name; or camera?: {target: [x,y,z], yaw, pitch, distance, fov?, roll?} (radians, mm; roll defaults to 0, must be finite and is clamped to ±π; up is refused: the up axis comes from the design settings) → camera. The viewport (and the MCP screenshot) moves there. View state: not saved, not an undo step",
     ),
     CommandSpec::new("browser.order", "Order Browser Items", order).icon("reorder").params("folder, component?, order: [keys] (the folder's items in display order)"),
     CommandSpec::new("browser.visibility", "Show/Hide", visibility).icon("eye").noundo().params(
@@ -89,7 +89,7 @@ fn group(s: &mut Session, p: &Value) -> Result<Value> {
     let component = component_of(s, p, cmd)?;
     let items = keys(p, "items", cmd)?;
     let d = s.doc_mut();
-    let id = super::next_free_id(cmd, d.browser_groups.iter().map(|g| g.id))?;
+    let id = d.allocate_id()?;
     let name = match str_(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         Some(n) if n.len() <= 128 => n.to_string(),
         Some(_) => return Err(bad(cmd, "`name` is too long")),
@@ -453,8 +453,17 @@ fn view_apply(s: &mut Session, p: &Value) -> Result<Value> {
         (Some(_), Some(_)) => return Err(bad(cmd, "give `view` or `camera`, not both")),
         (None, None) => return Err(bad(cmd, "`view` (a name) or `camera` is required")),
         (None, Some(c)) => {
+            if c.get("up").is_some() {
+                return Err(bad(cmd, "camera `up` is not supported: the up axis comes from the design settings"));
+            }
+            let roll = match c.get("roll") {
+                Some(value) => {
+                    value.as_f64().filter(|r| r.is_finite()).ok_or_else(|| bad(cmd, "camera `roll` must be a finite number in radians"))?
+                }
+                None => 0.0,
+            };
             let v: solidcraft_doc::NamedView = serde_json::from_value(c.clone()).map_err(|e| bad(cmd, format!("bad camera: {e}")))?;
-            camera_of(&v)
+            crate::render::Camera { roll: roll.clamp(-std::f64::consts::PI, std::f64::consts::PI), ..camera_of(&v) }
         }
         // Standard view names come first, as in the browser's Named Views folder.
         (Some(name), None) => match crate::render::StandardView::parse(name) {
@@ -508,20 +517,6 @@ fn view_list(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(json!({ "views": s.doc.named_views }))
 }
 
-/// Rename an item key in the browser's groups and orders of a folder.
-fn rename_key(d: &mut solidcraft_doc::Document, folder: &str, old: &str, new: &str) {
-    for g in d.browser_groups.iter_mut().filter(|g| g.folder == folder) {
-        for k in g.items.iter_mut().filter(|k| *k == old) {
-            *k = new.to_string();
-        }
-    }
-    for (_, v) in d.browser_order.iter_mut().filter(|(k, _)| k.ends_with(&format!("/{folder}"))) {
-        for k in v.iter_mut().filter(|k| *k == old) {
-            *k = new.to_string();
-        }
-    }
-}
-
 /// The keys whose strings name bodies, alone or in a list (`body`, `targets`…), at any depth of a
 /// feature: its own fields and the face, edge and link references inside it.
 const BODY_KEYS: [&str; 5] = ["body", "bodies", "target", "targets", "tools"];
@@ -562,8 +557,10 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
     // includes the siblings whose stored name is shared: the solids of a STEP file with one label
     // are stored as `X`, `X`, `X` and built as `X`, `X (2)`, `X (3)`, so the stored names are set
     // to the numbered ones, or `X (3)` would turn into `X (2)` once the second solid is renamed.
+    // Read the feature's own result so siblings removed by later features keep their names too.
     let fid = b.feature;
-    let siblings: Vec<String> = st.bodies.iter().filter(|x| x.feature == fid).map(|x| x.name.clone()).collect();
+    let made = s.model.result(fid).map_or(&st.bodies, |r| &r.state.bodies);
+    let siblings: Vec<String> = made.iter().filter(|x| x.feature == fid).map(|x| x.name.clone()).collect();
     let k = siblings.iter().position(|n| *n == old).unwrap_or(0);
     // A body numbered by the counter (`BodyN`) gives its number back once it has a name of its
     // own, and every counted body after it would move down one (`Body3` becoming `Body1`) and
@@ -573,18 +570,24 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
         let first = f.body_names.first().is_some_and(|n| !n.trim().is_empty());
         f.body_names.get(i).is_none_or(|n| n.trim().is_empty()) && (f.shell_piece_order || i < f.body_names.len() || !first)
     };
-    let later: Vec<(u64, Vec<String>)> = match s.doc.features.iter().position(|f| f.id == fid) {
-        Some(at) if s.doc.features.get(at).is_some_and(|f| counted(f, k)) => s
+    // Bodies later features name after this one (`Top (1)`, a split's other piece) keep their
+    // names too: they would otherwise follow it, and break what names them (#3510).
+    let derived = format!("{old} (");
+    let at = s.doc.features.iter().position(|f| f.id == fid);
+    let counts = at.and_then(|at| s.doc.features.get(at)).is_some_and(|f| counted(f, k));
+    let later: Vec<(u64, Vec<String>)> = match at {
+        Some(at) => s
             .doc
             .features
             .iter()
             .skip(at + 1)
             .filter_map(|f| {
                 let made: Vec<String> = s.model.result(f.id)?.state.bodies.iter().filter(|x| x.feature == f.id).map(|x| x.name.clone()).collect();
-                (0..made.len()).any(|i| counted(f, i)).then_some((f.id, made))
+                let keep = (counts && (0..made.len()).any(|i| counted(f, i))) || made.iter().any(|n| n.starts_with(&derived));
+                keep.then_some((f.id, made))
             })
             .collect(),
-        _ => Vec::new(),
+        None => Vec::new(),
     };
     let d = s.doc_mut();
     for (id, made) in &later {
@@ -638,33 +641,7 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(e) = failed {
         return Err(bad(cmd, e));
     }
-    if let Some(m) = d.materials.remove(&old) {
-        d.materials.insert(name.to_string(), m);
-    }
-    if let Some(c) = d.appearances.bodies.remove(&old) {
-        d.appearances.bodies.insert(name.to_string(), c);
-    }
-    for f in d.appearances.faces.iter_mut().filter(|f| f.body == old) {
-        f.body = name.to_string();
-    }
-    for column in &mut d.configs.columns {
-        match column {
-            solidcraft_doc::config::Column::Material(body) | solidcraft_doc::config::Column::Appearance(body) if *body == old => {
-                *body = name.to_string();
-            }
-            solidcraft_doc::config::Column::FaceAppearance(target) if target.body == old => {
-                target.body = name.to_string();
-            }
-            _ => {}
-        }
-    }
-    if let Some(o) = d.body_offsets.remove(&old) {
-        d.body_offsets.insert(name.to_string(), o);
-    }
-    if let Some(c) = d.body_components.remove(&old) {
-        d.body_components.insert(name.to_string(), c);
-    }
-    rename_key(d, "bodies", &old, name);
+    d.rename_body_keys(&old, name);
     for b in s.visibility.hidden_bodies.iter_mut().filter(|b| **b == old) {
         *b = name.to_string();
     }
@@ -811,6 +788,72 @@ mod tests {
         assert_eq!(names(&s)[1], b);
     }
 
+    #[test]
+    fn renaming_a_body_keeps_a_later_sibling_removal() {
+        let mut s = Session::default();
+        run(&mut s, "sketch.create", json!({"plane": "XY"}));
+        for x in [0, 20, 40] {
+            run(&mut s, "sketch.rectangle.two_point", json!({"p0": [x, 0], "p1": [x + 10, 10]}));
+        }
+        run(&mut s, "sketch.finish", json!({}));
+        run(&mut s, "solid.extrude", json!({"distance": 5, "operation": "new", "name": "Extrude1"}));
+        assert_eq!(names(&s), ["Body1", "Body2", "Body3"]);
+        run(&mut s, "solid.remove", json!({"bodies": ["Body3"]}));
+        assert_eq!(names(&s), ["Body1", "Body2"]);
+
+        run(&mut s, "body.rename", json!({"body": "Body1", "name": "Ext"}));
+        assert_eq!(s.doc.find_feature("Extrude1").unwrap().body_names, ["Ext", "Body2", "Body3"]);
+        assert_eq!(names(&s), ["Ext", "Body2"]);
+        assert!(s.model.results.iter().all(|r| r.error.is_none()), "the remove still finds Body3");
+
+        let mut fresh = Session::new((*s.doc).clone());
+        fresh.refresh();
+        assert_eq!(names(&fresh), ["Ext", "Body2"]);
+        assert!(fresh.model.results.iter().all(|r| r.error.is_none()), "the remove also works after a full evaluation");
+    }
+
+    /// #3510: each piece of a split is renamed on its own. Renaming the split body leaves the
+    /// other piece, and the features that use it, as they were.
+    #[test]
+    fn split_pieces_are_renamed_on_their_own() {
+        let ok = |s: &Session| s.model.results.iter().all(|r| r.error.is_none());
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [0, 0, -5], "body_name": "Top"}));
+        run(&mut s, "solid.split_body", json!({"body": "Top", "plane": "XY"}));
+        assert_eq!(names(&s), vec!["Top", "Top (1)"]);
+        run(&mut s, "solid.move", json!({"bodies": ["Top (1)"], "translate": [0, 0, -5]}));
+        run(&mut s, "body.rename", json!({"body": "Top", "name": "Upper"}));
+        assert_eq!(names(&s), vec!["Upper", "Top (1)"]);
+        assert!(ok(&s), "the move still finds the other piece");
+        run(&mut s, "body.rename", json!({"body": "Top (1)", "name": "Lower"}));
+        assert_eq!(names(&s), vec!["Upper", "Lower"]);
+        assert!(ok(&s), "the move follows the renamed piece");
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(names(&s), vec!["Upper", "Top (1)"]);
+    }
+
+    /// Renaming one half of a split leaves the other half's name, also once a later feature
+    /// joins that other half away.
+    #[test]
+    fn renaming_one_half_of_a_split_leaves_the_other() {
+        let ok = |s: &Session| s.model.results.iter().all(|r| r.error.is_none());
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [0, 0, -5]}));
+        run(&mut s, "solid.split_body", json!({"body": "Body1", "plane": "XY"}));
+        assert_eq!(names(&s), ["Body1", "Body1 (1)"]);
+        run(&mut s, "solid.box", json!({"length": 5, "width": 5, "height": 5, "corner": [10, 0, -5], "operation": "new", "body_name": "Tab"}));
+        run(&mut s, "solid.combine", json!({"target": "Tab", "tools": ["Body1 (1)"], "operation": "join"}));
+        assert_eq!(names(&s), ["Body1", "Tab"]);
+
+        run(&mut s, "body.rename", json!({"body": "Body1", "name": "Upper"}));
+        assert_eq!(names(&s), ["Upper", "Tab"]);
+        assert!(ok(&s), "the join still finds the other half");
+        let mut fresh = Session::new((*s.doc).clone());
+        fresh.refresh();
+        assert_eq!(names(&fresh), ["Upper", "Tab"]);
+        assert!(ok(&fresh), "the join also works after a full evaluation");
+    }
+
     /// #1108: a primitive's `targets` are its participants, kept beside its kind; a rename
     /// follows them, as it follows the names inside the kind (a combine's target and tools).
     #[test]
@@ -862,6 +905,44 @@ mod tests {
         assert!(!after.contains(&"Body1".to_string()) && !after.contains(&"Body5".to_string()), "{after:?}");
         run(&mut s, "edit.undo", json!({}));
         assert!(names(&s).contains(&"Body2".to_string()) && names(&s).contains(&"Body4".to_string()), "{:?}", names(&s));
+    }
+
+    /// #3044: a rename changes names only, so it, its undo and its redo evaluate nothing: every
+    /// body keeps its geometry and display mesh, and the model is the one evaluating the renamed
+    /// design gives.
+    #[test]
+    fn renaming_a_body_evaluates_nothing() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "A"}));
+        run(&mut s, "solid.box", json!({"length": 5, "width": 5, "height": 5, "center": [20, 0, 2.5], "operation": "new", "body_name": "B"}));
+        run(&mut s, "appearance.assign", json!({"bodies": ["A"], "appearance": "Aluminum - Satin"}));
+        let meshes = |s: &Session| s.model.state().bodies.iter().map(|b| std::sync::Arc::as_ptr(&b.mesh())).collect::<Vec<_>>();
+        let shown = meshes(&s);
+        s.evaluations = 0;
+        run(&mut s, "body.rename", json!({"body": "A", "name": "Plate"}));
+        assert_eq!(s.evaluations, 0, "a rename evaluates nothing");
+        assert_eq!(names(&s), vec!["Plate".to_string(), "B".to_string()]);
+        assert_eq!(meshes(&s), shown, "the bodies keep their meshes");
+        assert!(s.doc.appearances.bodies.contains_key("Plate"));
+        // The same model as evaluating the renamed design.
+        let mut fresh = Session::new((*s.doc).clone());
+        fresh.refresh();
+        assert_eq!(names(&fresh), names(&s));
+        s.refresh();
+        assert_eq!(s.model.last_recomputed, 0, "the next evaluation reuses every result");
+        s.evaluations = 0;
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(names(&s), vec!["A".to_string(), "B".to_string()]);
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(names(&s), vec!["Plate".to_string(), "B".to_string()]);
+        assert_eq!(s.evaluations, 0, "undo and redo of a rename evaluate nothing");
+        assert_eq!(meshes(&s), shown);
+        // A body a later feature uses is renamed in that feature too: that is evaluated.
+        run(&mut s, "solid.combine", json!({"target": "Plate", "tools": ["B"], "operation": "join", "keep_tools": true}));
+        s.evaluations = 0;
+        run(&mut s, "body.rename", json!({"body": "B", "name": "Tool"}));
+        assert!(s.evaluations > 0);
+        assert!(names(&s).contains(&"Tool".to_string()));
     }
 
     #[test]
@@ -961,8 +1042,14 @@ mod tests {
         run(&mut s, "view.apply", json!({"view": "top"}));
         let c = s.camera.expect("a camera for the top view");
         assert!((c.pitch - std::f64::consts::FRAC_PI_2).abs() < 1e-3 && (c.target.x - 20.0).abs() < 1e-6, "{c:?}");
-        run(&mut s, "view.apply", json!({"camera": {"target": [0, 0, 0], "yaw": 1, "pitch": 0.2, "distance": 80, "fov": 0.5}}));
-        assert_eq!(s.camera.map(|c| (c.yaw, c.distance, c.fov)), Some((1.0, 80.0, 0.5)));
+        let r = run(&mut s, "view.apply", json!({"camera": {"target": [0, 0, 0], "yaw": 1, "pitch": 0.2, "distance": 80, "fov": 0.5, "roll": 1.0}}));
+        assert_eq!(s.camera.map(|c| (c.yaw, c.distance, c.fov, c.roll)), Some((1.0, 80.0, 0.5, 1.0)));
+        assert_eq!(r["camera"]["roll"], 1.0);
+        for (roll, expected) in [(f64::MAX, std::f64::consts::PI), (-f64::MAX, -std::f64::consts::PI)] {
+            let r = run(&mut s, "view.apply", json!({"camera": {"target": [0, 0, 0], "yaw": 0, "pitch": 0, "distance": 80, "roll": roll}}));
+            assert_eq!(r["camera"]["roll"], expected);
+            assert_eq!(s.camera.map(|c| c.roll), Some(expected));
+        }
         assert_eq!(s.undo.len(), undo, "view state, not an undo step");
         for p in [
             json!({}),
@@ -972,6 +1059,31 @@ mod tests {
             json!({"camera": "x"}),
         ] {
             assert!(s.execute("view.apply", &p).is_err(), "{p}");
+        }
+    }
+
+    #[test]
+    fn applying_a_camera_rejects_up() {
+        let mut s = Session::default();
+        run(&mut s, "view.apply", json!({"view": "front"}));
+        let before = serde_json::to_value(s.camera).unwrap();
+        let err = s.execute("view.apply", &json!({"camera": {"target": [0, 0, 0], "yaw": 0, "pitch": 0, "distance": 80, "up": "y"}})).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("up") && message.contains("design") && message.contains("settings"), "{message}");
+        assert_eq!(serde_json::to_value(s.camera).unwrap(), before);
+    }
+
+    #[test]
+    fn applying_a_camera_rejects_invalid_roll() {
+        let mut s = Session::default();
+        run(&mut s, "view.apply", json!({"view": "front"}));
+        let before = serde_json::to_value(s.camera).unwrap();
+        // Non-finite floating-point values serialize as null in JSON.
+        for roll in [json!(f64::NAN), json!(f64::INFINITY), json!(f64::NEG_INFINITY), json!("NaN"), json!(true)] {
+            let err =
+                s.execute("view.apply", &json!({"camera": {"target": [0, 0, 0], "yaw": 0, "pitch": 0, "distance": 80, "roll": roll}})).unwrap_err();
+            assert!(err.to_string().contains("roll"), "{err}");
+            assert_eq!(serde_json::to_value(s.camera).unwrap(), before);
         }
     }
 
@@ -1073,12 +1185,26 @@ mod tests {
     }
 
     #[test]
-    fn the_next_free_id_is_one_past_the_largest_and_never_wraps() {
-        use super::super::next_free_id;
-        assert_eq!(next_free_id("t", std::iter::empty()).unwrap(), 1);
-        assert_eq!(next_free_id("t", [3, 9, 4].into_iter()).unwrap(), 10);
-        assert_eq!(next_free_id("t", [u64::MAX - 1].into_iter()).unwrap(), u64::MAX);
-        assert!(next_free_id("t", [1, u64::MAX].into_iter()).is_err());
+    fn exhausted_shared_ids_refuse_a_group_without_changing_the_design() {
+        let mut s = Session::default();
+        s.doc_mut().next_id = u64::MAX;
+        let before = s.doc.to_json();
+        let result = s.execute("browser.group", &json!({"folder": "bodies"}));
+        assert!(result.is_err() && !matches!(result, Err(crate::EngineError::Internal(..))), "{result:?}");
+        assert_eq!(s.doc.to_json(), before);
+    }
+
+    #[test]
+    fn deleted_group_ids_are_not_reused_after_reopening() {
+        let mut s = Session::default();
+        let params = json!({"folder": "bodies"});
+        let first = run(&mut s, "browser.group", params.clone())["group"].as_u64().unwrap();
+        run(&mut s, "browser.ungroup", json!({"group": first}));
+        let doc = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap();
+        *s.doc_mut() = doc;
+        let second = run(&mut s, "browser.group", params)["group"].as_u64().unwrap();
+        assert!(second > first, "deleted group {first} was reused as {second}");
+        assert!(s.execute("browser.rename_group", &json!({"group": first, "name": "Stale reference"})).is_err());
     }
 
     #[test]

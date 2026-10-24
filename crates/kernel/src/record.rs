@@ -146,8 +146,9 @@ pub(crate) fn build_placed(
     edges: Option<&HashMap<mt::EdgeID, Vec<EdgeOrigin>>>,
     flip: bool,
     coarse: Option<(f64, usize)>,
+    phased: bool,
 ) -> Result<Body> {
-    Ok(traced(Body::new_placed(solid, flip, coarse)?, counts, faces, edges))
+    Ok(traced(Body::new_placed(solid, flip, coarse, phased)?, counts, faces, edges))
 }
 
 /// The origins of `body`'s edges by identity, from its history `h` (edges in its edge order).

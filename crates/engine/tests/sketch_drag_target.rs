@@ -105,3 +105,238 @@ fn four_bar_other_joint_follows_the_rocker_arc_and_its_limits() {
         assert!(four_bar::point(&s, "coupler.end").unwrap().dist(nearest) < 1e-4);
     }
 }
+
+fn grab(s: &solidcraft_engine::Session, line: &str, fraction: f64) -> Vec2 {
+    let a = four_bar::point(s, &format!("{line}.start")).unwrap();
+    let b = four_bar::point(s, &format!("{line}.end")).unwrap();
+    a + (b - a) * fraction
+}
+
+#[test]
+fn a_free_line_grabbed_slightly_off_its_edge_still_translates_rigidly() {
+    for from in [Vec2::new(15.0, 12.0), Vec2::new(32.0, 11.0)] {
+        let mut s = solidcraft_engine::Session::default();
+        s.execute("sketch.create", &json!({"plane":"XZ"})).unwrap();
+        s.execute("sketch.line", &json!({"points":[[10,10],[30,10]],"ids":["free"],"infer":false})).unwrap();
+        let to = from + Vec2::new(3.0, 5.0);
+        let r = s.execute("sketch.drag", &json!({"entity":"free","from":[from.x,from.y],"to":[to.x,to.y],"live":true})).unwrap();
+        assert!(four_bar::point(&s, "free.start").unwrap().dist(Vec2::new(13.0, 15.0)) < 1e-6);
+        assert!(four_bar::point(&s, "free.end").unwrap().dist(Vec2::new(33.0, 15.0)) < 1e-6);
+        let at = Vec2::new(r["at"][0].as_f64().unwrap(), r["at"][1].as_f64().unwrap());
+        assert!(at.dist(to) < 1e-6);
+    }
+}
+
+#[test]
+fn an_offset_edge_grab_rotates_with_the_link_and_does_not_drift() {
+    for local in [Vec2::new(0.7, 0.1), Vec2::new(0.7, -0.1)] {
+        let mut s = four_bar::session().unwrap();
+        let target = Vec2::new(-7.0, 11.2);
+        let closest = target * (10.0 * local.len() / target.len());
+        let attached = |s: &solidcraft_engine::Session| {
+            let a = four_bar::point(s, "crank.start").unwrap();
+            let d = four_bar::point(s, "crank.end").unwrap() - a;
+            a + d * local.x + Vec2::new(-d.y, d.x) * local.y
+        };
+        let mut from = attached(&s);
+        for _ in 0..8 {
+            let r = s.execute("sketch.drag", &json!({"entity":"crank","from":[from.x,from.y],"to":[target.x,target.y],"live":true})).unwrap();
+            from = Vec2::new(r["at"][0].as_f64().unwrap(), r["at"][1].as_f64().unwrap());
+            assert!(from.dist(attached(&s)) < 1e-6);
+            assert!(attached(&s).dist(closest) < 1e-4);
+            assert!(four_bar::length_error(&s).unwrap() < 1e-6);
+            assert_eq!(four_bar::branch(&s).unwrap(), -1.0);
+        }
+    }
+}
+
+#[test]
+fn crank_edge_large_drag_reaches_the_nearest_material_point() {
+    for fraction in [0.2, 0.5, 0.8] {
+        let mut s = four_bar::session().unwrap();
+        let side = four_bar::branch(&s).unwrap();
+        let from = grab(&s, "crank", fraction);
+        let target = Vec2::new(-10.0, 16.0) * fraction;
+        let nearest = target * (10.0 * fraction / target.len());
+        let result = s.execute("sketch.drag", &json!({"entity":"crank", "from":[from.x,from.y], "to":[target.x,target.y], "live":true})).unwrap();
+        let actual = grab(&s, "crank", fraction);
+        assert!(four_bar::length_error(&s).unwrap() < 1e-6);
+        assert_eq!(four_bar::branch(&s).unwrap(), side);
+        assert!(actual.dist(nearest) < 1e-4, "fraction {fraction}: {actual:?}, expected {nearest:?}");
+        let at = Vec2::new(result["at"][0].as_f64().unwrap(), result["at"][1].as_f64().unwrap());
+        assert!(at.dist(actual) < 1e-6, "reported grab {at:?}, actual {actual:?}");
+        s.execute("sketch.drag_end", &json!({})).unwrap();
+        assert!(grab(&s, "crank", fraction).dist(nearest) < 1e-4);
+    }
+}
+
+#[test]
+fn rocker_edge_keeps_its_material_point_and_motion_limits() {
+    let base = Vec2::new(42.0, 0.0);
+    let lo = -(-1264.0_f64 / 1680.0).acos();
+    let hi = -(0.2_f64).acos();
+    for fraction in [0.2, 0.5, 0.8] {
+        for angle in [-2.6_f64, -2.1, -1.5, -1.1] {
+            let mut s = four_bar::session().unwrap();
+            let from = grab(&s, "rocker", fraction);
+            let target = base + Vec2::new(angle.cos(), angle.sin()) * (60.0 * (1.0 - fraction));
+            let closest = base + Vec2::new(angle.clamp(lo, hi).cos(), angle.clamp(lo, hi).sin()) * (20.0 * (1.0 - fraction));
+            s.execute("sketch.drag", &json!({"entity":"rocker","from":[from.x,from.y],"to":[target.x,target.y],"live":true})).unwrap();
+            assert!(
+                grab(&s, "rocker", fraction).dist(closest) < 1e-4,
+                "fraction {fraction}, angle {angle}, actual {:?}, expected {closest:?}",
+                grab(&s, "rocker", fraction)
+            );
+            assert!(four_bar::length_error(&s).unwrap() < 1e-6);
+            assert_eq!(four_bar::branch(&s).unwrap(), -1.0);
+        }
+    }
+}
+
+#[test]
+fn an_off_centre_edge_grab_agrees_for_one_move_split_moves_and_holding_still() {
+    for fraction in [0.2, 0.5, 0.8] {
+        for frames in [1, 16] {
+            let mut s = four_bar::session().unwrap();
+            let start = grab(&s, "crank", fraction);
+            let target = Vec2::new(-10.0, 16.0) * fraction;
+            let mut from = start;
+            for i in 1..=frames + 8 {
+                let to = start + (target - start) * (i.min(frames) as f64 / frames as f64);
+                let result = s.execute("sketch.drag", &json!({"entity":"crank","from":[from.x,from.y],"to":[to.x,to.y],"live":true})).unwrap();
+                from = Vec2::new(result["at"][0].as_f64().unwrap(), result["at"][1].as_f64().unwrap());
+                assert!(from.dist(grab(&s, "crank", fraction)) < 1e-6);
+                assert!(four_bar::length_error(&s).unwrap() < 1e-6);
+            }
+            let closest = target * (10.0 * fraction / target.len());
+            assert!(grab(&s, "crank", fraction).dist(closest) < 1e-4);
+        }
+    }
+}
+
+fn coupler_point(angle: f64, along: f64) -> Vec2 {
+    let a = Vec2::new(angle.cos(), angle.sin()) * 10.0;
+    let d = Vec2::new(42.0, 0.0) - a;
+    let len = d.len();
+    let u = d * (1.0 / len);
+    let x = (40.0 * 40.0 - 20.0 * 20.0 + len * len) / (2.0 * len);
+    let c = a + u * x + Vec2::new(u.y, -u.x) * (1600.0 - x * x).sqrt();
+    a + (c - a) * along
+}
+
+fn closest_coupler_point(target: Vec2, along: f64) -> Vec2 {
+    // Independent one-dimensional oracle: sample the full crank revolution, then refine
+    // the best interval. Both circle intersections keep the reported linkage's branch.
+    let step = std::f64::consts::TAU / 4096.0;
+    let best = (0..4096)
+        .min_by(|a, b| coupler_point(*a as f64 * step, along).dist(target).total_cmp(&coupler_point(*b as f64 * step, along).dist(target)))
+        .unwrap();
+    let (mut lo, mut hi) = ((best as f64 - 1.0) * step, (best as f64 + 1.0) * step);
+    for _ in 0..80 {
+        let a = (2.0 * lo + hi) / 3.0;
+        let b = (lo + 2.0 * hi) / 3.0;
+        if coupler_point(a, along).dist(target) < coupler_point(b, along).dist(target) {
+            hi = b;
+        } else {
+            lo = a;
+        }
+    }
+    coupler_point((lo + hi) * 0.5, along)
+}
+
+#[test]
+fn the_coupler_edge_follows_with_both_ends_free_to_rotate() {
+    for along in [0.2, 0.5, 0.8] {
+        for angle in [1.8, 2.3, 3.8] {
+            let mut s = four_bar::session().unwrap();
+            let from = grab(&s, "coupler", along);
+            let target = coupler_point(angle, along) + Vec2::new(-3.0, 4.0);
+            let closest = closest_coupler_point(target, along);
+            let result = s.execute("sketch.drag", &json!({"entity":"coupler","from":[from.x,from.y],"to":[target.x,target.y],"live":true})).unwrap();
+            let actual = grab(&s, "coupler", along);
+            assert!(actual.dist(closest) < 1e-4, "along {along}, angle {angle}, actual {actual:?}, closest {closest:?}");
+            let at = Vec2::new(result["at"][0].as_f64().unwrap(), result["at"][1].as_f64().unwrap());
+            assert!(at.dist(actual) < 1e-6);
+            assert!(four_bar::length_error(&s).unwrap() < 1e-6);
+            assert_eq!(four_bar::branch(&s).unwrap(), -1.0);
+        }
+    }
+}
+
+/// Two parallelogram linkages, each held parallel and equal on both pairs of sides (two
+/// redundant constraints each), the upper one hanging off the lower one's moving side and tied
+/// to a fixed pivot by a 30 mm rod: one degree of freedom (#4585).
+fn parallelograms() -> solidcraft_engine::Session {
+    let mut s = solidcraft_engine::Session::default();
+    let run = |s: &mut solidcraft_engine::Session, id: &str, p: serde_json::Value| {
+        s.execute(id, &p).unwrap_or_else(|e| panic!("{id} {p}: {e}"));
+    };
+    run(&mut s, "sketch.create", json!({"plane":"XY"}));
+    let at = |deg: f64, r: f64| Vec2::new(deg.to_radians().cos(), deg.to_radians().sin()) * r;
+    let p1 = at(147.7, 80.0);
+    let m = p1 + Vec2::new(0.0, 20.0);
+    let r = m + at(20.0, 80.0);
+    let (c, t) = (m + Vec2::new(0.0, 20.0), r + Vec2::new(0.0, 20.0));
+    let g = r + at(-70.0, 30.0);
+    let xy = |p: Vec2| [p.x, p.y];
+    let (o, q) = (xy(Vec2::ZERO), xy(Vec2::new(0.0, 20.0)));
+    run(&mut s, "sketch.line", json!({"points":[o, xy(p1), xy(m), q, o],"ids":["bot","left","top","right"],"infer":false}));
+    run(&mut s, "sketch.line", json!({"points":["left.end", xy(r), xy(t), xy(c), "left.end"],"ids":["ubot","uright","utop","uleft"],"infer":false}));
+    run(&mut s, "sketch.line", json!({"points":["ubot.end", xy(g)],"ids":["rod"],"infer":false}));
+    run(&mut s, "sketch.constraint.fix", json!({"entities":["bot.start", "rod.end"]}));
+    run(&mut s, "sketch.constraint.horizontal_vertical", json!({"line":"right"}));
+    for (line, value) in [("right", 20.0), ("bot", 80.0), ("ubot", 80.0), ("uleft", 20.0), ("rod", 30.0)] {
+        run(&mut s, "sketch.dimension", json!({"entities":[line],"value":value}));
+    }
+    for (a, b) in [("top", "bot"), ("left", "right"), ("utop", "ubot"), ("uright", "uleft")] {
+        run(&mut s, "sketch.constraint.parallel", json!({"a":a,"b":b}));
+        run(&mut s, "sketch.constraint.equal", json!({"a":a,"b":b}));
+    }
+    run(&mut s, "sketch.constraint.parallel", json!({"a":"uleft","b":"left"}));
+    s
+}
+
+/// The parallelograms' lengths, directions and fixed points, as the largest error.
+fn parallelogram_error(s: &solidcraft_engine::Session) -> f64 {
+    let p = |name: &str| four_bar::point(s, name).unwrap();
+    let side = |line: &str| p(&format!("{line}.end")) - p(&format!("{line}.start"));
+    let mut error = p("bot.start").len().max(p("right.start").dist(Vec2::new(0.0, 20.0)));
+    for (line, value) in [("bot", 80.0), ("ubot", 80.0), ("uleft", 20.0), ("rod", 30.0)] {
+        error = error.max((side(line).len() - value).abs());
+    }
+    for (a, b) in [("top", "bot"), ("left", "right"), ("utop", "ubot"), ("uright", "uleft")] {
+        error = error.max((side(a).len() - side(b).len()).abs()).max(side(a).cross(side(b)).abs() / side(b).len());
+    }
+    error
+}
+
+#[test]
+fn a_linkage_held_by_redundant_parallelograms_follows_the_cursor() {
+    // Each held parallelogram's parallel and equal sides are dependent only at an exact
+    // solution: a pose corrected to the solver's tolerance must still show the linkage's freedom.
+    for live in [true, false] {
+        let mut s = parallelograms();
+        let report = s.execute("sketch.solve", &json!({})).unwrap();
+        assert_eq!((&report["status"], &report["dof"]), (&json!("solved"), &json!(1)), "{report}");
+        // The lower parallelogram's free corner, its moving sides and the upper one's side, each
+        // dragged in turn from where the last drag left the linkage, follows most of the way
+        // (the rest is off the path the linkage allows).
+        for (entity, along) in [("bot.end", None), ("bot", Some(0.5)), ("left", Some(0.5)), ("ubot", Some(0.5)), ("bot.end", None)] {
+            let from = along.map_or_else(|| four_bar::point(&s, entity).unwrap(), |f| grab(&s, entity, f));
+            let to = from + Vec2::new(2.0, 2.0);
+            let r = s.execute("sketch.drag", &json!({"entity":entity,"from":[from.x,from.y],"to":[to.x,to.y],"live":live})).unwrap();
+            let reached = r["reached"].as_f64().unwrap();
+            assert!(reached > 0.8, "live {live}: {entity} reached {reached}: {r}");
+            assert!(parallelogram_error(&s) < 1e-6, "live {live}: {entity}: {}", parallelogram_error(&s));
+            assert_eq!(r["sketch"]["solved"], json!(true));
+        }
+        // The lower parallelogram's free corner lands on its 80 mm circle, as close to the
+        // cursor as the circle allows.
+        let from = four_bar::point(&s, "bot.end").unwrap();
+        let to = from + Vec2::new(1.0, 2.0);
+        s.execute("sketch.drag", &json!({"entity":"bot.end","from":[from.x,from.y],"to":[to.x,to.y],"live":live})).unwrap();
+        let at = four_bar::point(&s, "bot.end").unwrap();
+        assert!(at.dist(to * (80.0 / to.len())) < 1e-4, "live {live}: {at:?}");
+        assert!(parallelogram_error(&s) < 1e-6);
+    }
+}

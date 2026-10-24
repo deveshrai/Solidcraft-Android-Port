@@ -155,7 +155,7 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
     let t = Tokens::get().navigation_cube(active);
     crate::scenario::publish_count("navigation_cube:active", f64::from(u8::from(active)));
     let faces = facets(&app.cam, c, HALF * f64::from(scale));
-    let hover = ui.input(|i| i.pointer.hover_pos()).filter(|_| ui.rect_contains_pointer(rect));
+    let hover = ui.input(|i| i.pointer.hover_pos()).filter(|p| ui.is_enabled() && ui.rect_contains_pointer(rect) && !crate::shell::covered(app, *p));
     let hovered = if orbiting { None } else { hover.and_then(|p| hit(&faces, p)) };
     let painter = ui.painter_at(outer);
     paint_cube(&painter, &faces, hovered, t, true, scale);
@@ -185,7 +185,7 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
     if let Some(face) = hovered.and_then(|i| faces.get(i)) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         ui.interact(Rect::from_center_size(hover.unwrap_or(face.centre), vec2(2.0, 2.0)), ui.id().with("navigation_cube_tip"), Sense::hover())
-            .on_hover_text(format!("{} view. Drag to orbit; hold Shift to snap.", face.label));
+            .on_hover_text(format!("{} view. Drag to orbit{}.", face.label, if app.preferences.free_orbit { "" } else { "; hold Shift to snap" }));
         if ui.input(|i| i.pointer.primary_clicked()) {
             navigate(app, None, Some(face.direction));
         }
@@ -214,11 +214,10 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
         }
     }
     let home = Rect::from_center_size(c + vec2(-65.0, -65.0) * scale, vec2(26.0, 26.0) * scale);
-    crate::scenario::publish_rect("axis_view:home", home);
-    crate::scenario::publish_handle("axis_view:home", home.center());
+    crate::scenario::publish_target("axis_view:home", home);
     let home_hover = control(app, ui, home, "home", "Home: isometric view and fit model");
     if active {
-        icons::paint(&painter, home.shrink(4.0 * scale), "home", if home_hover { t.accent } else { t.cube_face }, t.cube_face, t.accent);
+        icons::paint_icon(&painter, home.shrink(4.0 * scale), "home", f32::from((if home_hover { t.accent } else { t.cube_face }).a()) / 255.0);
     }
     let fit = Rect::from_center_size(c + vec2(67.0, 67.0) * scale, vec2(22.0, 22.0) * scale);
     let fit_hover = control(app, ui, fit, "fit", "Fit model in view");
@@ -231,7 +230,7 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
         let (r, u, _) = app.cam.basis();
         let tip = origin + vec2((d.dot(r) * 17.0) as f32, -(d.dot(u) * 17.0) as f32) * scale;
         painter.line_segment([origin, tip], Stroke::new(1.5, color));
-        painter.text(tip, Align2::CENTER_CENTER, label, FontId::proportional(8.0), color);
+        painter.text(tip, Align2::CENTER_CENTER, label, FontId::proportional(crate::theme::Tokens::get().font_triad), color);
     }
 }
 
@@ -272,7 +271,7 @@ mod tests {
     fn former_edge_strips_click_the_face_and_hover_without_internal_seams() {
         let mut h = crate::scenario::Harness::new();
         h.call("ui.prefs", json!({"navigator_style":"cube"}));
-        let ctx = egui::Context::default();
+        let ctx = crate::fonts::test_context();
         h.app.preferences.look_at_anim = false;
         for up in ["z", "y"] {
             h.call("ui.prefs", json!({"up_axis":up}));
@@ -337,7 +336,7 @@ mod tests {
 
     #[test]
     fn hovered_face_and_corner_have_a_pale_blue_opaque_fill_in_both_themes() {
-        let ctx = egui::Context::default();
+        let ctx = crate::fonts::test_context();
         let faces = facets(&Camera::default(), pos2(100.0, 100.0), HALF);
         for t in [Tokens::light(), Tokens::dark()] {
             assert_ne!(t.navigation_cube(false).cube_face, t.cube_face);
@@ -363,7 +362,7 @@ mod tests {
 
     #[test]
     fn idle_principal_views_have_square_faces_without_visible_picking_seams() {
-        let ctx = egui::Context::default();
+        let ctx = crate::fonts::test_context();
         for up in [UpAxis::Z, UpAxis::Y] {
             for view in [StandardView::Front, StandardView::Back, StandardView::Top, StandardView::Bottom, StandardView::Left, StandardView::Right] {
                 let mut cam = Camera { up, ..Default::default() };
@@ -427,11 +426,11 @@ mod tests {
 
     #[test]
     fn face_labels_use_normalized_font_atlas_coordinates() {
-        let ctx = egui::Context::default();
+        let ctx = crate::fonts::test_context();
         let output = paint_frame(&ctx, |ui| {
             let faces = facets(&Camera::default(), pos2(100.0, 100.0), HALF);
             for face in &faces {
-                face_text(ui.painter(), face, Tokens::light().cube_text, 14.0);
+                face_text(ui.painter(), face, Tokens::light().cube_text, Tokens::get().font_heading);
             }
         });
         let meshes: Vec<_> = output.shapes.iter().filter_map(|shape| if let Shape::Mesh(mesh) = &shape.shape { Some(mesh) } else { None }).collect();
@@ -444,7 +443,7 @@ mod tests {
 
     #[test]
     fn label_uvs_follow_font_atlas_growth_later_in_the_same_frame() {
-        let ctx = egui::Context::default();
+        let ctx = crate::fonts::test_context();
         let mut pixel_uv = Pos2::ZERO;
         let mut glyph_vertex = 0;
         let mut early_size = [0; 2];
@@ -457,7 +456,7 @@ mod tests {
             let (index, vertex) = galley.rows.first().unwrap().visuals.mesh.vertices.iter().enumerate().find(|(_, v)| v.uv.y > 1.0).unwrap();
             glyph_vertex = index;
             pixel_uv = vertex.uv;
-            face_text(ui.painter(), face, Tokens::light().cube_text, 14.0);
+            face_text(ui.painter(), face, Tokens::light().cube_text, Tokens::get().font_heading);
             early_size = ctx.fonts(|f| f.font_image_size());
             // Other widgets can allocate new glyphs after the cube has been drawn.
             let text: String = (32_u8..127).map(char::from).collect();
@@ -473,7 +472,7 @@ mod tests {
 
     #[test]
     fn rotating_cube_facets_stay_opaque_and_inside_the_projected_geometry() {
-        let ctx = egui::Context::default();
+        let ctx = crate::fonts::test_context();
         for up in [UpAxis::Z, UpAxis::Y] {
             for view in [StandardView::Top, StandardView::Bottom, StandardView::Front, StandardView::Back, StandardView::Left, StandardView::Right] {
                 let from = Camera { up, ..Default::default() };
@@ -540,6 +539,30 @@ mod tests {
             h.app.cam = anim.to;
             h.app.cancel_view_animation();
         }
+    }
+
+    /// A view-cube click glides, but a mouse orbit started at once cancels the glide: the camera
+    /// then follows the pointer one to one, and nothing keeps easing after the pointer stops.
+    #[test]
+    fn a_mouse_orbit_right_after_a_cube_click_follows_the_pointer_one_to_one() {
+        let mut h = crate::scenario::Harness::new();
+        h.call("ui.prefs", json!({"navigator_style":"cube"}));
+        h.app.run("solid.box", json!({"length":20,"width":20,"height":20})).unwrap();
+        h.frames(4);
+        let p = crate::scenario::handle_at("navigation_cube:top").unwrap();
+        let button = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.app.synthetic.extend([egui::Event::PointerMoved(p), button(true), button(false)]);
+        h.frames(3);
+        assert!(h.app.cam_anim.is_some(), "the click glides");
+        let mut expected = h.app.cam;
+        h.call("ui.drag", json!({"x0":800,"y0":500,"x1":850,"y1":520,"button":"middle","shift":true,"steps":20}));
+        assert!(h.app.cam_anim.is_none(), "the orbit cancels the glide");
+        expected.orbit(50.0, 20.0);
+        // The glide may step once, in the frame the orbit starts and cancels it.
+        assert!((h.app.cam.yaw - expected.yaw).abs() < 0.03 && (h.app.cam.pitch - expected.pitch).abs() < 0.03, "{:?} vs {:?}", h.app.cam, expected);
+        let done = h.app.cam;
+        h.frames(30);
+        assert_eq!(h.app.cam, done, "nothing keeps easing after the pointer stops");
     }
 
     #[test]

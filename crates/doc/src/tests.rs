@@ -103,6 +103,28 @@ fn set_back_reports_restored_features() {
     assert_eq!((m.last_recomputed, m.last_restored), (0, 0));
 }
 
+/// #1989: what an evaluation ahead on a copy of the model computed is kept for the run that
+/// follows on the model itself, which finds it there even once the evaluation cache has dropped
+/// it (the cache keeps only a few states of a design with large bodies). Copies keep nothing.
+#[test]
+fn results_kept_ahead_outlive_the_cache() {
+    let (mut doc, _) = plate_doc();
+    let mut m = Model::new();
+    m.evaluate(&doc);
+    doc.set_param("width", "50 mm", None, None).unwrap();
+    let kept = std::sync::Arc::new(KeptResults::default());
+    let mut ahead = m.clone();
+    ahead.keep(Some(kept.clone()));
+    assert!(ahead.clone().kept().is_none(), "a copy keeps nothing");
+    ahead.evaluate(&doc);
+    assert_eq!((ahead.last_recomputed, kept.len()), (2, 2));
+    *m.cache.lock().unwrap() = Default::default();
+    m.keep(Some(kept));
+    m.evaluate(&doc);
+    assert_eq!((m.last_recomputed, m.last_restored), (0, 2), "nothing computed again");
+    assert!(rel(measure(&m.state().bodies[0].body).unwrap().volume, 30000.0) < 1e-9);
+}
+
 #[test]
 fn box_fillet_cut_timeline() {
     let (mut doc, _) = plate_doc();
@@ -227,6 +249,45 @@ fn params_and_serialization() {
     let gone = doc.delete_feature(doc.features[0].id).unwrap();
     assert_eq!(gone.len(), 2, "the extrude goes with its sketch");
     assert!(doc.param("d1").is_none(), "unused model parameters are pruned");
+}
+
+/// #4783: a body reads the material its mass is computed with, as the library or the design
+/// spells it. An unknown name, or a design material with an unusable density, reads as the
+/// default material it weighs. `density` agrees in every case, and a configuration keeps the
+/// assignment as stored.
+#[test]
+fn a_body_reads_the_material_its_mass_is_computed_with() {
+    let mut doc = Document::new("materials");
+    let usable = [("Walnut", 0.65), ("Mote", f64::MIN_POSITIVE), ("Limit", MAX_DENSITY)];
+    let unusable = [("Broken", -3.0), ("Weightless", 0.0), ("Beyond", MAX_DENSITY.next_up())];
+    for (name, density) in usable.into_iter().chain(unusable) {
+        doc.user_materials.push(UserMaterial { name: name.into(), density, appearance: None });
+    }
+    // (body, its assignment as stored, the material it reads and weighs, that material's density)
+    let cases = [
+        ("Known", Some("Steel"), "Steel", 7.85),
+        ("Miscased", Some("steel"), "Steel", 7.85),
+        ("Own", Some(" walnut "), "Walnut", 0.65),
+        ("Lightest", Some("Mote"), "Mote", f64::MIN_POSITIVE),
+        ("At the limit", Some("Limit"), "Limit", MAX_DENSITY),
+        ("Unknown", Some("Unobtainium"), DEFAULT_MATERIAL, DEFAULT_DENSITY),
+        ("Unusable", Some("Broken"), DEFAULT_MATERIAL, DEFAULT_DENSITY),
+        ("Zero density", Some("Weightless"), DEFAULT_MATERIAL, DEFAULT_DENSITY),
+        ("Over the limit", Some("Beyond"), DEFAULT_MATERIAL, DEFAULT_DENSITY),
+        ("Unassigned", None, DEFAULT_MATERIAL, DEFAULT_DENSITY),
+    ];
+    for (body, stored, ..) in cases {
+        if let Some(material) = stored {
+            doc.materials.insert(body.into(), material.into());
+        }
+    }
+    for (body, stored, material, density) in cases {
+        assert_eq!(doc.body_material(body), material, "{body}");
+        assert_eq!(doc.density(body), density, "{body}");
+        assert_eq!(doc.material_density(material), Some(density), "{body}: the density is its material's");
+        let cell = doc.config_current(&crate::config::Column::Material(body.into()));
+        assert_eq!(cell.as_deref(), Some(stored.unwrap_or(DEFAULT_MATERIAL)), "{body}: a configuration keeps the assignment as stored");
+    }
 }
 
 #[test]

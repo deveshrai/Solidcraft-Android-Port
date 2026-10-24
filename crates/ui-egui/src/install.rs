@@ -7,10 +7,8 @@
 //! Safari installs web apps too (Add to Home Screen on iPhone and iPad, Add to Dock on a Mac) but
 //! offers no prompt a page can show. There the item opens a window with the steps.
 
-use egui::RichText;
-
 use crate::SolveApp;
-use crate::theme::Tokens;
+use crate::ui_kit;
 
 /// How the browser installs the app.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,31 +84,20 @@ pub fn start(app: &mut SolveApp, offer: Offer) {
     }
 }
 
-/// The window with Safari's steps, while open.
+/// The card with Safari's steps, while open.
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let Some(steps) = app.install_steps else { return };
-    let t = Tokens::get();
     let (lines, after) = steps.messages();
-    let mut open = true;
-    let mut done = false;
-    crate::frame::window(ctx, crate::i18n::tr("install.title"), crate::frame::Width::Normal)
-        .id(egui::Id::new("sc_install_steps"))
-        .open(&mut open)
-        .resizable(false)
-        .show(ctx, |ui| {
-            ui.label(crate::i18n::tr("install.steps_intro"));
-            ui.add_space(4.0);
+    let (closed, action) = ui_kit::Window::new(egui::Id::new("sc_install_steps"), "web", crate::i18n::tr("install.title"))
+        .actions("", crate::i18n::tr("install.done"), None)
+        .show(ctx, true, |ui| {
+            ui_kit::text(ui, crate::i18n::tr("install.steps_intro"), ui_kit::Text::Report("intro", false));
             for (i, id) in lines.iter().enumerate() {
-                ui.label(format!("{}. {}", i + 1, crate::i18n::tr(id)));
+                ui_kit::text(ui, &format!("{}. {}", i + 1, crate::i18n::tr(id)), ui_kit::Text::Report(&format!("step:{i}"), false));
             }
-            ui.add_space(4.0);
-            ui.add(egui::Label::new(RichText::new(crate::i18n::tr(after)).color(t.text_dim)).wrap());
-            ui.add_space(6.0);
-            if ui.button(crate::i18n::tr("install.done")).clicked() {
-                done = true;
-            }
+            ui_kit::text(ui, crate::i18n::tr(after), ui_kit::Text::Note("after"));
         });
-    if !open || done {
+    if closed || action != ui_kit::Action::None {
         app.install_steps = None;
     }
 }

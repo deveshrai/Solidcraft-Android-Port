@@ -58,14 +58,15 @@ A folder `crashes/<YYYYMMDD-HHMMSS>-<signature>/`:
     - `command_panic`: a command hit an internal error; it was caught and the design was left unchanged
     - `kernel_panic_recovered`: the third-party geometry kernel panicked and was caught. This is harmless on the desktop, but it would crash the web build.
     - `panic`: an internal error outside any command
-    - `unclean_exit`: the app ended without a hook seeing it (an abort, a stack overflow, a segfault, a crash inside a graphics driver, or the process being killed). It is found at the next start. When the app died while starting up, the message and `location` name the startup step (see below). On Windows, a crash in native code also says the exception, the module it happened in and the offset into it.
+    - `unclean_exit`: a previous session ended without recording a clean exit. It is detected at the next start, which may be days later. Possible causes include an abort, a stack overflow, a segfault, a crash inside a graphics driver, a system shutdown, or the process being forcibly stopped. This kind alone does not identify the cause. When the app died while starting up, the message and `location` name the startup step (see below). On Windows, a captured native exception also says the exception, the module it happened in and the offset into it.
   - `message`, `location` (file:line), `thread`
   - `backtrace`: frames `symbol (file:line)`, without the panic machinery, std internals or the user's home folder
   - `app` (version, commit, build date), `system` (OS, architecture, renderer and GPU), `session.uptime_s`
   - `command`: the command that crashed, with its parameters
   - `recent_commands`: up to 32, with ok or error
   - `base`: what the replay starts from (the design before the command, an autosave, a saved file or a new design)
-  - `count`, `first_seen`, `last_seen`: the same crash repeats only increase `count`
+  - `count`: how many matching reports have been recorded; repeats update the existing report.
+  - `first_seen`, `last_seen`: UTC timestamps when the report was first and most recently recorded. For `unclean_exit`, these are detection times at a later launch, not the exact times the sessions ended. The session start in `message` may be much earlier; the report does not imply a failure in the currently open design.
   - `notes`: what is missing and why, for example a design too large to copy
   - `startup_phase`: `{step, ms}` when the app died before it drew its first frame: the step it
     was in (`window`, `graphics instance`, `window surface`, `adapter request`, `adapter chosen`,

@@ -75,6 +75,64 @@ fn measure(s: &mut Session, items: Vec<Value>) -> Value {
 }
 
 #[test]
+fn connected_lines_measure_the_corner_regardless_of_endpoint_or_selection_order() {
+    // cos(angle) = -3/5: the corner is 126.869898°, not its 53.130102° supplement.
+    for (end, want) in
+        [([-24.0, 32.0], (-0.6f64).acos().to_degrees()), ([24.0, 32.0], 0.6f64.acos().to_degrees()), ([0.0, 40.0], 90.0), ([-40.0, 0.0], 180.0)]
+    {
+        for reverse_a in [false, true] {
+            for reverse_b in [false, true] {
+                let mut s = Session::default();
+                run(&mut s, "sketch.create", json!({"plane": "XY"}));
+                let mut a = [[0.0, 0.0], [40.0, 0.0]];
+                let mut b = [[0.0, 0.0], end];
+                if reverse_a {
+                    a.reverse();
+                }
+                if reverse_b {
+                    b.reverse();
+                }
+                run(&mut s, "sketch.line", json!({"points": a}));
+                run(&mut s, "sketch.line", json!({"points": b}));
+                let (a, b) = (json!({"type": "sketch_curve", "id": "l1"}), json!({"type": "sketch_curve", "id": "l2"}));
+                for items in [vec![a.clone(), b.clone()], vec![b, a]] {
+                    let r = measure(&mut s, items);
+                    assert!(close(&r["angle_deg"], want, 1e-8), "{reverse_a} {reverse_b}: {r}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn solid_edges_measure_the_obtuse_corner() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    run(&mut s, "sketch.line", json!({"points": [[40, 0], [0, 0], [-24, 32]], "closed": true}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.extrude", json!({"distance": 10}));
+    let a = edge(&s, |p| p.z.abs() < 1e-8 && p.y.abs() < 1e-8);
+    let b = edge(&s, |p| p.z.abs() < 1e-8 && (4.0 * p.x + 3.0 * p.y).abs() < 1e-8);
+    for items in [vec![a.clone(), b.clone()], vec![b, a]] {
+        let r = measure(&mut s, items);
+        assert!(close(&r["angle_deg"], (-0.6f64).acos().to_degrees(), 1e-8), "{r}");
+    }
+}
+
+#[test]
+fn separate_and_duplicate_lines_keep_the_undirected_angle() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [40, 0]]}));
+    run(&mut s, "sketch.line", json!({"points": [[0, 10], [-24, 42]]}));
+    let (a, b) = (json!({"type": "sketch_curve", "id": "l1"}), json!({"type": "sketch_curve", "id": "l2"}));
+    let r = measure(&mut s, vec![a.clone(), b]);
+    assert!(close(&r["angle_deg"], 0.6f64.acos().to_degrees(), 1e-8), "{r}");
+    let r = measure(&mut s, vec![a.clone(), a]);
+    assert!(close(&r["angle_deg"], 0.0, 1e-8), "{r}");
+}
+
+#[test]
 fn two_holes_measure_centre_to_centre_with_min_and_max() {
     let mut s = Session::default();
     plate(&mut s);
@@ -277,4 +335,54 @@ fn step_round_trip_of_a_plate_with_holes() {
     assert!(close(&r["min"], 23.0, 1e-6), "{r}");
     assert!(close(&r["items"][0]["diameter"], 6.0, 1e-6) && close(&r["items"][1]["diameter"], 8.0, 1e-6), "{r}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// A part ring cut by `solid.combine` (two prisms through its ends, a notch through its chamfer)
+// measures what it encloses, wherever it is moved. The reference mesher left a crack where the
+// notch meets the chamfer's cone; the volume beside it was left out (0.2 %), and integrated
+// about the world origin the loss grew with the distance (7 % moved 1000 mm away).
+
+fn volume(s: &mut Session, body: &str) -> f64 {
+    run(s, "inspect.measure", json!({"bodies": [body]}))["total"]["volume_mm3"].as_f64().unwrap()
+}
+
+fn prism(s: &mut Session, offset: f64, points: Value, distance: f64, name: &str) {
+    run(s, "sketch.create", json!({"plane": "XY", "offset": offset}));
+    run(s, "sketch.line", json!({"points": points, "closed": true}));
+    run(s, "sketch.finish", json!({}));
+    run(s, "solid.extrude", json!({"distance": distance, "operation": "new", "body_name": name}));
+}
+
+/// A part ring (210° of a chamfered section) less two oblique prisms and a notch.
+fn cut_ring(s: &mut Session) {
+    let (c, si) = (15f64.to_radians().cos(), 15f64.to_radians().sin());
+    run(s, "sketch.create", json!({"plane": {"origin": [0, 0, 0], "x_dir": [si, c, 0], "y_dir": [0, 0, -1]}}));
+    let section = json!([[16.6, 0], [17.5, 0], [18.5, -1.0], [18.5, -7.0], [17.5, -8.0], [16.6, -8.0], [16.4, -7.8], [16.4, -0.2]]);
+    run(s, "sketch.line", json!({"points": section, "closed": true}));
+    run(s, "sketch.finish", json!({}));
+    run(s, "solid.revolve", json!({"axis": "Z", "angle": "210 deg", "body_name": "Ring"}));
+    let quad = |sy: f64| json!([[4.644832, 15.101839 * sy], [5.17399, 16.822301 * sy], [4.555215, 17.000295 * sy], [2.187187, 15.574386 * sy]]);
+    prism(s, -1.0, quad(1.0), 10.0, "T0");
+    prism(s, -1.0, quad(-1.0), 10.0, "T1");
+    prism(s, 7.1, json!([[-17.6, 0.45], [-19.5, 0.45], [-19.5, -0.45], [-17.6, -0.45]]), 1.9, "N0");
+    run(s, "solid.combine", json!({"target": "Ring", "tools": ["T0", "T1", "N0"], "operation": "cut"}));
+}
+
+#[test]
+fn combine_cut_volume_does_not_depend_on_placement() {
+    let mut s = Session::default();
+    cut_ring(&mut s);
+    let here = volume(&mut s, "Ring");
+    // The 210° ring by Pappus less what the prisms and the notch take (a fine grid quadrature
+    // of each, independent of the kernel's meshes): 1005.489 − 2 × 5.639 − 0.287.
+    let want = 993.924;
+    assert!((here - want).abs() <= 2e-4 * want, "at the origin: {here} vs {want}");
+    let mut moved = Vec::new();
+    for by in [[100.0, 0.0, 0.0], [900.0, 0.0, 0.0], [-1000.0, 100.0, 0.0], [0.0, 0.0, 10000.0], [0.0, -10000.0, 0.0]] {
+        run(&mut s, "solid.move", json!({"bodies": ["Ring"], "translate": by}));
+        moved.push((by, volume(&mut s, "Ring")));
+    }
+    for (by, v) in moved {
+        assert!((v - here).abs() <= 1e-6 * here, "after a move by {by:?}: {v} vs {here} at the origin");
+    }
 }

@@ -7,6 +7,8 @@
  {"call":"ui.view","params":{"view":"top"}},
  {"start":"sketch.mirror"},
  {"expect":{"dialog":"SketchModify(Mirror)","tool":null}},
+ {"note":"Fit after the floating panels are measured so both entity picks remain exposed beside the left dialog."},
+ {"call":"ui.view","params":{"view":"fit"}},
  {"click":{"sketch":[-22.5,10]}},
  {"click":{"sketch":[-15,17.5]}},
  {"click":{"sketch":[-22.5,10]},"ctrl":true},

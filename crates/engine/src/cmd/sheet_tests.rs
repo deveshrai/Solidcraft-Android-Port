@@ -38,6 +38,27 @@ fn rectangle_tool(s: &mut Session, name: &str, p0: [f64; 2], p1: [f64; 2]) {
 }
 
 #[test]
+fn plain_solid_sheet_operations_explain_how_to_start_sheet_metal() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 100, "width": 60, "height": 2.5}));
+    let before = s.doc.to_json();
+    for (command, params) in [
+        ("sheet.flange", json!({"type": "edge", "edges": [[50, 0, 2.5]], "height": 15})),
+        ("sheet.flat_pattern", json!({})),
+        ("sheet.export_dxf", json!({"per_body": true})),
+    ] {
+        let error = s.execute(command, &params).unwrap_err();
+        let crate::EngineError::BadParams { cmd, msg } = error else { panic!("{error}") };
+        assert_eq!(cmd, command);
+        assert_eq!(
+            msg,
+            "there is no sheet metal body: start one with Flange > Base, or turn a plate into sheet metal with Convert to Sheet Metal (pick its large flat face)"
+        );
+        assert_eq!(s.doc.to_json(), before);
+    }
+}
+
+#[test]
 fn side_edge_flanges_across_a_bend_keep_their_relief_through_rebuild_and_reopen() {
     use solidcraft_geom::Vec3;
 
@@ -226,15 +247,16 @@ fn unsupported_sheet_machining_is_atomic_but_true_no_change_is_allowed() {
 }
 
 #[test]
-fn empty_sheet_intersection_removes_geometry_and_metadata_together() {
+fn empty_sheet_intersection_keeps_geometry_and_metadata_together() {
     let mut s = Session::default();
     base(&mut s, 100.0, 60.0);
     rectangle_tool(&mut s, "Outside", [120.0, 20.0], [130.0, 30.0]);
-    run(&mut s, "solid.extrude", json!({"sketch":"Outside","through_all":true,"direction":"symmetric","operation":"intersect"}));
-    assert!(s.model.state().bodies.is_empty());
-    assert!(s.model.state().sheets.is_empty());
-    assert!(s.execute("sheet.unfold", &json!({})).is_err());
-    run(&mut s, "edit.undo", json!({}));
+    let before = s.doc.to_json();
+    let result = s.execute("solid.extrude", &json!({"sketch":"Outside","through_all":true,"direction":"symmetric","operation":"intersect"}));
+    assert!(result.as_ref().err().is_some_and(|e| e.to_string().contains("the intersection is empty")), "{result:?}");
+    assert_eq!(s.doc.to_json(), before);
+    assert_eq!(s.model.state().bodies.len(), 1);
+    assert_eq!(s.model.state().sheets.len(), 1);
     assert!((volume(&mut s) - 15000.0).abs() < 1e-6);
 }
 
@@ -369,8 +391,8 @@ fn deleting_sheet_material_prunes_cosmetic_threads_and_undo_restores_them() {
     run(&mut s, "sheet.flange", json!({"sketch":"ThreadPlate","profiles":[{"point":[10,10]}]}));
     run(&mut s, "solid.thread", json!({"face":[55,30,1],"designation":"M10"}));
     assert_eq!(s.model.state().threads.len(), 1);
-    rectangle_tool(&mut s, "Outside", [120.0, 20.0], [130.0, 30.0]);
-    run(&mut s, "solid.extrude", json!({"sketch":"Outside","through_all":true,"direction":"symmetric","operation":"intersect"}));
+    rectangle_tool(&mut s, "All", [-10.0, -10.0], [110.0, 70.0]);
+    run(&mut s, "solid.extrude", json!({"sketch":"All","through_all":true,"direction":"symmetric","operation":"cut"}));
     assert!(s.model.state().bodies.is_empty());
     assert!(s.model.state().sheets.is_empty());
     assert!(s.model.state().threads.is_empty());
@@ -1495,6 +1517,25 @@ fn an_edge_flange_on_a_flange_runs_along_what_a_flat_cut_left_of_its_far_edge() 
 }
 
 #[test]
+fn an_edge_flange_is_refused_on_the_bend_line_of_a_flange() {
+    // The flange's bend runs between the plate's edge (y = 5) and the panel's edge (y = 2.5,
+    // z = 5). Either is a bend line, not a free edge: a flange there left a second flange with a
+    // gap and a sheet of two shells.
+    let mut s = Session::default();
+    plate_with_flange(&mut s);
+    let before = volume(&mut s);
+    for pick in [[50.0, 5.0, 2.5], [50.0, 5.0, 0.0], [50.0, 2.5, 5.0], [50.0, 0.0, 5.0]] {
+        let e = s.execute("sheet.flange", &json!({"edges": [pick], "height": 10}));
+        assert!(e.as_ref().is_err_and(|e| e.to_string().contains("bend line")), "{pick:?}: {e:?}");
+        assert!(rel(volume(&mut s), before) < 1e-9, "{pick:?} changed the sheet");
+    }
+    // A free edge still takes one, and the sheet stays in one piece.
+    run(&mut s, "sheet.flange", json!({"edges": [[50, 60, 2.5]], "height": 10}));
+    assert!(no_errors_or_warnings(&s), "{:?}", s.model.results);
+    assert!(volume(&mut s) > before);
+}
+
+#[test]
 fn a_flange_bent_inside_keeps_the_base_sketchs_arcs_in_the_flat_pattern_and_the_dxf() {
     // A 200 x 100 plate with its corners rounded 8, drawn as arcs, and a 40 high flange on its
     // bottom edge (2 mm, R 1, K 0.5: setback 3 inside, half of it in the middle; BA π, panel
@@ -2197,18 +2238,17 @@ fn partial_depth_intersect_keeps_disconnected_tool_islands_and_annular_curves() 
 }
 
 #[test]
-fn partial_depth_intersect_deletes_material_already_removed_by_a_pocket_atomically() {
+fn partial_depth_intersect_of_material_already_removed_by_a_pocket_is_refused() {
     let mut s = Session::default();
     base(&mut s, 100.0, 60.0);
     rectangle_tool(&mut s, "Removed", [20.0, 20.0], [30.0, 30.0]);
     run(&mut s, "solid.extrude", json!({"sketch":"Removed","distance":1,"operation":"cut"}));
-    run(&mut s, "solid.extrude", json!({"sketch":"Removed","distance":1,"operation":"intersect"}));
-    assert!(s.model.state().bodies.is_empty());
-    assert!(s.model.state().sheets.is_empty());
-    run(&mut s, "edit.undo", json!({}));
+    let before = s.doc.to_json();
+    let result = s.execute("solid.extrude", &json!({"sketch":"Removed","distance":1,"operation":"intersect"}));
+    assert!(result.as_ref().err().is_some_and(|e| e.to_string().contains("the intersection is empty")), "{result:?}");
+    assert_eq!(s.doc.to_json(), before);
+    assert_eq!(s.model.state().sheets.len(), 1);
     assert!((volume(&mut s) - 14900.0).abs() < 1e-6);
-    run(&mut s, "edit.redo", json!({}));
-    assert!(s.model.state().bodies.is_empty());
 }
 
 #[test]
@@ -4754,4 +4794,213 @@ fn a_hole_that_parts_a_flange_from_the_base_names_it() {
     assert!(warning.starts_with(&format!("1 piece of `Body1` is no longer joined to its base ({area:.2} mm², near (5.0, ")), "{warning}");
     assert_eq!(out["warning"], json!(last_warning(&s)));
     assert_eq!(flat_pieces(&s).len(), 2);
+}
+
+/// The three exports of a sheet's flat pattern: its JSON, the DXF (of this body and of every
+/// body) and the bend table, each as its error if it is refused.
+fn flat_exports(s: &mut Session) -> Vec<std::result::Result<Value, String>> {
+    let calls = [
+        ("sheet.flat_pattern", json!({})),
+        ("sheet.export_dxf", json!({})),
+        ("sheet.export_dxf", json!({"per_body": true})),
+        ("sheet.export_bend_table", json!({})),
+    ];
+    calls.iter().map(|(id, p)| s.execute(id, p).map_err(|e| e.to_string())).collect()
+}
+
+/// A mirror combined into a sheet, or a tab extruded onto it and joined, makes a part its
+/// flat pattern does not have (the mirrored half, the tab): the flat pattern, the DXF and the
+/// bend table are refused with the feature's name instead of writing the sheet without it.
+#[test]
+fn a_mirror_or_a_join_into_a_sheet_refuses_its_flat_pattern_naming_the_feature() {
+    let mut s = Session::default();
+    base(&mut s, 100.0, 60.0);
+    run(&mut s, "sheet.flange", json!({"edges": [[50, 0, 2.5]], "height": 20}));
+    let body = s.model.state().sheets[0].body.clone();
+    let out = run(&mut s, "solid.mirror", json!({"bodies": [body], "plane": "YZ", "combine": true}));
+    assert!(out["warning"].as_str().unwrap_or_default().contains("is sheet metal: its flat pattern, DXF and bend table"), "{out}");
+    for result in flat_exports(&mut s) {
+        let error = result.expect_err("a mirrored half the flat pattern lacks");
+        assert!(error.contains("not supported yet: the flat pattern of") && error.contains("can't include Mirror1"), "{error}");
+    }
+
+    let mut s = Session::default();
+    base(&mut s, 100.0, 60.0);
+    rectangle_tool(&mut s, "Tab", [40.0, 60.0], [60.0, 75.0]);
+    run(&mut s, "solid.extrude", json!({"sketch": "Tab", "distance": 2.5, "operation": "join"}));
+    for result in flat_exports(&mut s) {
+        let error = result.expect_err("a joined tab the flat pattern lacks");
+        assert!(error.contains("can't include Extrude1"), "{error}");
+    }
+}
+
+/// A fillet on a sheet's corner is refused in the flat pattern until a sheet metal feature
+/// rebuilds the body from its sheet features; that feature says the round is not kept, and the
+/// flat pattern describes the body again.
+#[test]
+fn a_fillet_on_a_sheet_corner_is_refused_until_a_sheet_feature_rebuilds_the_body() {
+    let mut s = Session::default();
+    base(&mut s, 100.0, 60.0);
+    let out = run(&mut s, "solid.fillet", json!({"edges": [[100, 60, 1.25]], "radius": 10}));
+    assert!(out["warning"].as_str().is_some_and(|w| w.contains("is sheet metal")), "{out}");
+    let error = s.execute("sheet.export_dxf", &json!({})).unwrap_err().to_string();
+    assert!(error.contains("can't include Fillet1"), "{error}");
+    let out = run(&mut s, "sheet.flange", json!({"edges": [[50, 0, 2.5]], "height": 20}));
+    assert!(out["warning"].as_str().is_some_and(|w| w.contains("what Fillet1 changed is not kept")), "{out}");
+    assert!(flat_exports(&mut s).into_iter().all(|r| r.is_ok()));
+    assert_eq!(s.model.state().sheets[0].altered_by, None);
+}
+
+/// A cosmetic thread in a sheet's hole leaves its flat pattern as it is; a modelled thread cuts
+/// material the flat pattern lacks, so it is refused like a fillet until a sheet feature rebuilds
+/// the body and says the thread is not kept.
+#[test]
+fn a_modelled_thread_in_a_sheet_hole_is_refused_but_a_cosmetic_one_is_not() {
+    let mut s = Session::default();
+    base(&mut s, 100.0, 60.0);
+    run(&mut s, "solid.hole", json!({"position": [30, 30, 2.5], "diameter": 4.2}));
+    let drilled = volume(&mut s);
+    run(&mut s, "solid.thread", json!({"face": [32.1, 30, 1.25], "designation": "M5"}));
+    assert_eq!(last_warning(&s), "");
+    assert!(flat_exports(&mut s).into_iter().all(|r| r.is_ok()));
+    run(&mut s, "solid.thread", json!({"face": [32.1, 30, 1.25], "designation": "M5", "modeled": true}));
+    assert!(volume(&mut s) < drilled - 0.05, "the modelled thread cuts material");
+    assert!(last_warning(&s).contains("is sheet metal"), "{}", last_warning(&s));
+    for result in flat_exports(&mut s) {
+        let error = result.expect_err("a modelled thread the flat pattern lacks");
+        assert!(error.contains("can't include Thread2"), "{error}");
+    }
+    let out = run(&mut s, "sheet.flange", json!({"edges": [[50, 0, 2.5]], "height": 20}));
+    assert!(out["warning"].as_str().is_some_and(|w| w.contains("what Thread2 changed is not kept")), "{out}");
+    assert!(flat_exports(&mut s).into_iter().all(|r| r.is_ok()));
+}
+
+/// A sheet built and machined with sheet features (flanges, a hem, a hole and a cut across a
+/// bend while unfolded, refolded, then moved) keeps its flat pattern and exports.
+#[test]
+fn a_sheet_made_of_sheet_features_and_flat_cuts_still_exports_its_flat_pattern() {
+    let mut s = Session::default();
+    base(&mut s, 100.0, 60.0);
+    run(&mut s, "sheet.flange", json!({"edges": [[50, 0, 2.5], [100, 30, 2.5]], "height": 20}));
+    run(&mut s, "sheet.hem", json!({"edges": [[0, 30, 2.5]], "length": 8}));
+    run(&mut s, "solid.hole", json!({"position": [30, 30, 2.5], "diameter": 6}));
+    run(&mut s, "sheet.unfold", json!({}));
+    rectangle_tool(&mut s, "Slot", [45.0, -10.0], [55.0, 10.0]);
+    run(&mut s, "solid.extrude", json!({"sketch": "Slot", "through_all": true, "direction": "symmetric", "operation": "cut"}));
+    run(&mut s, "sheet.refold", json!({}));
+    let body = s.model.state().sheets[0].body.clone();
+    run(&mut s, "solid.move", json!({"bodies": [body], "translate": [10, 0, 0]}));
+    let flagged = |w: &str| w.contains("flat pattern, DXF and bend table") || w.contains("is not kept");
+    assert!(s.model.results.iter().all(|r| r.error.is_none() && !r.warning.as_deref().is_some_and(flagged)), "{:?}", s.model.results);
+    assert_eq!(s.model.state().sheets[0].altered_by, None);
+    for result in flat_exports(&mut s) {
+        let value = result.expect("a sheet the flat pattern describes");
+        assert!(value.is_object(), "{value}");
+    }
+    assert_eq!(flat(&mut s)["cutouts"].as_array().map(Vec::len), Some(2));
+}
+
+/// An L-bracket with a hole off its centre and two flanges, so that its mirror image is the
+/// opposite hand: a 100 x 60 base on XY with a 10 mm hole at (25, 40), a 20 mm flange on the
+/// front edge and a 15 mm one on the right edge.
+fn asymmetric_bracket(s: &mut Session) {
+    run(s, "sheet.manage_rules", json!({"name": "S", "thickness": "2 mm", "bend_radius": "2 mm", "k_factor": 0.4, "active": true}));
+    run(s, "sketch.create", json!({"plane": "XY", "name": "Base"}));
+    run(s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [100, 60]}));
+    run(s, "sketch.finish", json!({}));
+    run(s, "sheet.flange", json!({"type": "base"}));
+    run(s, "sheet.flange", json!({"edges": [[50, 0, 2]], "height": 20, "name": "F1"}));
+    run(s, "sheet.flange", json!({"edges": [[100, 30, 2]], "height": 15, "name": "F2"}));
+    circle_sketch(s, "Hole", json!("XY"), [25.0, 40.0], 10.0);
+    run(s, "solid.extrude", json!({"sketch": "Hole", "through_all": true, "direction": "symmetric", "operation": "cut"}));
+}
+
+/// The points of a flat pattern's loops, `x` scaled by `sx`, sorted, rounded to 1e-6 mm.
+fn flat_points(v: &Value, sx: f64) -> Vec<(i64, i64)> {
+    let mut out: Vec<(i64, i64)> = v
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|l| l.as_array().cloned().unwrap_or_default())
+        .map(|p| ((p[0].as_f64().unwrap_or(f64::NAN) * sx * 1e6).round() as i64, (p[1].as_f64().unwrap_or(f64::NAN) * 1e6).round() as i64))
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+fn body_volume(s: &mut Session, name: &str) -> f64 {
+    let m = run(s, "inspect.measure", json!({}));
+    m["bodies"].as_array().into_iter().flatten().find(|b| b["name"] == name).and_then(|b| b["volume_mm3"].as_f64()).unwrap_or(f64::NAN)
+}
+
+#[test]
+fn a_mirrored_sheet_copy_is_the_opposite_hand_with_the_mirror_image_flat_pattern() {
+    let mut s = Session::default();
+    asymmetric_bracket(&mut s);
+    let original = run(&mut s, "sheet.flat_pattern", json!({"body": "Body1"}));
+    run(&mut s, "solid.mirror", json!({"bodies": ["Body1"], "plane": "YZ"}));
+    let mirrored = run(&mut s, "sheet.flat_pattern", json!({"body": "Body1 (2)"}));
+    // The same blank, the other way round: K-factor flat length, bends and thickness are kept.
+    assert_eq!(mirrored["flat_size_mm"], original["flat_size_mm"], "{mirrored}");
+    assert_eq!(mirrored["thickness"], original["thickness"]);
+    assert_eq!(flat_points(&mirrored["outline"], 1.0), flat_points(&original["outline"], -1.0));
+    assert_eq!(original["cutouts"].as_array().map(Vec::len), Some(1), "{original}");
+    assert_eq!(flat_points(&mirrored["cutouts"], 1.0), flat_points(&original["cutouts"], -1.0));
+    let bends = |f: &Value| -> Vec<(String, i64, i64)> {
+        let mut b: Vec<_> = f["bends"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|b| {
+                (
+                    b["direction"].to_string(),
+                    (b["allowance"].as_f64().unwrap_or(0.0) * 1e9).round() as i64,
+                    (b["length"].as_f64().unwrap_or(0.0) * 1e9).round() as i64,
+                )
+            })
+            .collect();
+        b.sort();
+        b
+    };
+    assert_eq!(bends(&mirrored), bends(&original));
+    assert_eq!(bends(&mirrored).len(), 2);
+    // The hole is where the mirror put it, on the copy and in its flat pattern.
+    let in_copy = |p: [f64; 3]| {
+        s.model.state().bodies.iter().find(|b| b.name == "Body1 (2)").is_some_and(|b| b.body.contains(solidcraft_geom::Vec3::new(p[0], p[1], p[2])))
+    };
+    assert!(!in_copy([-25.0, 40.0, 1.0]) && in_copy([-35.0, 40.0, 1.0]));
+    let hole = flat_points(&mirrored["cutouts"], 1.0);
+    let cx = hole.iter().map(|p| p.0 as f64).sum::<f64>() / hole.len().max(1) as f64 * 1e-6;
+    assert!((cx + 25.0).abs() < 1e-3, "hole centre x {cx}");
+    // The sheet model is the mirrored body: a flange added to the copy grows it from its own
+    // back edge, and its DXF is that of a sheet.
+    let before = body_volume(&mut s, "Body1 (2)");
+    assert!(rel(before, body_volume(&mut s, "Body1")) < 1e-9);
+    run(&mut s, "sheet.flange", json!({"edges": [[-50, 60, 2]], "height": 10, "body": "Body1 (2)"}));
+    let after = body_volume(&mut s, "Body1 (2)");
+    assert!(after > before + 100.0, "{before} -> {after}");
+    let dxf = run(&mut s, "sheet.export_dxf", json!({"body": "Body1 (2)"}));
+    assert_eq!(dxf["bends"], 3);
+}
+
+#[test]
+fn mirroring_or_copying_a_sheet_body_leaves_the_original_sheet_as_it_was() {
+    let mut s = Session::default();
+    asymmetric_bracket(&mut s);
+    let original = run(&mut s, "sheet.flat_pattern", json!({"body": "Body1"}));
+    let volume = body_volume(&mut s, "Body1");
+    run(&mut s, "solid.mirror", json!({"bodies": ["Body1"], "plane": "YZ"}));
+    run(&mut s, "solid.move", json!({"bodies": ["Body1"], "translate": [0, 200, 0], "copy": true}));
+    run(&mut s, "solid.pattern.rectangular", json!({"bodies": ["Body1"], "dir1": [0, 0, 1], "count1": 2, "spacing1": 100}));
+    assert_eq!(run(&mut s, "sheet.flat_pattern", json!({"body": "Body1"})), original);
+    assert!(rel(body_volume(&mut s, "Body1"), volume) < 1e-9);
+    // A moved or patterned copy is the same hand: the same flat pattern, as a sheet of its own.
+    let names: Vec<String> = s.model.state().bodies.iter().map(|b| b.name.clone()).collect();
+    assert_eq!(names.len(), 4, "{names:?}");
+    for name in names.iter().filter(|n| *n != "Body1" && *n != "Body1 (2)") {
+        let mut copy = run(&mut s, "sheet.flat_pattern", json!({"body": name}));
+        copy["body"] = original["body"].clone();
+        assert_eq!(flat_points(&copy["outline"], 1.0), flat_points(&original["outline"], 1.0), "{name}");
+        assert_eq!(copy["bends"], original["bends"], "{name}");
+    }
 }

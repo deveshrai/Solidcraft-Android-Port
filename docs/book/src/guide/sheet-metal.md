@@ -1,6 +1,7 @@
 # Sheet metal
 
-The SHEET METAL tab builds parts from a sheet of constant thickness under a **sheet metal rule**
+MODEL → MODIFY offers Convert to Sheet Metal. The SHEET METAL tab is always available (it is highlighted
+and selected when the active body is a sheet), and builds parts from a sheet of constant thickness under a **sheet metal rule**
 (thickness, bend radius, K-factor), set in **Sheet Metal Rules** (`sheet.manage_rules`).
 
 - **Flange** (`sheet.flange`): a base flange from a sketch profile, a contour flange from an open
@@ -14,6 +15,14 @@ The SHEET METAL tab builds parts from a sheet of constant thickness under a **sh
 
 Bends follow the rule's K-factor, so flat lengths match what a press brake will make. Tests
 check flat lengths against hand-computed bend allowances.
+
+A copy of a sheet metal body is sheet metal too. **Mirror** (`solid.mirror` with `bodies`)
+makes the opposite hand: its own flat pattern, DXF and bend table, the mirror image of the
+original's flat, with the same thickness side, bends and flat lengths, and holes where the
+mirror puts them. A copy from **Move** (`copy: true`) or a body pattern keeps the original's
+flat pattern. Every copy takes further sheet metal features of its own. Mirroring with
+`combine` joins the two halves into one solid, which has no single sheet model yet; mirroring
+or patterning flange features themselves is not supported yet.
 
 An edge flange takes its setback off its own edge only. Where that edge ends at an inside
 corner of the base (the base runs on past it, like the leg of an L), the rest of the base
@@ -57,9 +66,9 @@ square the round follows the angle of the base and the square becomes a kite, it
 square to the edges. Changing the shape in a rule changes the parts made with that rule. A
 relief that doesn't fit (under 0.01 mm across, leaving nothing of a bend, or reaching as far
 from its corner as another edge of the base is) is left out, and the flange feature reports a
-warning saying where. The reliefs at the corners of one edge are cut together, so a corner's
-relief does not depend on the order the corners are cut in; two of them that would overlap
-leave the second one out, with a warning.
+warning saying where. The reliefs at all the corners are cut together, so a corner's relief
+does not depend on the order the corners are cut in; two of them that would overlap are both
+left out, each with a warning saying which the other is.
 
 ```json
 {"command":"sheet.manage_rules","params":{"name":"Sheet 2 mm","thickness":"2 mm","k_factor":0.5,
@@ -313,6 +322,14 @@ tool with varying depth is refused before changing sheet geometry. Pocket profil
 but a pocket crossing a bend zone cannot yet be refolded. Machining folded bend material,
 tapered sheet cuts and other unsupported 3D sheet Cut/Intersect operations report an error before changing
 the design; they cannot silently restore removed material during a later sheet rebuild.
+
+Other features that change a sheet body's material without the sheet knowing it (a fillet or
+chamfer on a corner, an extrude joined onto it, a Mirror or Combine joined into it) are not in
+the flat pattern yet. Such a feature warns, and while the body carries its change the flat
+pattern, the DXF and the bend table are refused with an error that names it, rather than writing
+a part that does not match the body. A later sheet metal feature rebuilds the body from its sheet
+features and says that the change is not kept. Moving the body, splitting its faces and cosmetic
+threads leave the flat pattern as it is.
 
 A sketch can be drawn on a flat face of the sheet: the base or a flange, on either side. Pick
 the face (or give `sketch.create` the point `plane: {face: [x, y, z]}`) and the sketch attaches

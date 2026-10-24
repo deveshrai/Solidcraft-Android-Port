@@ -8,13 +8,7 @@ use crate::dialogs::{apply_commands, face_sel, preview_commands};
 /// Components A (grounded) and B: a 20 x 20 x 10 box each, B 30 mm along X.
 fn two_boxes() -> SolveApp {
     let mut s = Session::default();
-    for (name, x) in [("A", 0), ("B", 30)] {
-        s.execute("component.activate", &json!({"component": "root"})).unwrap();
-        s.execute("component.create", &json!({ "name": name })).unwrap();
-        s.execute("solid.box", &json!({"length": 20, "width": 20, "height": 10, "corner": [x, 0, 0]})).unwrap();
-    }
-    s.execute("component.activate", &json!({"component": "root"})).unwrap();
-    s.execute("occurrence.ground", &json!({"occurrence": "A:1", "grounded": true})).unwrap();
+    crate::test_support::grounded_boxes(&[("A", 0), ("B", 30)], |id, p| s.execute(id, &p).unwrap());
     SolveApp::new(s, Services::default())
 }
 
@@ -161,6 +155,45 @@ fn edit_joint_keeps_an_offset_typed_as_an_expression() {
     assert_eq!((j.exprs.offset.as_deref(), j.exprs.angle.as_deref()), (Some("gap"), None));
 }
 
+#[test]
+fn as_built_animation_drives_the_new_shared_id_and_handles_exhaustion() {
+    let mut app = two_boxes();
+    app.session.doc_mut().next_id = 500;
+    app.session.selection = vec![Sel::Body { name: "Body1".into() }, Sel::Body { name: "Body2".into() }];
+    app.start("joint.as_built");
+    let mut d = app.dialog.take().unwrap();
+    let Kind::Assembly(Asm::Joint(f)) = &mut d.kind else { panic!("expected joint dialog") };
+    f.kind = 1;
+    f.animate = true;
+    f.phase = 0.25;
+    let cmds = preview_commands(&app, &d).unwrap();
+    assert_eq!(cmds[1].0, "joint.drive");
+    assert_eq!(cmds[1].1["joint"], 500);
+    let mut preview = app.session.scratch();
+    for (command, params) in &cmds {
+        preview.execute(command, params).unwrap();
+    }
+    let joint = &preview.doc.assembly.joints[0];
+    assert_eq!(joint.id, 500);
+    assert!((joint.values[0] - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+    assert_eq!(app.session.doc.next_id, 500, "a preview must not reserve live ids");
+
+    app.session.doc_mut().next_id = u64::MAX;
+    let cmds = preview_commands(&app, &d).unwrap();
+    let result = app.session.scratch().execute(&cmds[0].0, &cmds[0].1);
+    assert!(result.is_err() && !matches!(result, Err(solidcraft_engine::EngineError::Internal(..))), "{result:?}");
+
+    // A programmatic document can also contain the largest possible joint id. The old
+    // preview added one to that id without checking, before the engine's panic guard.
+    let mut largest = joint.clone();
+    largest.id = u64::MAX;
+    app.session.doc_mut().assembly.joints.push(largest);
+    let cmds = preview_commands(&app, &d).unwrap();
+    assert_eq!(cmds.len(), 1, "an exhausted preview must not invent a drive target");
+    let result = app.session.scratch().execute(&cmds[0].0, &cmds[0].1);
+    assert!(result.is_err() && !matches!(result, Err(solidcraft_engine::EngineError::Internal(..))), "{result:?}");
+}
+
 /// As-built joints and rigid groups take components from body picks; New Component makes one
 /// from bodies when bodies are picked.
 #[test]
@@ -215,7 +248,7 @@ fn ok_click_survives_a_busy_preview() {
         f.animate = true;
     }
     app.dialog = Some(d);
-    let ctx = egui::Context::default();
+    let ctx = crate::fonts::test_context();
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0));
     let frame = |app: &mut SolveApp, busy: bool, events: Vec<egui::Event>| {
         app.preview.busy = busy;
@@ -267,7 +300,7 @@ fn picks_on_one_component_say_why_and_offer_components() {
     d.pick(&app.session, face_sel(&app.session, Vec3::new(40.0, 10.0, 0.0)).unwrap());
     assert!(apply_commands(&app, &d).is_err(), "one component: no joint");
     app.dialog = Some(d);
-    let ctx = egui::Context::default();
+    let ctx = crate::fonts::test_context();
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0));
     let frame = |app: &mut SolveApp, events: Vec<egui::Event>| {
         let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
@@ -335,7 +368,7 @@ fn drive_value_takes_the_keyboard() {
     app.run("joint.create", json!({"type": "revolute", "a": {"occurrence": a, "face": [10, 10, 10]}, "b": {"occurrence": b, "face": [40, 10, 0]}}))
         .unwrap();
     app.start("joint.drive");
-    let ctx = egui::Context::default();
+    let ctx = crate::fonts::test_context();
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0));
     let frame = |app: &mut SolveApp, events: Vec<egui::Event>| {
         let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
@@ -415,6 +448,59 @@ fn drive_slider_previews_intermediate_positions_before_release() {
     assert!(h.app.dialog.is_none());
     assert!(!h.app.preview.active);
     assert_eq!(h.app.session.doc, before, "cancel leaves the joint at its original angle");
+}
+
+/// Dragging the slider rewrites the value box, which keeps its focus (a drag is not a click) and
+/// its selection: the rewritten text must not open the parameter suggestions over the slider.
+#[test]
+fn slider_drag_does_not_open_suggestions_over_the_slider() {
+    let mut h = crate::scenario::Harness::new();
+    h.app = two_boxes();
+    for name in ["depth", "drop"] {
+        h.app.run("parameters.add", json!({"name": name, "expression": "5 mm"})).unwrap();
+    }
+    let (a, b) = (occ(&h.app, "A"), occ(&h.app, "B"));
+    h.app
+        .run(
+            "joint.create",
+            json!({"type": "revolute", "a": {"occurrence": a, "face": [10, 10, 10]},
+        "b": {"occurrence": b, "face": [40, 10, 0]}, "limits": [[-90, 90]]}),
+        )
+        .unwrap();
+    h.app.start("joint.drive");
+    h.frames(4);
+    let editor = egui::Id::new("sc_drive_value");
+    let bounds = h
+        .output
+        .accesskit_update
+        .as_ref()
+        .unwrap()
+        .nodes
+        .iter()
+        .find_map(|(_, n)| (n.role() == egui::accesskit::Role::Slider).then(|| n.bounds()).flatten())
+        .expect("drive slider");
+    let at = |fraction: f64| egui::pos2((bounds.x0 + fraction * (bounds.x1 - bounds.x0)) as f32, ((bounds.y0 + bounds.y1) / 2.0) as f32);
+    h.app.synthetic.extend([
+        egui::Event::PointerMoved(at(0.3)),
+        egui::Event::PointerButton { pos: at(0.3), button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
+    ]);
+    // Past 0 deg the selection left from "0 deg" ends after the "d" of "6.0 deg": a word.
+    for step in 0..=10 {
+        h.app.synthetic.push(egui::Event::PointerMoved(at(0.3 + 0.023 * step as f64)));
+        h.frames(2);
+        assert!(!crate::expression_complete::showing(&h.ctx, editor), "suggestions opened during the drag (step {step})");
+    }
+    h.app.synthetic.push(egui::Event::PointerButton {
+        pos: at(0.53),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.frames(3);
+    assert!(h.ctx.memory(|m| m.has_focus(editor)), "the value box kept its focus through the drag");
+    assert!(!crate::expression_complete::showing(&h.ctx, editor), "suggestions opened after the drag");
+    let Some(Dialog { kind: Kind::Assembly(Asm::Drive { values, .. }), .. }) = h.app.dialog.as_ref() else { panic!("drive dialog") };
+    assert_eq!(values[0].get(3..5), Some(" d"), "the caret ends after a \"d\": {values:?}");
 }
 
 /// Named joint origins are drawn where their component is: a drive of the occurrence, or a free
@@ -641,4 +727,19 @@ fn motion_trace_keeps_the_picked_point_path() {
         apply_point(&seen, apply_point(&mat_inverse(&put).unwrap(), at(&json!({"point": start}))))
     };
     assert!(drawn.dist(shown) < 1e-6, "{drawn:?} wants {shown:?}");
+    // The dialog retained the picked face, rather than its old coordinates. Resizing that
+    // part raises its top face and the whole saved trajectory by the same amount.
+    let component = app.session.doc.find_component("Coupler").unwrap();
+    let height = app
+        .session
+        .doc
+        .features
+        .iter()
+        .find(|f| f.component == component && matches!(f.kind, solidcraft_engine::doc::FeatureKind::Box { .. }))
+        .unwrap()
+        .param_names[2]
+        .clone();
+    app.run("parameters.change", json!({"name":height,"expression":"4 mm"})).unwrap();
+    let updated = &app.session.doc.sketch(sketch).unwrap().wires[0].fit;
+    assert!(updated.len() == wire.fit.len() && updated.iter().zip(&wire.fit).all(|(a, b)| (*a - *b - Vec3::new(0.0, 0.0, 2.0)).len() < 1e-6));
 }

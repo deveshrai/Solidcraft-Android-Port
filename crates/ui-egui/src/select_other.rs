@@ -17,6 +17,7 @@
 //!
 //! The control channel's `ui.selectOther` opens, describes and picks from the list.
 
+use crate::ui_kit::{Container, Surface};
 use egui::{Align2, FontId, Pos2, Rect, Sense, pos2, vec2};
 use serde_json::{Value, json};
 use solidcraft_engine::Sel;
@@ -515,7 +516,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let w = crate::context_menu::LIST_W - 10.0;
     // Title, rows up to the scroll height, margins and border.
     let size = vec2(w + 10.0, 30.0 + (p.rows.len() as f32 * 24.0).min(360.0));
-    let resp = crate::frame::area(egui::Id::new("sc_select_other"))
+    let resp = Container::new(ctx, Surface::Popup)
+        .area(egui::Id::new("sc_select_other"))
         .fixed_pos(crate::context_menu::place(p.at, vec2(12.0, 12.0), size, ctx.content_rect()))
         .constrain(true)
         .order(egui::Order::Foreground)
@@ -524,7 +526,13 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 let (r, _) = ui.allocate_exact_size(vec2(w, 20.0), Sense::hover());
                 let title = crate::i18n::tr_label("Select Other").to_uppercase();
                 let title = if p.total > p.rows.len() { format!("{title} · {} / {}", p.rows.len(), p.total) } else { title };
-                ui.painter().text(pos2(r.left() + 8.0, r.center().y), Align2::LEFT_CENTER, title, FontId::proportional(10.5), t.text_dim);
+                ui.painter().text(
+                    pos2(r.left() + 8.0, r.center().y),
+                    Align2::LEFT_CENTER,
+                    title,
+                    FontId::proportional(crate::theme::Tokens::get().font_panel),
+                    t.text_dim,
+                );
                 egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                     for (i, row) in p.rows.iter().enumerate() {
                         let (r, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
@@ -533,15 +541,19 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                             hovered = Some(i);
                             ui.painter().rect_filled(r.shrink2(vec2(2.0, 1.0)), 4.0, t.hover);
                         }
-                        crate::icons::paint(
+                        crate::icons::paint_icon(
                             ui.painter(),
                             Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), vec2(16.0, 16.0)),
                             row.icon,
-                            t.icon,
-                            t.icon_fill,
-                            t.accent,
+                            f32::from(t.icon.a()) / 255.0,
                         );
-                        ui.painter().text(pos2(r.left() + 32.0, r.center().y), Align2::LEFT_CENTER, &row.label, FontId::proportional(13.0), t.text);
+                        ui.painter().text(
+                            pos2(r.left() + 32.0, r.center().y),
+                            Align2::LEFT_CENTER,
+                            &row.label,
+                            FontId::proportional(crate::theme::Tokens::get().font_button),
+                            t.text,
+                        );
                         if resp.clicked() {
                             picked = Some(i);
                         }

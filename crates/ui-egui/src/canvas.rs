@@ -5,6 +5,7 @@
 //! command has its geometry, so typing a number sets the value at once; Enter applies, Tab
 //! moves on, Esc cancels.
 
+use crate::ui_kit::{Container, Surface};
 use egui::{Color32, Pos2, Stroke, vec2};
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::expr::Kind as ValueKind;
@@ -315,6 +316,17 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj
         // picked bodies instead.
         let triad = crate::dialogs_move::triad(app, &d);
         let at = triad.map(|t| t.center).or_else(|| anchor(app, &d).map(|(base, _)| base));
+        // Tab and Shift+Tab in the box show the next or previous value (Y after X; #4776),
+        // keeping the keyboard in the box.
+        // egui moves the keyboard on with Tab before this runs: the box had it last frame.
+        let id = egui::Id::new("sc_canvas_value");
+        let boxed = ui.ctx().memory(|m| m.has_focus(id) || m.had_focus_last_frame(id));
+        let back = boxed && ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab));
+        let tab = boxed && !back && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
+        if tab || back {
+            crate::dialogs_move::step_value_field(&mut d, if back { -1 } else { 1 });
+            d.focus = true;
+        }
         let focus = std::mem::take(&mut d.focus);
         if let Some(bs) = at.and_then(|base| proj.to_screen(base))
             && let Some((label, _, value)) = d.primary()
@@ -322,7 +334,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj
             // Clear of the triad: its arrows reach LEN_PX and its rings RING of that, so a box
             // beside the centre would cover the handles the user is reaching for.
             let off = if triad.is_some() { vec2(crate::gizmo::LEN_PX as f32 + 16.0, -12.0) } else { vec2(16.0, -30.0) };
-            value_box(ui, label, value, bs + off, focus || dragging);
+            value_box_with(ui, label, value, bs + off, focus || dragging, true);
         }
         app.dialog = Some(d);
         return;
@@ -566,24 +578,34 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
 /// text (e.g. "4 mm" -> "15 mm") would leave the stale, shorter selection from the pick in place,
 /// covering only part of the new text.
 fn value_box(ui: &mut egui::Ui, label: &str, value: &mut String, at: Pos2, select_all: bool) {
+    value_box_with(ui, label, value, at, select_all, false);
+}
+
+/// [`value_box`]; with `keep_tab` Tab stays in the box for the caller (the Move box steps
+/// through its values with it).
+fn value_box_with(ui: &mut egui::Ui, label: &str, value: &mut String, at: Pos2, select_all: bool, keep_tab: bool) {
     let t = Tokens::get();
     let id = egui::Id::new("sc_canvas_value");
-    crate::frame::area(egui::Id::new("sc_canvas_area")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-        egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr_label(label)).color(t.text_dim).size(11.5));
-                let r = ui.add(egui::TextEdit::singleline(value).id(id).desired_width(72.0));
-                crate::params_dialog::complete(ui, &r, value);
-                if select_all {
-                    r.request_focus();
-                    let n = value.chars().count();
-                    let mut st = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
-                    st.cursor.set_char_range(Some(egui::text_selection::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(n))));
-                    st.store(ui.ctx(), id);
-                }
+    Container::new(ui.ctx(), Surface::Canvas).area(egui::Id::new("sc_canvas_area")).fixed_pos(at).order(egui::Order::Foreground).show(
+        ui.ctx(),
+        |ui| {
+            Container::popup_frame(ui.style()).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(crate::i18n::tr_label(label)).color(t.text_dim).size(crate::theme::Tokens::get().font_caption));
+                    let r = crate::ui_kit::canvas_value_field(ui, id, value, keep_tab);
+                    crate::params_dialog::complete(ui, &r, value);
+                    if select_all {
+                        r.request_focus();
+                        let n = value.chars().count();
+                        let mut st = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
+                        st.cursor
+                            .set_char_range(Some(egui::text_selection::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(n))));
+                        st.store(ui.ctx(), id);
+                    }
+                });
             });
-        });
-    });
+        },
+    );
 }
 
 /// How far (logical points) from an arrow's stem a press still takes the arrow.
@@ -889,10 +911,9 @@ fn measure_line(app: &SolveApp, painter: &egui::Painter, proj: &Proj, r: &serde_
         painter.circle(s, 3.5, t.manipulator, Stroke::new(1.0, Color32::WHITE));
     }
     let mid = sa + (sb - sa) * 0.5 + vec2(10.0, -14.0);
-    let galley = painter.layout_no_wrap(crate::prefs::show_mm(app, d, 1), egui::FontId::proportional(12.5), t.text);
+    let galley = painter.layout_no_wrap(crate::prefs::show_mm(app, d, 1), egui::FontId::proportional(crate::theme::Tokens::get().font_label), t.text);
     let rect = egui::Rect::from_min_size(mid, galley.size() + vec2(10.0, 6.0));
-    crate::scenario::publish_handle("measure:label", rect.center());
-    crate::scenario::publish_rect("measure:label", rect);
+    crate::scenario::publish_target("measure:label", rect);
     if app.preferences.measure_axis_distances {
         measure_components(app, painter, proj, a, b, rect);
     }
@@ -931,7 +952,7 @@ fn measure_components(app: &SolveApp, painter: &egui::Painter, proj: &Proj, a: V
             (total.center(), vec2(20.0, 20.0))
         };
         let text = format!("{}: {}", axis.to_uppercase(), crate::prefs::show_mm(app, distance, 1));
-        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.5), t.text);
+        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(crate::theme::Tokens::get().font_label), t.text);
         let size = galley.size() + vec2(10.0, 6.0);
         let bounds = proj.rect.shrink(4.0);
         let clamp = |rect: egui::Rect| {
@@ -959,8 +980,7 @@ fn measure_components(app: &SolveApp, painter: &egui::Painter, proj: &Proj, a: V
         painter.rect(rect, 3.0, t.overlay, Stroke::new(1.0, color), egui::StrokeKind::Inside);
         painter.galley(rect.min + vec2(5.0, 3.0), galley, t.text);
         let handle = format!("measure:label:{axis}");
-        crate::scenario::publish_handle(&handle, rect.center());
-        crate::scenario::publish_rect(&handle, rect);
+        crate::scenario::publish_target(&handle, rect);
         occupied.push(rect);
     }
 }
@@ -1178,8 +1198,15 @@ fn draw_revolve(
         }
     }
     if to_mode {
-        crate::frame::area(egui::Id::new("sc_canvas_area")).fixed_pos(box_at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
+        // This badge is read-only. Its placement follows the model and can overlap the
+        // command dialog, whose buttons must keep receiving clicks.
+        let area = Container::new(ui.ctx(), Surface::Canvas)
+            .area(egui::Id::new("sc_canvas_area"))
+            .fixed_pos(box_at)
+            .order(egui::Order::Foreground)
+            .interactable(false);
+        area.show(ui.ctx(), |ui| {
+            Container::popup_frame(ui.style()).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
                 let text = if extent.curved_to {
                     "To surface".into()
                 } else if extent.sweep.is_finite() {

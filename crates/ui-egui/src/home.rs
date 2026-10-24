@@ -4,12 +4,13 @@
 
 use std::collections::HashMap;
 
-use egui::{Color32, CornerRadius, RichText, Sense, Stroke, vec2};
+use egui::vec2;
 use solidcraft_engine::Session;
 use solidcraft_engine::render::{Camera, StandardView};
 
 use crate::SolveApp;
 use crate::theme::Tokens;
+use crate::ui_kit::{self, FileView, RecoveryMessage};
 
 /// Recent designs kept.
 pub const MAX_RECENT: usize = 12;
@@ -29,6 +30,7 @@ type Made = (String, Option<egui::ColorImage>, Option<Session>);
 
 #[derive(Default)]
 pub struct HomeState {
+    section: Section,
     pub open: bool,
     /// Recent design paths, newest first (kept in the preferences).
     pub recent: Vec<String>,
@@ -46,9 +48,29 @@ pub struct HomeState {
     remembering: Option<std::sync::mpsc::Receiver<Made>>,
     /// A sample picked before its design was ready.
     wanted: Option<usize>,
+    /// Whether each recent file is there, found off the window thread (a stat of a slow or
+    /// disconnected drive must not hold up the page); unknown counts as there.
+    present: HashMap<String, bool>,
+    #[cfg(not(target_arch = "wasm32"))]
+    present_asked: std::collections::HashSet<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    present_rx: Vec<std::sync::mpsc::Receiver<(String, bool)>>,
 }
 
 impl HomeState {
+    /// Wait for the background check of the recent files to answer (tests only).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn wait_for_existence_checks(&mut self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while self.recent.iter().any(|p| !self.present.contains_key(p)) && std::time::Instant::now() < deadline {
+            for rx in &self.present_rx {
+                while let Ok((p, there)) = rx.try_recv() {
+                    self.present.insert(p, there);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
     pub fn ready_recents(&self) -> usize {
         self.recent.iter().filter(|p| self.thumbs.get(*p).is_some_and(Option::is_some)).count()
     }
@@ -59,6 +81,7 @@ impl HomeState {
 
     pub fn show(&mut self, _rev: u64) {
         self.open = true;
+        self.section = Section::Start;
         // Returning from another document cancels an earlier, unfinished sample selection.
         self.wanted = None;
     }
@@ -259,6 +282,10 @@ fn make(key: &str) -> Made {
 fn read_pictures(keys: Vec<String>, tx: &std::sync::mpsc::Sender<Made>) -> Option<Vec<String>> {
     let mut cold = Vec::new();
     for key in keys {
+        if let Some(i) = key.strip_prefix("samplepic:").and_then(|i| i.parse::<usize>().ok()) {
+            tx.send((format!("sample:{i}"), sample_picture(i), None)).ok()?;
+            continue;
+        }
         match std::panic::catch_unwind(|| picture(&key)).ok().flatten() {
             Some(img) => tx.send((key, Some(img), None)).ok()?,
             None => cold.push(key),
@@ -376,7 +403,8 @@ fn poll(app: &mut SolveApp, ctx: &egui::Context) {
         ctx.request_repaint();
     }
     for (key, img, session) in done {
-        if session.is_none() && key.starts_with("sample:") && app.home.wanted.is_some_and(|w| key == format!("sample:{w}")) {
+        // A picture sent ahead of the build has no session either; only a build with nothing failed.
+        if session.is_none() && img.is_none() && key.starts_with("sample:") && app.home.wanted.is_some_and(|w| key == format!("sample:{w}")) {
             app.home.wanted = None;
             app.set_status(format!("the sample could not be built ({key})"), true);
         }
@@ -424,8 +452,17 @@ pub fn open_sample(app: &mut SolveApp, i: usize) {
     }
 }
 
+/// Is this recent design there to open: in memory, or something the host can bring back?
+pub fn available(app: &SolveApp, path: &str) -> bool {
+    app.home.present.get(path).copied().unwrap_or(true) || app.services.can_restore.as_ref().is_some_and(|can| can(path))
+}
+
 pub fn open_recent(app: &mut SolveApp, path: &str) {
     if !solidcraft_engine::io::vfs::exists(path) {
+        if let Some(restore) = app.services.restore_file.as_ref().filter(|_| available(app, path)) {
+            restore(path);
+            return;
+        }
         app.set_status(format!("{path} is no longer there"), true);
         return;
     }
@@ -433,238 +470,564 @@ pub fn open_recent(app: &mut SolveApp, path: &str) {
     app.open_path_async(path);
 }
 
-/// The page itself (in place of the toolbar, browser and viewport).
+/// Find out whether the recent files are there: on a thread, so the page never waits on a drive.
+fn ask_present(h: &mut HomeState, ctx: &egui::Context, recent: &[String]) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let new: Vec<String> = recent.iter().filter(|p| h.present_asked.insert((*p).clone())).cloned().collect();
+        if !new.is_empty() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx = ctx.clone();
+            let spawned = std::thread::Builder::new().name("recent-files".into()).spawn(move || {
+                for p in new {
+                    let there = solidcraft_engine::io::vfs::exists(&p);
+                    if tx.send((p, there)).is_err() {
+                        return;
+                    }
+                    ctx.request_repaint();
+                }
+            });
+            if spawned.is_ok() {
+                h.present_rx.push(rx);
+            }
+        }
+        for rx in &h.present_rx {
+            while let Ok((p, there)) = rx.try_recv() {
+                h.present.insert(p, there);
+            }
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    for p in recent {
+        h.present.insert(p.clone(), solidcraft_engine::io::vfs::exists(p));
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Section {
+    #[default]
+    Start,
+    Recovery,
+    Export,
+}
+
+enum FileAction {
+    Back,
+    Section(Section),
+    New(&'static str),
+    Open,
+    Import,
+    Save,
+    SaveAs,
+    Export(&'static str),
+    Mesh,
+    ViewDxf,
+    Properties,
+    Settings,
+    Shortcuts,
+    Crashes,
+    About,
+    Recovery(solidcraft_engine::recovery::Entry, bool),
+}
+
+/// File view replaces the workspace while keeping the open design and its history intact.
 pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     poll(app, ui.ctx());
+    let file_menu_open = ui.ctx().data(|data| data.get_temp::<bool>(egui::Id::new("sc_file_menu"))).unwrap_or(false);
+    let interactive = !app.file_picker_busy() && !app.file_load.busy() && !file_menu_open;
+    // Help windows draw before Home; remember their prior visibility so one Escape closes only the window.
+    let had_help_window = ui.ctx().memory(|memory| {
+        ["sc_about", "sc_crash_reports"]
+            .iter()
+            .any(|id| memory.areas().visible_last_frame(&egui::LayerId::new(egui::Order::Middle, egui::Id::new(id))))
+    });
+
+    if interactive
+        && !had_help_window
+        && !app.prefs_window.open
+        && !app.help.about
+        && !app.crashes.open
+        && !app.help.menu
+        && !egui::Popup::is_any_open(ui.ctx())
+        && app.issue_report.draft.is_none()
+        && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        app.home.open = false;
+        return;
+    }
+    if interactive
+        && !had_help_window
+        && !app.prefs_window.open
+        && !app.help.about
+        && !app.crashes.open
+        && !egui::Popup::is_any_open(ui.ctx())
+        && app.issue_report.draft.is_none()
+        && !crate::documents::active_is_blank(app)
+    {
+        let save_as = egui::Modifiers { command: true, shift: true, ..Default::default() };
+        let action = if ui.input_mut(|input| input.consume_key(save_as, egui::Key::S)) {
+            Some(FileAction::SaveAs)
+        } else if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
+            Some(FileAction::Save)
+        } else {
+            None
+        };
+        if let Some(action) = action {
+            dispatch(app, ui.ctx(), action);
+            return;
+        }
+    }
     let t = Tokens::get();
     let samples = solidcraft_engine::sample::samples();
-    // Embedded previews are available on the first frame, including on the web. No model
-    // scripts, filesystem reads or GPU readbacks are needed to show the sample cards.
     for i in 0..samples.len() {
         let key = format!("sample:{i}");
         if !app.home.thumbs.contains_key(&key) {
+            // Decoded on the thumbnail thread where there is one; the card shows its placeholder
+            // until the picture arrives.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                app.home.queued.push(format!("samplepic:{i}"));
+                app.home.thumbs.insert(key, None);
+            }
+            #[cfg(target_arch = "wasm32")]
             install(&mut app.home, ui.ctx(), &key, sample_picture(i));
         }
     }
     let recent = app.home.recent.clone();
-    for p in recent.iter().filter(|p| solidcraft_engine::io::vfs::exists(p)) {
-        want(&mut app.home, p);
+    ask_present(&mut app.home, ui.ctx(), &recent);
+    for path in &recent {
+        if app.home.present.get(path).copied().unwrap_or(true) {
+            want(&mut app.home, path);
+        }
     }
-    let mut action: Option<Box<dyn FnOnce(&mut SolveApp)>> = None;
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(36, 24))).show(ui, |ui| {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("SolidCraft").size(26.0).strong().color(t.text));
-                ui.add_space(12.0);
-                ui.label(RichText::new(crate::i18n::tr_label("Start")).size(16.0).color(t.text_dim));
-            });
-            ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                let big = |ui: &mut egui::Ui, icon: &str, label: &str, primary: bool| -> bool {
-                    // The label sets the width: a translation longer than the English one widens
-                    // the button instead of running past its edge.
-                    let ink_text = if primary { Color32::WHITE } else { t.text };
-                    let galley = ui.painter().layout_no_wrap(label.to_owned(), egui::FontId::proportional(15.0), ink_text);
-                    let width = (56.0 + galley.size().x + 20.0).max(170.0);
-                    let (r, resp) = ui.allocate_exact_size(vec2(width, 64.0), Sense::click());
-                    let fill = if primary {
-                        t.accent
-                    } else if resp.hovered() {
-                        t.hover
-                    } else {
-                        t.field
-                    };
-                    ui.painter().rect(r, 6.0, fill, Stroke::new(1.0, if primary { t.accent } else { t.border }), egui::StrokeKind::Inside);
-                    let ink = if primary { Color32::WHITE } else { t.icon };
-                    crate::icons::paint(
-                        ui.painter(),
-                        egui::Rect::from_center_size(r.left_center() + vec2(30.0, 0.0), vec2(30.0, 30.0)),
-                        icon,
-                        ink,
-                        t.icon_fill,
-                        ink,
-                    );
-                    ui.painter().galley(r.left_center() + vec2(56.0, -galley.size().y / 2.0), galley, ink_text);
-                    resp.clicked()
-                };
-                if big(ui, "new", app.tr("ui.new_design"), true) {
-                    action = Some(Box::new(|app: &mut SolveApp| crate::documents::new_design(app)));
-                }
-                ui.add_space(10.0);
-                if big(ui, "open", app.tr("home.open"), false) {
-                    action = Some(Box::new(|app: &mut SolveApp| {
-                        app.pick_open(|app, path| {
-                            if let Some(path) = path {
-                                app.home.open = false;
-                                app.open_path_async(&path);
+    let mut action = None;
+    FileView::page(ui, |ui| {
+        ui.add_enabled_ui(interactive, |ui| {
+            let full = ui.available_rect_before_wrap();
+            crate::scenario::publish_rect("home:page", full);
+            let narrow = full.width() < t.file_nav_width + FileView::tile_min_width() + t.file_content_inset_x * 2.0;
+            if narrow {
+                FileView::navigation(ui, |ui| {
+                    ui_kit::dropdown_menu(ui, "home_navigation", app.tr("ui.start_page"), |ui| {
+                        ui.set_min_width(t.file_nav_width);
+                        FileView::navigation(ui, |ui| {
+                            navigation(app, ui, &mut action);
+                            if action.is_some() {
+                                ui.close();
                             }
                         });
-                    }));
-                }
-            });
-            ui.add_space(24.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.hyperlink_to(app.tr("home.documentation"), crate::help::DOCS_URL);
-                ui.hyperlink_to(app.tr("home.report_issue"), "https://github.com/tangency-labs/solidcraft/issues/new");
-                ui.hyperlink_to(app.tr("home.whats_new"), "https://github.com/bherbruck/solidcraft/releases/latest");
-                if ui.link(app.tr("ui.keyboard_shortcuts")).clicked() {
-                    app.keymap.open = true;
-                    app.keymap.read_only = true;
-                }
-                if ui.link(app.tr("ui.preferences")).clicked() {
-                    crate::prefs::open_at(app, 0);
-                }
-            });
-            ui.add_space(16.0);
-            section(ui, app.tr("home.recent"));
-            if recent.is_empty() {
-                ui.label(RichText::new(crate::i18n::tr_label("Designs you open or save appear here.")).color(t.text_dim));
+                    });
+                });
+                content(app, ui, &mut action, true);
             } else {
-                grid(ui, recent.len(), |ui, i| {
-                    let Some(p) = recent.get(i) else { return };
-                    let path = std::path::Path::new(p);
-                    let name = path.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| p.clone());
-                    let missing = !solidcraft_engine::io::vfs::exists(p);
-                    let mut sub = if missing {
-                        app.tr("home.missing").to_string()
-                    } else if p.starts_with("/opfs/") {
-                        // The web build keeps designs in the browser's own storage.
+                let rail = egui::Rect::from_min_size(full.min, vec2(t.file_nav_width, full.height()));
+                FileView::rail(ui, rail, |ui| {
+                    egui::ScrollArea::vertical().id_salt("home_navigation").auto_shrink([false, false]).show(ui, |ui| {
+                        navigation(app, ui, &mut action);
+                    });
+                });
+                let body = egui::Rect::from_min_max(egui::pos2(rail.right(), full.top()), full.max);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| content(app, ui, &mut action, false));
+            }
+        });
+    });
+    if let Some(action) = action {
+        dispatch(app, ui.ctx(), action);
+    }
+}
+
+fn navigation(app: &SolveApp, ui: &mut egui::Ui, action: &mut Option<FileAction>) {
+    let busy = app.file_picker_busy();
+    let design = !crate::documents::active_is_blank(app);
+    let response = FileView::back_to(ui, "home:back", app.tr("home.back"), &app.session.doc.name, "Esc");
+    publish("home:back", &response);
+    if response.clicked() {
+        *action = Some(FileAction::Back);
+    }
+    let primary = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
+    let shift = if cfg!(target_os = "macos") { "⇧" } else { "Shift+" };
+    let recover = if app.recoverable.is_empty() {
+        app.tr_label("Recover").to_string()
+    } else {
+        format!("{} ({})", app.tr_label("Recover"), app.recoverable.len())
+    };
+    let nav = [
+        ("home:start", app.tr_label("Start"), String::new(), Some(Section::Start), true, FileAction::Section(Section::Start)),
+        ("home:new", app.tr_label("New"), format!("{primary}N"), None, true, FileAction::New("preferred")),
+        ("home:open", app.tr("ui.open"), format!("{primary}O"), None, true, FileAction::Open),
+        ("home:recover", recover.as_str(), String::new(), Some(Section::Recovery), true, FileAction::Section(Section::Recovery)),
+        ("home:save", app.tr("ui.save"), format!("{primary}S"), None, design, FileAction::Save),
+        ("home:save_as", app.tr("ui.save_as"), format!("{primary}{shift}S"), None, design, FileAction::SaveAs),
+        ("home:export", app.tr("home.export"), String::new(), Some(Section::Export), design, FileAction::Section(Section::Export)),
+        ("home:properties", app.tr("home.properties"), String::new(), None, design, FileAction::Properties),
+        ("home:settings", app.tr("home.settings"), format!("{primary},"), None, true, FileAction::Settings),
+        ("home:shortcuts", app.tr("home.shortcuts"), String::new(), None, true, FileAction::Shortcuts),
+        ("home:crashes", app.tr("home.crashes"), String::new(), None, true, FileAction::Crashes),
+        ("home:about", app.tr_label("About SolidCraft"), String::new(), None, true, FileAction::About),
+    ];
+    for (index, (id, label, key, section, enabled, picked)) in nav.into_iter().enumerate() {
+        if index == 4 || index == 8 {
+            FileView::separator(ui);
+        }
+        let response = FileView::nav_row(ui, id, label, &key, section == Some(app.home.section), enabled && !busy);
+        publish(id, &response);
+        if response.clicked() {
+            *action = Some(picked);
+        }
+    }
+}
+
+fn publish(id: &str, response: &egui::Response) {
+    crate::scenario::publish_handle(id, response.rect.center());
+    crate::scenario::publish_rect(id, response.rect);
+}
+
+fn content(app: &mut SolveApp, ui: &mut egui::Ui, action: &mut Option<FileAction>, narrow: bool) {
+    let t = Tokens::get();
+    FileView::content(ui, narrow, |ui| {
+        egui::ScrollArea::vertical().id_salt("home_content").auto_shrink([false, false]).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let (title, hint) = match app.home.section {
+                Section::Start => (app.tr_label("Start"), app.tr("home.start_hint")),
+                Section::Recovery => (app.tr_label("Recover"), app.tr("home.recovery_hint")),
+                Section::Export => (app.tr("home.export"), app.tr("home.export_hint")),
+            };
+            FileView::title(ui, title);
+            ui.add_space(t.space_6);
+            FileView::subtitle(ui, hint);
+            ui.add_space(t.file_section_gap);
+            if let Some((message, _, true)) = &app.status {
+                ui_kit::text(ui, message, ui_kit::Text::Error("home_status"));
+            }
+            match app.home.section {
+                Section::Start => start_content(app, ui, action),
+                Section::Recovery => recovery_content(app, ui, action),
+                Section::Export => export_content(app, ui, action),
+            }
+        });
+    });
+}
+
+fn start_content(app: &mut SolveApp, ui: &mut egui::Ui, action: &mut Option<FileAction>) {
+    let t = Tokens::get();
+    if let Some(entry) = app.recoverable.first().cloned() {
+        let title = crate::i18n::format("home.recovery_count", &[("count", &app.recoverable.len().to_string())]);
+        let filename = entry
+            .path
+            .as_deref()
+            .and_then(|path| std::path::Path::new(path).file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| entry.name.clone());
+        let metadata = format!(" · {}", crate::recovery_ui::ago(entry.saved_at));
+        let (recover, discard) = FileView::recovery_banner(
+            ui,
+            "home:recovery",
+            RecoveryMessage { title: &title, before_filename: " · ", filename: &filename, after_filename: &metadata },
+            app.tr_label("Recover"),
+            (app.recoverable.len() == 1).then(|| app.tr_label("Discard")),
+        );
+        publish("home:recovery:recover", &recover);
+        if recover.clicked() {
+            *action =
+                Some(if app.recoverable.len() == 1 { FileAction::Recovery(entry.clone(), true) } else { FileAction::Section(Section::Recovery) });
+        }
+        if let Some(discard) = discard {
+            publish("home:recovery:discard", &discard);
+            if discard.clicked() {
+                *action = Some(FileAction::Recovery(entry, false));
+            }
+        }
+        ui.add_space(t.file_section_gap);
+    }
+    let shortcut = if cfg!(target_os = "macos") { "⌘O" } else { "Ctrl+O" };
+    let open_hint = crate::i18n::format("home.open_hint", &[("shortcut", shortcut)]);
+    let tiles = [
+        ("home:new_mm", "new", app.tr("home.new_mm"), app.tr("home.new_mm_hint"), true),
+        ("home:new_inches", "new", app.tr("home.new_inches"), app.tr("home.new_inches_hint"), false),
+        ("home:open_tile", "open", app.tr("home.open"), open_hint.as_str(), false),
+        ("home:import", "import", app.tr("home.import"), app.tr("home.import_hint"), false),
+    ];
+    FileView::section(ui, app.tr_label("New"), t.space_12, |ui| {
+        FileView::grid(ui, "home_new", FileView::tile_min_width(), tiles.len(), |ui, index, width| {
+            let Some((id, icon, title, hint, primary)) = tiles.get(index) else { return };
+            let response = FileView::action_tile(ui, id, width, icon, title, hint, *primary);
+            publish(id, &response);
+            if response.clicked() {
+                *action = Some(match index {
+                    0 => FileAction::New("mm"),
+                    1 => FileAction::New("in"),
+                    2 => FileAction::Open,
+                    _ => FileAction::Import,
+                });
+            }
+        });
+    });
+    ui.add_space(t.file_section_gap);
+    FileView::section(ui, app.tr("home.recent"), t.space_10, |ui| {
+        if app.home.recent.is_empty() {
+            FileView::detail(ui, app.tr("home.recent_empty"));
+        }
+        if !app.home.recent.is_empty() {
+            FileView::recent_list(ui, |ui| {
+                for (index, path) in app.home.recent.clone().iter().enumerate() {
+                    let name = std::path::Path::new(path).file_stem().map(|name| name.to_string_lossy()).unwrap_or_else(|| path.as_str().into());
+                    let missing = !available(app, path);
+                    let when = if app.session.path.as_ref() == Some(path) { app.tr("home.open_now").to_string() } else { recent_time(app, path) };
+                    let shown_path = if missing {
+                        format!("{} · {}", app.tr("home.missing"), friendly_path(path))
+                    } else if path.starts_with("/disk/") {
+                        app.tr_label("On your computer").to_string()
+                    } else if path.starts_with("/opfs/") {
                         app.tr("home.in_this_browser").to_string()
                     } else {
-                        p.clone()
+                        friendly_path(path)
                     };
-                    if let Some(time) = app.home.opened_at.get(p) {
-                        let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(*time);
-                        let seconds = now.saturating_sub(*time);
-                        let opened = if seconds < 60 {
-                            app.tr("home.opened_just_now").to_string()
-                        } else if seconds < 3600 {
-                            crate::i18n::format("home.opened_minutes_ago", &[("count", &(seconds / 60).to_string())])
-                        } else if seconds < 86400 {
-                            crate::i18n::format("home.opened_hours_ago", &[("count", &(seconds / 3600).to_string())])
-                        } else {
-                            crate::i18n::format("home.opened_days_ago", &[("count", &(seconds / 86400).to_string())])
-                        };
-                        sub.push('\n');
-                        sub.push_str(&opened);
-                    }
-                    let response = card(ui, Pic::Ready(app.home.thumbs.get(p.as_str()).and_then(Option::as_ref)), &name, &sub, missing)
-                        .on_hover_text(p.as_str());
-                    crate::scenario::publish_handle(&format!("home:recent:{i}"), response.rect.center());
-                    response.context_menu(|ui| {
-                        if ui.button(crate::i18n::tr_label("Remove from list")).clicked() {
-                            app.home.recent.retain(|x| x != p);
-                            app.home.opened_at.remove(p);
+                    let response = FileView::recent_row(
+                        ui,
+                        &format!("home:recent:{index}"),
+                        ui_kit::RecentRow {
+                            title: &name,
+                            path: &shown_path,
+                            when: &when,
+                            workspace: app.tr("home.design_workspace"),
+                            thumbnail: texture(app.home.thumbs.get(path).and_then(Option::as_ref)),
+                        },
+                    );
+                    publish(&format!("home:recent:{index}"), &response);
+                    ui_kit::Menu::context(&response, |ui| {
+                        if crate::context_menu::button(ui, app.tr_label("Remove from list"), "delete").clicked() {
+                            app.home.recent.retain(|x| x != path);
+                            app.home.opened_at.remove(path);
                             ui.close();
                         }
-                        if !cfg!(target_arch = "wasm32") && ui.button(crate::i18n::tr_label("Show in folder")).clicked() {
+                        if !cfg!(target_arch = "wasm32") && crate::context_menu::button(ui, app.tr_label("Show in folder"), "folder").clicked() {
                             if let Some(show) = &app.services.show_in_folder {
-                                show(p);
+                                show(path);
                             }
                             ui.close();
                         }
                     });
                     if response.clicked() {
-                        let p = p.clone();
-                        action = Some(Box::new(move |app: &mut SolveApp| open_recent(app, &p)));
+                        open_recent(app, path);
                     }
-                });
-            }
-            ui.add_space(24.0);
-            section(ui, app.tr("home.samples"));
-            grid(ui, samples.len(), |ui, i| {
-                let Some(s) = samples.get(i) else { return };
-                let key = format!("sample:{i}");
-                let busy = app.home.wanted == Some(i);
-                // The engine's sample table holds English text; the opened design keeps it as its name.
-                let about = app.tr_label(s.about);
-                let sub = if busy { app.tr("home.opening") } else { about };
-                let tex = match app.home.thumbs.get(&key) {
-                    Some(t) => Pic::Ready(t.as_ref()),
-                    None => Pic::Icon("box"),
-                };
-                if card(ui, tex, app.tr_label(s.name), sub, false).on_hover_text(about).clicked() {
-                    action = Some(Box::new(move |app: &mut SolveApp| open_sample(app, i)));
                 }
             });
-        });
+        }
     });
-    if let Some(f) = action {
-        f(app);
-    }
-}
-
-fn section(ui: &mut egui::Ui, title: &str) {
-    let t = Tokens::get();
-    ui.label(RichText::new(title).size(15.0).strong().color(t.text));
-    ui.add_space(8.0);
-}
-
-/// Cards in rows that fill the width.
-fn grid(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui, usize)) {
-    let w = THUMB[0] as f32 + 16.0;
-    let per_row = ((ui.available_width() + 14.0) / (w + 14.0)).floor().max(1.0) as usize;
-    for row in 0..n.div_ceil(per_row) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 14.0;
-            for i in row * per_row..((row + 1) * per_row).min(n) {
-                each(ui, i);
-            }
-        });
-        ui.add_space(14.0);
-    }
-}
-
-/// A card's picture: rendered (`None` while it renders), or an icon until it is asked for.
-enum Pic<'a> {
-    Ready(Option<&'a egui::TextureHandle>),
-    Icon(&'static str),
-}
-
-/// A design card: its picture (a spinner while it renders), name and a line under it.
-fn card(ui: &mut egui::Ui, pic: Pic, name: &str, sub: &str, dim: bool) -> egui::Response {
-    let t = Tokens::get();
-    let size = vec2(THUMB[0] as f32 + 16.0, THUMB[1] as f32 + 80.0);
-    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    let hover = resp.hovered();
-    ui.painter().rect(
-        r,
-        6.0,
-        if hover { t.hover } else { t.field },
-        Stroke::new(1.0, if hover { t.accent } else { t.border }),
-        egui::StrokeKind::Inside,
-    );
-    let img = egui::Rect::from_min_size(r.min + vec2(8.0, 8.0), vec2(THUMB[0] as f32, THUMB[1] as f32));
-    match pic {
-        Pic::Icon(icon) => {
-            ui.painter().rect_filled(img, CornerRadius::same(4), t.panel_header);
-            crate::icons::paint(ui.painter(), egui::Rect::from_center_size(img.center(), vec2(56.0, 56.0)), icon, t.icon, t.icon_fill, t.icon);
-        }
-        Pic::Ready(Some(tx)) => {
-            let tint = if dim { Color32::from_white_alpha(90) } else { Color32::WHITE };
-            ui.painter().image(tx.id(), img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), tint);
-        }
-        Pic::Ready(None) => {
-            ui.painter().rect_filled(img, CornerRadius::same(4), t.panel_header);
-            if !dim {
-                egui::Spinner::new().size(18.0).paint_at(ui, egui::Rect::from_center_size(img.center(), vec2(18.0, 18.0)));
+    ui.add_space(t.file_section_gap);
+    FileView::section(ui, app.tr("home.samples"), t.space_10, |ui| {
+        let samples: Vec<_> = solidcraft_engine::sample::samples()
+            .iter()
+            .enumerate()
+            .map(|(index, sample)| {
+                let hint = if app.home.wanted == Some(index) { app.tr("home.opening") } else { app.tr_label(sample.about) };
+                ui_kit::SampleCard {
+                    title: app.tr_label(sample.name),
+                    description: hint,
+                    icon: "box",
+                    thumbnail: texture(app.home.thumbs.get(&format!("sample:{index}")).and_then(Option::as_ref)),
+                }
+            })
+            .collect();
+        for (index, response) in FileView::sample_grid(ui, "home:sample", &samples).into_iter().enumerate() {
+            publish(&format!("home:sample:{index}"), &response);
+            if response.clicked() {
+                open_sample(app, index);
             }
         }
+    });
+}
+
+fn texture(texture: Option<&egui::TextureHandle>) -> Option<(egui::TextureId, egui::Vec2)> {
+    texture.map(|texture| (texture.id(), texture.size_vec2()))
+}
+
+/// Abbreviate only an actual home-directory ancestor; the source path is kept for actions.
+fn friendly_path(path: &str) -> String {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    abbreviated_path(path, home.as_deref().map(std::path::Path::new))
+}
+
+fn abbreviated_path(path: &str, home: Option<&std::path::Path>) -> String {
+    if let Some(relative) = home.filter(|home| !home.as_os_str().is_empty()).and_then(|home| std::path::Path::new(path).strip_prefix(home).ok()) {
+        if relative.as_os_str().is_empty() { "~".into() } else { format!("~/{}", relative.to_string_lossy()) }
+    } else {
+        path.to_owned()
     }
-    let ty = img.bottom() + 8.0;
-    let clip = egui::Rect::from_min_max(egui::pos2(r.left() + 8.0, ty), egui::pos2(r.right() - 8.0, r.bottom()));
-    let p = ui.painter().with_clip_rect(clip);
-    p.text(egui::pos2(r.left() + 10.0, ty), egui::Align2::LEFT_TOP, name, egui::FontId::proportional(14.0), if dim { t.text_dim } else { t.text });
-    p.text(egui::pos2(r.left() + 10.0, ty + 20.0), egui::Align2::LEFT_TOP, sub, egui::FontId::proportional(11.5), t.text_dim);
-    if hover {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+}
+
+fn recent_time(app: &SolveApp, path: &str) -> String {
+    let Some(time) = app.home.opened_at.get(path) else { return String::new() };
+    let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(*time);
+    recent_time_at(app, *time, now)
+}
+
+fn recent_time_at(app: &SolveApp, time: u64, now: u64) -> String {
+    let seconds = now.saturating_sub(time);
+    if seconds < 60 {
+        return app.tr("home.opened_just_now").to_string();
     }
-    resp
+    let (key, count) = if seconds < 3600 {
+        ("home.opened_minutes_ago", seconds / 60)
+    } else if seconds < 86400 {
+        ("home.opened_hours_ago", seconds / 3600)
+    } else if seconds < 172800 {
+        return app.tr("home.yesterday").to_string();
+    } else {
+        let date = solidcraft_engine::crash::utc(time);
+        let date = date.split_once('T').map_or(date.as_str(), |(date, _)| date);
+        let mut parts = date.rsplitn(3, '-');
+        let day = parts.next().unwrap_or("").trim_start_matches('0');
+        let month = parts.next().unwrap_or("");
+        return crate::i18n::format("home.short_date", &[("day", day), ("month", app.tr(&format!("home.month_{month}")))]);
+    };
+    crate::i18n::format(key, &[("count", &count.to_string())])
+}
+
+fn recovery_content(app: &SolveApp, ui: &mut egui::Ui, action: &mut Option<FileAction>) {
+    if app.recoverable.is_empty() {
+        ui_kit::text(ui, app.tr("home.recovery_empty"), ui_kit::Text::Inline);
+    }
+    for (index, entry) in app.recoverable.iter().take(20).enumerate() {
+        let detail = crate::i18n::format(
+            "recovery.detail",
+            &[
+                ("file", entry.path.as_deref().unwrap_or(app.tr("recovery.never_saved"))),
+                ("features", &entry.features.to_string()),
+                ("when", &crate::recovery_ui::ago(entry.saved_at)),
+            ],
+        );
+        let (recover, discard) =
+            FileView::recovery_review(ui, &format!("home:recovery:{index}"), &entry.name, &detail, app.tr_label("Recover"), app.tr_label("Discard"));
+        for (id, response, recover) in [("recover", Some(recover), true), ("discard", discard, false)] {
+            let Some(response) = response else { continue };
+            publish(&format!("home:recovery:{index}:{id}"), &response);
+            if response.clicked() {
+                *action = Some(FileAction::Recovery(entry.clone(), recover));
+            }
+        }
+        ui.add_space(Tokens::get().space_12);
+    }
+}
+
+fn export_content(app: &SolveApp, ui: &mut egui::Ui, action: &mut Option<FileAction>) {
+    let formats = [
+        ("step", "STEP", Some("home.export_step_hint")),
+        ("mesh", "Mesh", Some("home.export_mesh_hint")),
+        ("view_dxf", "DXF", None),
+        ("obj", "OBJ", None),
+        ("urdf", "URDF", None),
+        ("json", "JSON", Some("home.export_json_hint")),
+    ];
+    FileView::grid(ui, "home_exports", FileView::tile_min_width(), formats.len(), |ui, index, width| {
+        let Some((id, format, hint)) = formats.get(index) else { return };
+        let label = if *id == "view_dxf" {
+            app.tr_label("Export Current View as DXF…").to_string()
+        } else {
+            format!("{} {}…", app.tr("home.export"), app.tr_label(format))
+        };
+        let subtitle = hint.map(|key| app.tr(key)).unwrap_or(format);
+        let response = FileView::action_tile(ui, &format!("home:export:{id}"), width, "export", &label, subtitle, false);
+        publish(&format!("home:export:{id}"), &response);
+        if response.clicked() {
+            *action = Some(match *id {
+                "step" => FileAction::Export("step"),
+                "mesh" => FileAction::Mesh,
+                "view_dxf" => FileAction::ViewDxf,
+                "obj" => FileAction::Export("obj"),
+                "urdf" => FileAction::Export("urdf"),
+                _ => FileAction::Export("json"),
+            });
+        }
+    });
+}
+
+fn dispatch(app: &mut SolveApp, ctx: &egui::Context, action: FileAction) {
+    match action {
+        FileAction::Back => app.home.open = false,
+        FileAction::Section(section) => {
+            app.home.section = section;
+            if section == Section::Recovery && app.recoverable.is_empty() {
+                let dir = app.autosave.as_ref().map(|autosave| autosave.dir.clone()).or_else(solidcraft_engine::recovery::default_dir);
+                if let Some(dir) = dir {
+                    app.recoverable = solidcraft_engine::recovery::orphans(&dir);
+                }
+            }
+        }
+        FileAction::New(units) => {
+            crate::documents::new_design(app);
+            if units != "preferred" && !app.home.open && crate::documents::active_is_blank(app) {
+                crate::prefs::apply_new_design_units(app, units);
+            }
+        }
+        FileAction::Open => app.pick_open(|app, path| {
+            if let Some(path) = path {
+                app.open_path_async(&path);
+            }
+        }),
+        FileAction::Import => app.pick_open_for(&["step", "stp", "iges", "igs", "stl", "obj", "3mf", "gltf", "glb"], |app, path| {
+            if let Some(path) = path {
+                app.open_path_async(&path);
+            }
+        }),
+        FileAction::Save => {
+            app.home.open = false;
+            crate::toolbar::save(app);
+        }
+        FileAction::SaveAs => {
+            app.home.open = false;
+            crate::toolbar::save_as(app);
+        }
+        FileAction::Export(ext) => {
+            app.home.open = false;
+            crate::toolbar::export(app, ext);
+        }
+        FileAction::Mesh => {
+            app.home.open = false;
+            app.start("file.save_mesh");
+        }
+        FileAction::ViewDxf => {
+            app.home.open = false;
+            app.start("file.export_view_dxf");
+        }
+        FileAction::Properties => {
+            app.home.open = false;
+            app.start("document.metadata");
+        }
+        FileAction::Settings => crate::prefs::open_at(app, 0),
+        FileAction::Shortcuts => {
+            app.keymap.open = true;
+            app.keymap.read_only = true;
+        }
+        FileAction::Crashes => crate::help::run(app, ctx, "crashes"),
+        FileAction::About => crate::help::run(app, ctx, "about"),
+        FileAction::Recovery(entry, recover) => crate::recovery_ui::apply(app, entry, recover),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_paths_only_abbreviate_complete_home_ancestors() {
+        let home = Some(std::path::Path::new("/Users/sample"));
+        assert_eq!(abbreviated_path("/Users/sample/Designs/plate.solidcraft", home), "~/Designs/plate.solidcraft");
+        assert_eq!(abbreviated_path("/Users/sample", home), "~");
+        assert_eq!(abbreviated_path("/Users/sample-other/plate.solidcraft", home), "/Users/sample-other/plate.solidcraft");
+        assert_eq!(abbreviated_path("/disk/design.solidcraft", None), "/disk/design.solidcraft");
+    }
+
+    #[test]
+    fn recent_times_use_compact_labels_and_calendar_dates() {
+        let app = crate::test_support::sample_app();
+        let now = 1_792_569_600; // 2026-10-21T08:00:00Z.
+        assert_eq!(recent_time_at(&app, now + 60, now), "Just now");
+        assert_eq!(recent_time_at(&app, now - 120, now), "2 min ago");
+        assert_eq!(recent_time_at(&app, now - 7200, now), "2 h ago");
+        assert_eq!(recent_time_at(&app, now - 86400, now), "Yesterday");
+        assert_eq!(recent_time_at(&app, now - 172800, now), "19 Oct");
+    }
 
     #[test]
     fn shipped_sample_pictures_are_bounded_and_match_the_current_scripts() {
@@ -679,6 +1042,29 @@ mod tests {
             assert_eq!(sample_picture(i).unwrap().size, THUMB);
         }
         assert!(sample_picture(samples.len()).is_none());
+    }
+
+    /// A recent design the host can bring back (the browser build's remembered files) is not
+    /// "missing": choosing it asks the host to restore it, and one the host doesn't know still is.
+    #[test]
+    fn a_recent_design_the_host_can_restore_is_asked_for_not_reported_missing() {
+        let mut h = crate::scenario::Harness::new();
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let sink = asked.clone();
+        h.app.services.can_restore = Some(Box::new(|p| p.starts_with("/disk/known/")));
+        h.app.services.restore_file = Some(Box::new(move |p| sink.borrow_mut().push(p.to_string())));
+        assert!(available(&h.app, "/disk/known/Bracket.solidcraft"));
+        // A file is taken to be there until the background check says it is not.
+        assert!(available(&h.app, "/disk/other/Bracket.solidcraft"));
+        h.app.home.present.insert("/disk/other/Bracket.solidcraft".into(), false);
+        assert!(!available(&h.app, "/disk/other/Bracket.solidcraft"));
+        h.app.home.add_recent("/disk/known/Bracket.solidcraft");
+        h.app.home.show(h.app.session.revision);
+        click_file(&mut h, "home:recent:0");
+        assert_eq!(*asked.borrow(), ["/disk/known/Bracket.solidcraft"]);
+        open_recent(&mut h.app, "/disk/other/Bracket.solidcraft");
+        assert_eq!(asked.borrow().len(), 1, "a file the host doesn't remember is not asked for");
+        assert!(h.app.status.as_ref().is_some_and(|(text, _, error)| *error && text.contains("no longer there")));
     }
 
     /// Rebuild the shipped pictures from the authoritative sample command scripts.
@@ -826,15 +1212,18 @@ mod tests {
     }
 
     #[test]
-    fn first_home_frame_shows_all_samples_without_building_any_models() {
+    fn first_home_frame_shows_placeholders_and_the_sample_pictures_arrive_without_building_any_model() {
         let mut h = crate::scenario::Harness::new();
         h.app.home.show(0);
         h.frames(1);
+        assert!(h.app.home.ready_samples() < solidcraft_engine::sample::samples().len(), "the first frame decodes nothing");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while h.app.home.ready_samples() < solidcraft_engine::sample::samples().len() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            h.frames(1);
+        }
         assert_eq!(h.app.home.ready_samples(), solidcraft_engine::sample::samples().len());
-        assert!(h.app.home.samples.is_empty());
-        assert!(h.app.home.queued.is_empty());
-        #[cfg(not(target_arch = "wasm32"))]
-        assert!(h.app.home.sample_rx.is_none() && h.app.home.rx.is_none());
+        assert!(h.app.home.samples.is_empty(), "no sample model was built");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -915,5 +1304,180 @@ mod tests {
         h.app.keymap.open = true;
         h.frames(2);
         assert!(shown(&h) && h.app.prefs_window.section == crate::prefs::PAGE_SHORTCUTS && h.app.home.open);
+    }
+
+    fn click_file(h: &mut crate::scenario::Harness, id: &str) {
+        h.frames(3);
+        h.step(&serde_json::json!({"click": {"handle": id}})).unwrap();
+        h.frames(3);
+    }
+
+    #[test]
+    fn file_view_new_tiles_choose_units_without_changing_preferences_or_other_tabs() {
+        for (id, units) in [("home:new_mm", "mm"), ("home:new_inches", "in")] {
+            let mut h = crate::scenario::Harness::new();
+            h.app.run("solid.box", serde_json::json!({"length":10,"width":12,"height":14})).unwrap();
+            let original = h.app.session.doc.to_json();
+            h.app.preferences.default_units = "ft".into();
+            h.app.home.show(0);
+            click_file(&mut h, id);
+            assert!(!h.app.home.open);
+            assert_eq!(h.app.session.doc.units, units);
+            assert_eq!(h.app.preferences.default_units, "ft");
+            assert_eq!(h.app.docs.count(), 2);
+            assert!(!h.app.session.is_dirty(), "a new empty design is initially clean");
+            crate::documents::switch(&mut h.app, 0);
+            assert_eq!(h.app.session.doc.to_json(), original, "the previously open design is untouched");
+        }
+    }
+
+    #[test]
+    fn file_view_open_and_import_cancel_preserve_the_current_design_and_history() {
+        for id in ["home:open_tile", "home:import"] {
+            let mut h = crate::scenario::Harness::new();
+            h.app.run("solid.box", serde_json::json!({"length":10,"width":12,"height":14})).unwrap();
+            let original = h.app.session.doc.to_json();
+            let undo = h.app.session.undo.len();
+            h.app.home.show(0);
+            click_file(&mut h, id);
+            assert!(h.app.home.open, "cancel keeps the File view open");
+            assert_eq!(h.app.session.doc.to_json(), original);
+            assert_eq!(h.app.session.undo.len(), undo);
+            assert_eq!(h.app.docs.count(), 1);
+        }
+    }
+
+    #[test]
+    fn file_view_save_as_and_export_act_only_after_an_explicit_file_action() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("solid.box", serde_json::json!({"length":10,"width":12,"height":14})).unwrap();
+        h.app.home.show(0);
+        h.frames(3);
+        assert!(h.app.session.path.is_none());
+        click_file(&mut h, "home:save_as");
+        h.settle();
+        assert!(!h.app.home.open);
+        assert!(h.app.session.path.as_ref().is_some_and(|path| std::path::Path::new(path).is_file()));
+        assert!(!h.app.session.is_dirty());
+        let original = h.app.session.doc.to_json();
+        h.app.home.show(0);
+        click_file(&mut h, "home:export");
+        assert!(h.app.home.open && h.app.home.section == Section::Export);
+        click_file(&mut h, "home:export:json");
+        h.settle();
+        assert!(!h.app.home.open);
+        assert!(h.dir.join(format!("{}.json", h.app.session.doc.name)).is_file());
+        assert_eq!(h.app.session.doc.to_json(), original, "export leaves the design unchanged");
+    }
+
+    #[test]
+    fn file_view_recovery_reuses_dirty_design_protection_and_keeps_the_entry() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("solid.box", serde_json::json!({"length":10,"width":12,"height":14})).unwrap();
+        let original = h.app.session.doc.to_json();
+        h.app.recoverable =
+            vec![solidcraft_engine::recovery::Entry { id: "file-test".into(), name: "Bracket".into(), path: None, saved_at: 0, features: 3 }];
+        h.app.home.show(0);
+        h.frames(3);
+        assert!(crate::scenario::handle_at("home:recovery:recover").is_some());
+        click_file(&mut h, "home:recovery:recover");
+        assert_eq!(h.app.session.doc.to_json(), original);
+        assert_eq!(h.app.recoverable.len(), 1);
+        click_file(&mut h, "home:recover");
+        click_file(&mut h, "home:recovery:0:recover");
+        assert_eq!(h.app.session.doc.to_json(), original);
+        assert_eq!(h.app.recoverable.len(), 1);
+        assert!(h.app.status.as_ref().is_some_and(|(message, _, error)| *error && message.contains("save or discard")));
+        assert!(crate::scenario::rect_of("dialog:report:home_status").is_some(), "the refusal is visible on File");
+    }
+
+    #[test]
+    fn file_view_escape_returns_to_design_but_does_not_close_file_behind_preferences() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.show(0);
+        click_file(&mut h, "home:settings");
+        h.step(&serde_json::json!({"key":"Escape"})).unwrap();
+        assert!(h.app.home.open);
+        h.frames(2);
+        click_file(&mut h, "home:about");
+        h.step(&serde_json::json!({"key":"Escape"})).unwrap();
+        assert!(h.app.home.open, "Escape must close About without closing File behind it");
+        h.frames(3);
+        h.step(&serde_json::json!({"key":"Escape"})).unwrap();
+        assert!(!h.app.home.open);
+    }
+
+    #[test]
+    fn file_view_narrow_navigation_and_content_stay_inside_the_window() {
+        for dark in [false, true] {
+            let mut h = crate::scenario::Harness::new();
+            h.call("ui.resize", serde_json::json!({"width":420,"height":800}));
+            h.app.ui.dark = dark;
+            h.app.home.show(0);
+            h.frames(4);
+            let page = crate::scenario::rect_of("home:page").unwrap();
+            let tile = crate::scenario::rect_of("home:new_mm").unwrap();
+            assert!(page.contains_rect(tile), "{dark}: the new tile escapes the narrow page");
+            h.step(&serde_json::json!({"widget":"Start page"})).unwrap();
+            h.frames(2);
+            assert!(crate::scenario::handle_at("home:settings").is_some(), "all File actions remain available through the narrow menu");
+        }
+    }
+
+    #[test]
+    fn file_view_desktop_cards_align_in_rows_and_remain_visible() {
+        let mut h = crate::scenario::Harness::new();
+        h.call("ui.resize", serde_json::json!({"width":1400,"height":900}));
+        h.app.home.show(0);
+        h.frames(5);
+        let page = crate::scenario::rect_of("home:page").unwrap();
+        let first = crate::scenario::rect_of("home:new_mm").unwrap();
+        for id in ["home:new_mm", "home:new_inches", "home:open_tile", "home:import"] {
+            let rect = crate::scenario::rect_of(id).unwrap();
+            assert!((rect.top() - first.top()).abs() < 0.5, "{id}: action tiles must share a row");
+            assert!(page.contains_rect(rect), "{id}: card is off screen");
+        }
+        let first = crate::scenario::rect_of("home:sample:0").unwrap();
+        for i in 0..6 {
+            let rect = crate::scenario::rect_of(&format!("home:sample:{i}")).unwrap();
+            assert!((rect.top() - first.top()).abs() < 0.5, "sample {i}: thumbnails must share a row");
+            assert!(page.contains_rect(rect), "sample {i}: card is off screen");
+        }
+    }
+
+    #[test]
+    fn file_view_save_as_shortcut_uses_the_picker_without_overwriting_the_source() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("solid.box", serde_json::json!({"length":10,"width":12,"height":14})).unwrap();
+        let source = h.dir.join("source.solidcraft");
+        h.app.run("file.save_as", serde_json::json!({"path":source})).unwrap();
+        let bytes = std::fs::read(&source).unwrap();
+        h.app.session.doc = std::sync::Arc::new({
+            let mut doc = (*h.app.session.doc).clone();
+            doc.name = "Copy".into();
+            doc
+        });
+        h.app.home.show(0);
+        h.frames(3);
+        h.step(&serde_json::json!({"key":"S","cmd":true,"shift":true})).unwrap();
+        h.frames(3);
+        h.settle();
+        assert!(!h.app.home.open);
+        assert_eq!(h.app.session.path.as_deref(), h.dir.join("Copy.solidcraft").to_str());
+        assert_eq!(std::fs::read(source).unwrap(), bytes);
+    }
+
+    #[test]
+    fn document_plus_opens_file_before_creating_a_design() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("solid.box", serde_json::json!({"length":10,"width":12,"height":14})).unwrap();
+        let original = h.app.session.doc.to_json();
+        click_file(&mut h, "tab:new");
+        assert!(h.app.home.open);
+        assert_eq!(h.app.docs.count(), 1);
+        assert_eq!(h.app.session.doc.to_json(), original);
+        click_file(&mut h, "home:new_inches");
+        assert_eq!(h.app.docs.count(), 2);
+        assert_eq!(h.app.session.doc.units, "in");
     }
 }

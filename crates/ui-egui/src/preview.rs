@@ -38,6 +38,17 @@ impl Colors {
         let c = |c: egui::Color32| c.to_srgba_unmultiplied();
         Colors { body: c(t.body), added: c(t.preview_add), new_body: c(t.preview_new), removed: c(t.preview_cut), edge: c(t.body_edge) }
     }
+
+    fn for_tool(t: &Tokens, tab: &str, active: bool) -> Colors {
+        let mut colors = Self::from_tokens(t);
+        let accent = crate::theme::TabAccent::for_tab(t, tab);
+        if active && accent.color != t.accent {
+            colors.added = accent.color.to_srgba_unmultiplied();
+            colors.new_body = t.body.lerp_to_gamma(accent.color, 0.45).to_srgba_unmultiplied();
+        }
+        // Removed material retains its warning colour and opacity.
+        colors
+    }
 }
 
 pub struct SketchPreview {
@@ -108,11 +119,6 @@ impl PreviewState {
     /// Bodies the model scene should hide for the preview (empty while rolled back).
     pub fn effective_replaced(&self) -> &[String] {
         if self.rolled_back { &[] } else { &self.replaced }
-    }
-
-    /// Whether the preview scene should be drawn.
-    pub fn draw_active(&self) -> bool {
-        self.active && !self.rolled_back
     }
 
     /// Stop drawing the preview scene and give the bodies it stood in for back to the model.
@@ -257,9 +263,9 @@ fn motion_key(cmds: &[(String, Value)], revision: u64, colors: Colors) -> Option
     Some(h.finish())
 }
 
-/// Tool previews already stream in `poll`. New-body extrusions and face offsets instead
-/// build their full result; allow successful intermediate distances only within the same
-/// setup. Preserve selections, feature identity, extent mode, revision and colours. The
+/// Tool previews already stream in `poll`. New-body extrusions, face offsets, fillets and
+/// chamfers instead build their full result; allow successful intermediate distances (a
+/// fillet's radii, a chamfer's distances and angle) only within the same setup. Preserve selections, feature identity, extent mode, revision and colours. The
 /// exact job key still ensures the latest distance is computed and errors never go stale.
 fn stream_key(cmds: &[(String, Value)], revision: u64, colors: Colors) -> Option<u64> {
     if let Some(key) = motion_key(cmds, revision, colors) {
@@ -279,6 +285,10 @@ fn stream_key(cmds: &[(String, Value)], revision: u64, colors: Colors) -> Option
         let fields: &[&str] = match command.as_str() {
             "solid.extrude" => &["distance", "distance2", "to_offset"],
             "solid.offset_face" => &["distance"],
+            // A radius dragged or typed: each result shows while the next computes, rather than
+            // the preview holding still until the input stops changing.
+            "solid.fillet" => &["radius", "radius2", "mid"],
+            "solid.chamfer" => &["distance", "distance2", "angle"],
             _ => return None,
         };
         let params = params.as_object_mut()?;
@@ -295,7 +305,7 @@ fn stream_key(cmds: &[(String, Value)], revision: u64, colors: Colors) -> Option
 /// Keep the preview in step with the open dialog: start a computation when its inputs changed,
 /// take finished results. Called once per frame.
 pub fn update(app: &mut SolveApp, ctx: &egui::Context) {
-    let cmds = match app.dialog.as_ref().filter(|d| d.previews()).map(|d| crate::dialogs::preview_commands(app, d)) {
+    let cmds = match app.dialog.as_ref().filter(|d| d.previews() && d.preview_enabled).map(|d| crate::dialogs::preview_commands(app, d)) {
         Some(Ok(c)) if !c.is_empty() => c,
         _ if crate::sketch_attachment_ui::commands(app).is_some() => crate::sketch_attachment_ui::commands(app).unwrap_or_default(),
         // A parameter being edited in Change Parameters.
@@ -308,7 +318,7 @@ pub fn update(app: &mut SolveApp, ctx: &egui::Context) {
             return;
         }
     };
-    let colors = Colors::from_tokens(&Tokens::get());
+    let colors = Colors::for_tool(&Tokens::get(), &app.ui.tab, app.tool.is_some() || app.dialog.is_some());
     let key = job_key(&cmds, app.session.revision, colors);
     let stream_key = stream_key(&cmds, app.session.revision, colors);
     let tool = as_new_body(&cmds).is_some();
@@ -469,8 +479,13 @@ pub(crate) fn extrusion_target_error(s: &Session, cmds: &[(String, Value)], befo
                 }
             }
         } else {
+            // A cut or intersect from a component with no body of its own takes part in every
+            // body: the command decides that (#1234), and the preview asks it the same (#3085).
             found = params.get("faces").and_then(|_| params.get("face_body")).and_then(Value::as_str).map_or_else(
-                || before.bodies.iter().any(|body| s.doc.model_body_component(body) == s.active_component),
+                || {
+                    before.bodies.iter().any(|body| s.doc.model_body_component(body) == s.active_component)
+                        || (matches!(op, "cut" | "intersect") && s.cut_takes_every_body(before))
+                },
                 |name| s.world_state().body(name).is_some(),
             );
         }
@@ -812,6 +827,32 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn tool_preview_follows_tab_without_recolouring_removal_or_idle_previews() {
+        for dark in [false, true] {
+            for vision in crate::theme::ColorVision::ALL {
+                let t = Tokens::themed(dark, vision);
+                let base = Colors::from_tokens(&t);
+                for tab in ["MODEL", "SKETCH", "SURFACE", "ASSEMBLE", "INSERT", "INSPECT", "MANAGE", "VIEW", "SHEET METAL", "RENDER"] {
+                    for active in [false, true] {
+                        let colors = Colors::for_tool(&t, tab, active);
+                        assert_eq!(colors.removed, base.removed);
+                        assert_eq!(colors.body, base.body);
+                        assert_eq!(colors.edge, base.edge);
+                        if !active || crate::theme::TabAccent::for_tab(&t, tab).color == t.accent {
+                            assert_eq!(colors.added, base.added);
+                            assert_eq!(colors.new_body, base.new_body);
+                        } else {
+                            let accent = crate::theme::TabAccent::for_tab(&t, tab);
+                            assert_eq!(colors.added, accent.color.to_srgba_unmultiplied());
+                            assert_ne!(colors.new_body, colors.added);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn colors() -> Colors {
         Colors { body: [1, 1, 1, 255], added: [2, 2, 2, 255], new_body: [4, 4, 4, 255], removed: [3, 3, 3, 100], edge: [0, 0, 0, 255] }
     }
@@ -1149,6 +1190,27 @@ mod tests {
         let whole = compute(&s, &cmds, colors()).unwrap();
         assert!(whole.error.as_deref().is_some_and(|e| e.contains("no body to cut")), "{:?}", whole.error);
         assert_eq!(whole.scene.xray.len(), tool.scene.xray.len());
+    }
+
+    /// #3085: a cut sketched in the root, where every body lives in a component, cuts every body
+    /// it meets (#1234). The preview said "there is no body to cut or intersect" all the same,
+    /// while the cut itself went through.
+    #[test]
+    fn a_cut_from_an_empty_root_is_not_refused_by_its_preview() {
+        let mut s = session_of(&[
+            ("component.create", json!({"name": "Part"})),
+            ("solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "Block"})),
+            ("component.activate", json!({"component": "root"})),
+            ("sketch.create", json!({"plane": "XY"})),
+            ("sketch.rectangle.two_point", json!({"p0": [3, 3], "p1": [7, 7]})),
+            ("sketch.finish", json!({})),
+        ]);
+        let params = json!({"distance": 20, "operation": "cut"});
+        let cmds = vec![("solid.extrude".to_string(), params.clone())];
+        assert_eq!(extrusion_target_error(&s, &cmds, &s.model.state()), None);
+        s.execute("solid.extrude", &params).unwrap();
+        let volume = s.model.state().body("Block").map(|b| solidcraft_engine::kernel::measure(&b.body).unwrap().volume).unwrap_or(0.0);
+        assert!((volume - (1000.0 - 160.0)).abs() < 1e-6, "{volume}");
     }
 
     /// While an arrow is dragged the inputs change faster than a tool is built: a tool built

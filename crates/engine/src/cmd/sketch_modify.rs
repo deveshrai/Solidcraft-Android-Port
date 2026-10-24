@@ -59,6 +59,13 @@ pub static COMMANDS: &[CommandSpec] = &[
         .key("T")
         .enabled(in_sketch)
         .params(concat!("curve: id, at: [x,y] (the piece to remove: between the nearest intersections around it)", created_doc!())),
+    CommandSpec::new("sketch.trim.path", "Trim Along Path", trim_path)
+        .icon("trim")
+        .enabled(in_sketch)
+        .params(concat!(
+            "points: [[x,y]…] (2…2000 positions: a path drawn across the sketch). Every piece the path crosses is removed as `sketch.trim` removes the piece at that crossing, in the order the path crosses them; a piece crossed again after it is gone is not trimmed twice; projected geometry, infinite lines, offset outputs and pieces trim refuses are passed over (why in `skipped`). dry_run?: bool (report without changing the design). One undo step → trimmed: [each trim's result], removed: [[[x,y]…]] (each removed piece as a polyline)",
+            created_doc!()
+        )),
     CommandSpec::new("sketch.extend", "Extend", extend)
         .at("SKETCH", "MODIFY")
         .icon("extend")
@@ -88,7 +95,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SKETCH", "PATTERN")
         .icon("sketch_circ_pattern")
         .enabled(in_sketch)
-        .params(concat!("entities: [ids], center: [x,y] or point ref, count: 2…500, angle?: total deg (default 360); alignment?: left|center|right (default right); reversed?: bool (default false). Quantity includes the original. Center balances copies around it; reversed flips the direction and extra side for even totals. Partial arcs span angle with angle/(count-1) spacing; full turns use angle/count. Adds associative pattern constraints; a coordinate center creates a constrainable point. Returns pattern and center ids. pattern?: existing pattern id to edit (omitted values retained; surviving instance ids retained)", created_doc!())),
+        .params(concat!("entities: [ids], center: [x,y] or point ref, count: 2…500 (number or unitless expression, retained through edits), angle?: total deg (default 360); alignment?: left|center|right (default right); reversed?: bool (default false). Quantity includes the original. Center balances copies around it; reversed flips the direction and extra side for even totals. Partial arcs span angle with angle/(count-1) spacing; full turns use angle/count. Adds associative pattern constraints; a coordinate center creates a constrainable point. Returns pattern and center ids. pattern?: existing pattern id to edit (omitted values retained; surviving instance ids retained)", created_doc!())),
     CommandSpec::new("sketch.pattern.rectangular", "Rectangular Pattern", pattern_rect)
         .at("SKETCH", "PATTERN")
         .icon("sketch_rect_pattern")
@@ -338,68 +345,214 @@ pub fn trim_piece(sk: &Sketch, curve: &str, at: Vec2) -> Option<Vec<Vec2>> {
     Some((0..=n).map(|i| sh.point(a + (b - a) * f64::from(i) / f64::from(n))).collect())
 }
 
+/// Trim and extend refuse an offset's output: its ends are recomputed from its source curves on
+/// every solve, so a new end there would be pulled straight back (the trim reported success and
+/// left the curve whole).
+fn refuse_offset_ends(sk: &Sketch, ci: usize, what: &str, cmd: &str) -> Result<()> {
+    match sk.curves.get(ci).filter(|c| sk.offset_distance(&c.id).is_some()) {
+        Some(c) => Err(bad(
+            cmd,
+            format!(
+                "`{}` is an offset, and its ends follow its source curves: {what} the source curves instead, or break the offset association first",
+                c.id
+            ),
+        )),
+        None => Ok(()),
+    }
+}
+
 fn trim(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "sketch.trim";
     let at = req_vec2(cmd, p, "at")?;
     let (out, info) = edit(s, p, cmd, false, |sk, doc| {
         let ci = curve_arg(sk, p, cmd)?;
-        let id = sk.curves.get(ci).map(|c| c.id.clone()).unwrap_or_default();
-        if sk.curves.get(ci).is_some_and(|c| c.infinite) {
-            return Err(bad(cmd, "an infinite line has no ends to trim back to: make it a normal line first"));
-        }
-        if sk.curves.get(ci).is_some_and(|c| c.kind.is_freeform()) {
-            let r = super::sketch_freeform::trim_or_break(sk, ci, at, true, cmd)?;
-            doc.prune_model_params();
-            return Ok(json!({"trimmed": id, "pieces": r["curves"]}));
-        }
-        let sh = sk.shape(ci).ok_or_else(|| bad(cmd, "curve"))?;
-        let tq = sh.param(sh.project(at));
-        let (cuts, full) = bracket(sk, ci, tq);
-        if cuts.is_empty() {
-            // Nothing crosses it: the whole curve goes.
-            sk.remove_curves(&[ci]);
-            doc.prune_model_params();
-            return Ok(json!({"deleted": id}));
-        }
-        release_extent(sk, ci);
-        let ts: Vec<f64> = cuts.iter().map(|c| c.0).collect();
-        let (pieces, pts) = split_at(sk, ci, &ts)?;
-        // The piece containing tq.
-        let k = if full {
-            let (a, b) = (ts[0], ts[1]);
-            if tq > a && tq < b { 0 } else { 1 }
-        } else {
-            ts.iter().filter(|t| **t < tq).count()
-        };
-        for (pi, c) in pts.iter().zip(&cuts) {
-            pin(sk, *pi, c.2)?;
-        }
-        let gone = pieces.get(k).copied().ok_or_else(|| bad(cmd, "piece"))?;
-        let keep: Vec<usize> = pieces.iter().copied().filter(|x| *x != gone).collect();
-        // The original curve keeps its id (and constraints): swap geometry into it if needed.
-        let gone = match keep.first() {
-            Some(&other) if gone == ci => {
-                let ka = sk.curves.get(ci).map(|c| c.kind.clone());
-                let kb = sk.curves.get(other).map(|c| c.kind.clone());
-                if let (Some(ka), Some(kb)) = (ka, kb) {
-                    if let Some(c) = sk.curves.get_mut(ci) {
-                        c.kind = kb;
-                    }
-                    if let Some(c) = sk.curves.get_mut(other) {
-                        c.kind = ka;
-                    }
-                }
-                other
-            }
-            _ => gone,
-        };
-        let keep: Vec<usize> = pieces.iter().copied().filter(|x| *x != gone).collect();
-        tie(sk, &keep)?;
-        sk.remove_curves(&[gone]);
+        let (out, _) = remove_piece(sk, ci, at, cmd)?;
         doc.prune_model_params();
-        Ok(json!({"trimmed": id}))
+        Ok(out)
     })?;
     Ok(json!({"result": out, "sketch": info}))
+}
+
+/// Remove the piece of curve `ci` around `at`: between the nearest intersections on either
+/// side, or the whole curve when nothing crosses it. Returns what `sketch.trim` reports and the
+/// removed piece as a polyline.
+fn remove_piece(sk: &mut Sketch, ci: usize, at: Vec2, cmd: &str) -> Result<(Value, Vec<Vec2>)> {
+    let id = sk.curves.get(ci).map(|c| c.id.clone()).unwrap_or_default();
+    if sk.curves.get(ci).is_some_and(|c| c.infinite) {
+        return Err(bad(cmd, "an infinite line has no ends to trim back to: make it a normal line first"));
+    }
+    if sk.curves.get(ci).is_some_and(|c| c.kind.is_freeform()) {
+        let whole = sk.polyline(ci);
+        let r = super::sketch_freeform::trim_or_break(sk, ci, at, true, cmd)?;
+        let removed = match r.get("removed").and_then(Value::as_array) {
+            Some(pts) => pts.iter().filter_map(|q| Some(Vec2::new(q.get(0)?.as_f64()?, q.get(1)?.as_f64()?))).collect(),
+            None => whole,
+        };
+        return Ok((json!({"trimmed": id, "pieces": r["curves"]}), removed));
+    }
+    let sh = sk.shape(ci).ok_or_else(|| bad(cmd, "curve"))?;
+    let tq = sh.param(sh.project(at));
+    let (cuts, full) = bracket(sk, ci, tq);
+    if cuts.is_empty() {
+        // Nothing crosses it: the whole curve goes.
+        let removed = sk.polyline(ci);
+        sk.remove_curves(&[ci]);
+        return Ok((json!({"deleted": id}), removed));
+    }
+    refuse_offset_ends(sk, ci, "trim", cmd)?;
+    release_extent(sk, ci);
+    let ts: Vec<f64> = cuts.iter().map(|c| c.0).collect();
+    let (pieces, pts) = split_at(sk, ci, &ts)?;
+    // The piece containing tq.
+    let k = if full {
+        let (a, b) = (ts[0], ts[1]);
+        if tq > a && tq < b { 0 } else { 1 }
+    } else {
+        ts.iter().filter(|t| **t < tq).count()
+    };
+    for (pi, c) in pts.iter().zip(&cuts) {
+        pin(sk, *pi, c.2)?;
+    }
+    let gone = pieces.get(k).copied().ok_or_else(|| bad(cmd, "piece"))?;
+    let keep: Vec<usize> = pieces.iter().copied().filter(|x| *x != gone).collect();
+    // The original curve keeps its id (and constraints): swap geometry into it if needed.
+    let gone = match keep.first() {
+        Some(&other) if gone == ci => {
+            let ka = sk.curves.get(ci).map(|c| c.kind.clone());
+            let kb = sk.curves.get(other).map(|c| c.kind.clone());
+            if let (Some(ka), Some(kb)) = (ka, kb) {
+                if let Some(c) = sk.curves.get_mut(ci) {
+                    c.kind = kb;
+                }
+                if let Some(c) = sk.curves.get_mut(other) {
+                    c.kind = ka;
+                }
+            }
+            other
+        }
+        _ => gone,
+    };
+    let keep: Vec<usize> = pieces.iter().copied().filter(|x| *x != gone).collect();
+    tie(sk, &keep)?;
+    let removed = sk.polyline(gone);
+    sk.remove_curves(&[gone]);
+    Ok((json!({"trimmed": id}), removed))
+}
+
+/// Most crossings one `sketch.trim.path` trims (each one splits a curve, so this also caps the
+/// work a hostile path can ask for).
+const MAX_PATH_TRIMS: usize = 500;
+/// Most positions in a trim path.
+const MAX_PATH_POINTS: usize = 2_000;
+
+/// The first place along `path` after `after` (segment, parameter along it) where the path
+/// crosses a curve that a trim may change: (segment, parameter, curve, the crossing point). Crossings are found on the
+/// curves' display polylines; the trim projects them onto the exact curve.
+fn next_crossing(sk: &Sketch, path: &[Vec2], after: (usize, f64)) -> Option<(usize, f64, usize, Vec2)> {
+    let bounds = |pts: &[Vec2]| {
+        pts.iter().fold((Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY)), |(lo, hi), q| {
+            (Vec2::new(lo.x.min(q.x), lo.y.min(q.y)), Vec2::new(hi.x.max(q.x), hi.y.max(q.y)))
+        })
+    };
+    let trimmable: Vec<(usize, Vec<Vec2>, (Vec2, Vec2))> = (0..sk.curves.len())
+        .filter(|ci| curve_ok(sk, *ci))
+        .map(|ci| {
+            let poly = sk.polyline(ci);
+            let b = bounds(&poly);
+            (ci, poly, b)
+        })
+        .collect();
+    for (si, w) in path.windows(2).enumerate().skip(after.0) {
+        let (a, b) = (w[0], w[1]);
+        let from = if si == after.0 { after.1 } else { f64::NEG_INFINITY };
+        let (lo, hi) = bounds(&[a, b]);
+        let mut best: Option<(f64, usize, Vec2)> = None;
+        for (ci, poly, (plo, phi)) in &trimmable {
+            if plo.x > hi.x || plo.y > hi.y || phi.x < lo.x || phi.y < lo.y {
+                continue;
+            }
+            for e in poly.windows(2) {
+                let Some((t, q)) = seg_cross(a, b, e[0], e[1]) else { continue };
+                if t > from + 1e-9 && best.is_none_or(|x| t < x.0) {
+                    best = Some((t, *ci, q));
+                }
+            }
+        }
+        if let Some((t, ci, q)) = best {
+            return Some((si, t, ci, q));
+        }
+    }
+    None
+}
+
+/// Whether trim may change curve `ci` (what [`curve_arg`] accepts, and not an infinite line).
+fn curve_ok(sk: &Sketch, ci: usize) -> bool {
+    let Some(c) = sk.curves.get(ci) else { return false };
+    !c.infinite
+        && !sk.is_linked_curve(ci)
+        && !sk.freeform_offsets.iter().any(|offset| offset.output == c.id)
+        && !sk.offsets.iter().filter_map(|offset| offset.topology.as_ref()).any(|topology| topology.roles.iter().any(|role| role.output == c.id))
+}
+
+/// Where segment `a`–`b` crosses segment `c`–`d`: the parameter along `a`–`b` and the point.
+fn seg_cross(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<(f64, Vec2)> {
+    let (r, s) = (b - a, d - c);
+    let den = r.cross(s);
+    if den.abs() <= 1e-15 * r.len2().max(s.len2()).max(1e-30) {
+        return None;
+    }
+    let t = (c - a).cross(s) / den;
+    let u = (c - a).cross(r) / den;
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then(|| (t, a + r * t))
+}
+
+fn trim_path(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "sketch.trim.path";
+    let path = vec2_list(cmd, p, "points", MAX_PATH_POINTS)?;
+    if path.len() < 2 {
+        return Err(bad(cmd, "`points` needs at least two positions"));
+    }
+    if bool_(p, "dry_run").unwrap_or(false) {
+        let mut t = s.scratch();
+        let mut q = p.clone();
+        if let Some(o) = q.as_object_mut() {
+            o.remove("dry_run");
+        }
+        let mut out = trim_path(&mut t, &q)?;
+        out["dry_run"] = json!(true);
+        return Ok(out);
+    }
+    let ((trimmed, removed, skipped), info) = edit(s, p, cmd, false, |sk, doc| {
+        let mut trimmed: Vec<Value> = Vec::new();
+        let mut removed: Vec<Value> = Vec::new();
+        let mut skipped: Vec<String> = Vec::new();
+        let mut after = (0, f64::NEG_INFINITY);
+        for _ in 0..MAX_PATH_TRIMS {
+            let Some((si, t, ci, q)) = next_crossing(sk, &path, after) else { break };
+            after = (si, t);
+            // A piece trim refuses (a closed spline crossed once) stays as it was.
+            let before = sk.clone();
+            match remove_piece(sk, ci, q, cmd) {
+                Ok((out, gone)) => {
+                    trimmed.push(out);
+                    removed.push(json!(gone.iter().map(|v| [v.x, v.y]).collect::<Vec<_>>()));
+                }
+                Err(e) => {
+                    *sk = before;
+                    let why = e.to_string().replace(&format!("{cmd}: "), "");
+                    if !skipped.contains(&why) {
+                        skipped.push(why);
+                    }
+                }
+            }
+        }
+        if trimmed.is_empty() {
+            return Err(bad(cmd, skipped.first().cloned().unwrap_or_else(|| "the path crosses no curve that can be trimmed".into())));
+        }
+        doc.prune_model_params();
+        Ok((trimmed, removed, skipped))
+    })?;
+    Ok(json!({"trimmed": trimmed, "removed": removed, "skipped": skipped, "sketch": info}))
 }
 
 fn break_cmd(s: &mut Session, p: &Value) -> Result<Value> {
@@ -454,6 +607,7 @@ fn extend(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(cmd, rep.failure(|_| "solve the existing sketch constraints before extending".into())));
         }
         let ci = curve_arg(sk, p, cmd)?;
+        refuse_offset_ends(sk, ci, "extend", cmd)?;
         let sh = sk.shape(ci).ok_or_else(|| bad(cmd, "curve"))?;
         let (pa, pb) = match sk.curves.get(ci).map(|c| c.kind.clone()) {
             Some(CurveKind::Line { a, b }) | Some(CurveKind::Arc { a, b, .. }) => (a, b),
@@ -527,7 +681,7 @@ fn extend(s: &mut Session, p: &Value) -> Result<Value> {
         pin(sk, end, oi)?;
         let before = sk.points.iter().map(|p| p.pos).collect::<Vec<_>>();
         let hold = solidcraft_sketch::Hold { points: (0..sk.points.len()).filter(|i| *i != end).collect(), radii: (0..sk.curves.len()).collect() };
-        if !solidcraft_sketch::solve_with(sk, &hold, None, solidcraft_sketch::Analysis::Full, None).ok()
+        if !solidcraft_sketch::solve_with(sk, &hold, None, solidcraft_sketch::Analysis::StatusOnly, None).ok()
             || sk.point(end).is_none_or(|point| point.dist(q) > TOL)
             || sk.points.iter().enumerate().any(|(i, point)| i != end && point.pos.dist(before[i]) > TOL)
         {
@@ -602,6 +756,26 @@ fn refuse_infinite_corner(sk: &Sketch, p: &Value, cmd: &str) -> Result<()> {
         None => ["a", "b"].iter().any(|k| infinite(str_(p, k).and_then(|i| sk.curve_index(i)))),
     };
     if at_corner { Err(bad(cmd, "an infinite line has no corner to round or cut: make it a normal line first")) } else { Ok(()) }
+}
+
+/// Fillets and chamfers refuse a corner of an offset's output (#2874). The output's ends are
+/// recomputed from its source curves on every solve, so a corner cut there would be pulled back
+/// to the sharp corner, leaving full circles and an unsolved sketch.
+fn refuse_offset_corner(sk: &Sketch, p: &Value, cmd: &str) -> Result<()> {
+    let output = |c: usize| sk.curves.get(c).filter(|c| sk.offset_distance(&c.id).is_some()).map(|c| c.id.clone());
+    let found = match str_(p, "point").and_then(|r| sk.resolve_point(r)) {
+        Some(q) => (0..sk.curves.len()).filter(|c| sk.curves.get(*c).is_some_and(|x| x.kind.uses(q))).find_map(output),
+        None => ["a", "b"].iter().find_map(|k| str_(p, k).and_then(|i| sk.curve_index(i)).and_then(output)),
+    };
+    match found {
+        Some(id) => Err(bad(
+            cmd,
+            format!(
+                "`{id}` is an offset, and its corners follow its source curves: round or cut the source corners before offsetting, or break the offset association first"
+            ),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// A corner of two lines: (line a, line b, corner point, far end of a, far end of b).
@@ -822,6 +996,7 @@ fn kept_json(kept: Vec<CornerKept>) -> (Vec<String>, Vec<String>) {
 /// the arc, the tangent constraints and what became of the corner point.
 fn fillet_corner(sk: &mut Sketch, p: &Value, r: f64, cmd: &str) -> Result<(usize, Vec<String>, CornerKept)> {
     refuse_infinite_corner(sk, p, cmd)?;
+    refuse_offset_corner(sk, p, cmd)?;
     weld_corner(sk, p);
     let (la, lb, c, fa, fb) = match corner(sk, p, cmd) {
         Ok(x) => x,
@@ -932,6 +1107,7 @@ fn round_corner(sk: &mut Sketch, p: &Value, r: f64, cmd: &str) -> Result<Option<
 fn chamfer(s: &mut Session, p: &Value, cmd: &str, dists: impl FnOnce(f64) -> Result<(f64, f64)>) -> Result<Value> {
     let (out, info) = edit(s, p, cmd, false, |sk, _| {
         refuse_infinite_corner(sk, p, cmd)?;
+        refuse_offset_corner(sk, p, cmd)?;
         weld_corner(sk, p);
         let (la, lb, c, fa, fb) = corner(sk, p, cmd)?;
         let (pc, pa, pb) = (sk.point(c).unwrap_or_default(), sk.point(fa).unwrap_or_default(), sk.point(fb).unwrap_or_default());
@@ -1884,3 +2060,7 @@ mod robust_tests;
 #[cfg(test)]
 #[path = "sketch_corner_tests.rs"]
 mod corner_tests;
+
+#[cfg(test)]
+#[path = "sketch_trim_path_tests.rs"]
+mod trim_path_tests;

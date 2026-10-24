@@ -920,6 +920,7 @@ pub fn fair_faces(body: &Body, faces: &[usize], opts: &FairOptions) -> Result<(B
         result.volume = Some(std::sync::Arc::new(std::sync::Mutex::new(None)));
         result.coarse_missing = None;
         result.history = None;
+        result.phased = false;
         let faces: Vec<crate::history::FaceProv> =
             (0..all.len()).map(|i| crate::record::from_face(0, i, if picked.contains(&i) { Change::Modified } else { Change::Kept })).collect();
         let result = crate::record::attach(result, &[crate::record::Operand::new(body)], Some(faces), std::collections::HashMap::new())?;

@@ -401,3 +401,63 @@ fn a_cut_through_one_of_two_bosses_names_only_its_own_walls() {
     assert_eq!(blends, 4, "{filleted:?}");
     assert_eq!(named_at(&filleted, [19.98, -4.24, 19.0]), boss);
 }
+
+/// #3902: a torus with a closed, twisted square sweep cut inside it splits the sweep's walls into
+/// pieces the kernel returns in a different order on each evaluation. The pieces are numbered by
+/// where they lie, so every fresh evaluation gives each piece the same name.
+#[test]
+fn split_pieces_keep_their_numbers_across_evaluations() {
+    let script: Value = serde_json::from_str(include_str!("../../../examples/regressions/closed_sweep_torus_cut.json")).unwrap();
+    let mut s = Session::default();
+    s.run_script(&script).unwrap();
+    let body = s.model.state().bodies.first().map(|b| b.name.clone()).expect("a body");
+    let named = |s: &mut Session| -> Vec<(String, [i64; 3])> {
+        let mut faces: Vec<(String, [i64; 3])> = listed(s, &body).into_iter().map(|(n, _, c)| (n, c.map(|x| x.round() as i64))).collect();
+        faces.sort();
+        faces
+    };
+    let first = named(&mut s);
+    assert!(first.iter().any(|(n, _)| n.contains('#')), "no split pieces: {first:?}");
+    for run in 0..10 {
+        let mut fresh = Session::new(solidcraft_doc::Document::clone(&s.doc));
+        fresh.refresh();
+        assert_eq!(named(&mut fresh), first, "evaluation {run}");
+    }
+}
+
+/// #3902: a design saved before the pieces of a face were numbered by place opens with the
+/// numbers it was saved with, so a reference to `…#1` stays on the piece it was made on. The
+/// block cut by the second block here has its side split in two, numbered the other way round
+/// by place.
+#[test]
+fn a_design_saved_before_pieces_were_numbered_by_place_keeps_their_numbers() {
+    let script: Value = serde_json::from_str(include_str!("../../../tests/action_matrix/designs/multi-body-join-cut.json")).unwrap();
+    let mut s = Session::default();
+    s.run_script(&script).unwrap();
+    let by_place = listed(&mut s, "Block");
+    // As a build before the change saved it: its features carry no mark, and the file does not
+    // list the change among those it has.
+    let mut file: Value = serde_json::from_str(&s.doc.to_json()).unwrap();
+    for f in file["features"].as_array_mut().unwrap() {
+        f.as_object_mut().unwrap().remove("kernel_piece_order");
+    }
+    if let Some(Value::Array(pending)) = file.get_mut("format_pending") {
+        pending.retain(|c| c != "face-pieces-by-place");
+    }
+    // 0.18.3 folded the change into format 29, so a build before it wrote 28.
+    file["format"] = Value::String(solidcraft_doc::format::format_string(28));
+    let old = solidcraft_doc::Document::from_json(&file.to_string()).unwrap();
+    assert!(old.features.iter().all(|f| f.kernel_piece_order), "the features of an older design keep the old numbering");
+    let mut reopened = Session::new(old);
+    reopened.refresh();
+    let kept = listed(&mut reopened, "Block");
+    let at = |faces: &[(String, bool, [f64; 3])], name: &str| faces.iter().find(|(n, _, _)| n == name).map(|(_, _, c)| *c);
+    // The pieces are numbered differently by place, and the older design keeps its own numbers.
+    let (old1, new1) = (at(&kept, "F2:side#1").unwrap(), at(&by_place, "F2:side#1").unwrap());
+    assert!((0..3).any(|k| (old1[k] - new1[k]).abs() > 1.0), "{kept:?} {by_place:?}");
+    let mut legacy = solidcraft_doc::Document::clone(&s.doc);
+    legacy.features.iter_mut().for_each(|f| f.kernel_piece_order = true);
+    let mut saved_with = Session::new(legacy);
+    saved_with.refresh();
+    assert_eq!(listed(&mut saved_with, "Block"), kept);
+}

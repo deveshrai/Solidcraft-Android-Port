@@ -172,7 +172,13 @@ fn render(root: &Path, crates: &[Crate]) -> String {
            Source: https://github.com/liberationfonts\n\n\
          - BIZUDPGothic-Regular.ttf (assets/fonts/biz-udp-gothic/BIZUDPGothic-Regular.ttf)\n  \
            Copyright 2022 The BIZ UDGothic Project Authors (https://github.com/googlefonts/morisawa-biz-ud-mincho)\n  \
-           Source: https://github.com/googlefonts/morisawa-biz-ud-gothic\n\n"
+           Source: https://github.com/googlefonts/morisawa-biz-ud-gothic\n\n\
+         - IBMPlexSans-Variable.ttf (assets/fonts/ibm-plex-sans/IBMPlexSans-Variable.ttf)\n  \
+           Copyright 2017 IBM Corp. with Reserved Font Name \"Plex\"\n  \
+           Source: https://github.com/IBM/plex\n\n\
+         - IBMPlexMono-Regular.ttf (assets/fonts/ibm-plex-mono/IBMPlexMono-Regular.ttf)\n  \
+           Copyright 2017 IBM Corp. with Reserved Font Name \"Plex\"\n  \
+           Source: https://github.com/IBM/plex\n\n"
     );
     let ofl_path = root.join("assets/fonts/biz-udp-gothic/OFL.txt");
     let fallback_path = root.join("assets/fonts/liberation-sans/OFL.txt");

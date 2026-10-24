@@ -66,6 +66,39 @@ def review_fixture():
 
 
 class IconReviewTest(unittest.TestCase):
+    def test_window_confirm_and_page_list_icons_are_discovered(self):
+        with review_fixture() as (root, design, get, post):
+            source = root / 'crates/ui-egui/src/windows.rs'
+            source.parent.mkdir(parents=True)
+            source.write_text('''fn show() {
+                ui_kit::Window::new(egui::Id::new("prefs"), "settings", title);
+                ui_kit::Confirm::new(id, "status_warning", title);
+                ui_kit::WindowPage { icon: "orbit", label: "ui.navigation", draw: draw_page };
+                ui_kit::Window::new(id, variable_icon, "not_an_icon");
+            }''', encoding='utf-8')
+            page = get('/')
+            for icon in ('settings', 'status_warning', 'orbit'):
+                self.assertIn(f'data-id="{icon}"', page)
+            self.assertNotIn('data-id="not_an_icon"', page)
+
+    def test_runtime_manifest_discovers_variable_ids_and_reports_actual_placeholder(self):
+        with review_fixture() as (root, design, get, post):
+            manifest = design / 'requested_icons.txt'
+            before = get('/api/review')['rev']
+            manifest.write_text('box_alias\tfalse\nonly_in_menu_table\ttrue\n')
+            page = get('/')
+            self.assertIn('data-id="only_in_menu_table"', page)
+            self.assertIn('3 discovered icon ids · 2 with artwork · 1 missing', page)
+            self.assertIn('runtime audit', page)
+            self.assertNotEqual(get('/api/review')['rev'], before)
+            # Even existing artwork can fail to parse in the runtime renderer.
+            manifest.write_text('box_alias\ttrue\nonly_in_menu_table\tfalse\n')
+            self.assertIn('3 discovered icon ids · 1 with artwork · 2 missing', get('/'))
+            # A newly repaired id is discoverable even without any source literal.
+            manifest.write_text('box_alias\tfalse\nonly_in_menu_table\tfalse\n')
+            (design / 'svg/model/only_in_menu_table.svg').write_text(SVG)
+            self.assertIn('3 discovered icon ids · 3 with artwork · 0 missing', get('/'))
+
     def test_inline_clips_and_masks_are_scoped_to_each_preview_and_dashes_use_guides(self):
         with review_fixture() as (root, design, get, post):
             for name in ('environment_map', 'new', 'draft', 'bounding_solid', 'extend'):

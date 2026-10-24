@@ -18,6 +18,16 @@ user parameters remain shared; retained external links and omitted cross-boundar
 records are reported. Unsupported destructive links refuse the entire copy. See
 [individual-instance and copy details](https://github.com/bherbruck/solidcraft/blob/main/docs/occurrence-workflows.md).
 
+**Extract to File** (`component.extract`, in a component's right-click menu) moves a component
+into a design of its own: its sketches, features, bodies, subcomponents and the joints among them
+go to the new `.solidcraft` file at its origin, with the parameters they use, and the component
+becomes linked to that file, as **Insert Design** makes it. Its placements and the joints to the
+rest of the assembly stay. Components whose own history builds the same bodies are offered to
+become placements of the new link too (`component.copies`, `component.replace_with_link`).
+The menu offers Extract only for a component that can leave: nothing outside uses its sketches
+or changes its bodies, no bodies were moved into or out of it, and none of its subcomponents is
+joined to the rest of the design.
+
 **Joints** (`joint.create`, J) connect two components by joint origins that snap to faces, edges,
 circles and vertices: rigid, revolute, slider, cylindrical, pin-slot, planar and ball, with
 offsets, flip and limits. **As-built Joint** keeps the current position, **Rigid Group** locks
@@ -88,6 +98,10 @@ left are checked in parallel. `inspect.interference` remains for the overlaps al
 pairs whose meshes stay apart without intersecting them, intersects the rest in parallel, and
 returns after `budget_s` seconds (default 240) at most, listing the pairs it had no time for as
 not checked.
+
+Mesh bodies (STL, 3MF and OBJ imports) are not checked by either command: each is listed in
+`unchecked` as `{a: name, b: null, reason: "mesh body: not checked"}`, so `count: 0` or an empty
+`overlaps` is not mistaken for "no overlap" when a mesh body was in the design.
 
 **Gear**, **Rack and Pinion** and **Screw** (on the **ASSEMBLE** panel) are motion links whose
 ratio comes from the parts rather than a typed number:
@@ -208,13 +222,31 @@ first) or a motion study. The path previews in the viewport as the mechanism wou
 loops follow, and the path ends where a loop can no longer close or a contact set stops the
 motion, which the dialog says under the values. OK keeps the path as a 3D sketch spline in a new
 sketch of the root component (**Motion Trace1**, ...), where no joint moves it, and it can serve
-as a sweep or pipe path. It is a fixed curve: it
-does not follow later changes to the mechanism. A path that comes back to where it started is
-kept as a closed, smooth spline.
+as a sweep or pipe path. New traces retain their source and update when the mechanism's
+joint origins, limits, motion links or driving conditions change. Playing or dragging the
+mechanism does not redefine the trace: it keeps the assembly branch from when it was made.
+Unrelated parameter and display changes do not resample it. A path that comes back to where
+it started is kept as a closed, smooth spline.
 `motion.trace {occurrence, point, joint, from, to, index?, samples?}` (or `{occurrence, point,
 study, samples?}`) answers the world points without changing the design, and
-`motion.trace.keep` with the same parameters (and `name?`) keeps them. A trace takes 2 to 500
+`motion.trace.keep` with the same parameters (and `name?`) keeps them. `point_ref` can retain a
+joint-origin snap (such as `{occurrence, face: [x,y,z]}`), so the point follows its resized
+face; without it, the point is fixed in the part's coordinates. The dialog retains its face
+or circle snap. `motion.trace.edit {sketch, from?, to?, samples?}` changes a joint trace's
+driving conditions; `joint` with `from` and `to`, or `study`, replaces its motion source.
+Expressions in `from` and `to` follow parameter edits. Study traces follow edits to the
+referenced study, including its step count when Samples was left at the default.
+`auto_update: false` in `motion.trace.keep` makes a fixed curve; in `motion.trace.edit` it
+detaches an existing association, preserving the curve. Curves saved by earlier versions
+remain fixed. `motion.list` includes the associations and their errors. If a source is lost,
+the sketch warns and keeps its last successful curve until the source is restored or the
+association is detached. Changes and their generated curves undo and redo together.
+A trace takes 2 to 500
 samples: 100 by default for a joint, one per step for a study.
+
+The [Chebyshev linkage demo](https://github.com/tangency-labs/solidcraft/blob/main/docs/chebyshev-motion-trace.md)
+builds a complete four-joint mechanism, plays a saved study and demonstrates the
+same retained trajectory updating after a link-length or driving-range edit.
 
 **Export Animation…** in the **Motion Study** dialog saves the study as an animated GIF, drawn
 from the viewport's camera as the study plays (the keys in the dialog count, even before OK).

@@ -7,4 +7,5 @@ self-hosted-runner:
     - blacksmith-4vcpu-ubuntu-2404
     - blacksmith-8vcpu-ubuntu-2404
     - blacksmith-16vcpu-ubuntu-2404
+    - blacksmith-32vcpu-ubuntu-2404
     - blacksmith-8vcpu-windows-2025

@@ -39,6 +39,44 @@ fn session(script: &[(&str, serde_json::Value)]) -> Session {
     s
 }
 
+/// #2888: compiling the viewport on GL used to reject AO's depth textureLoad, even
+/// with AO disabled. Select GL explicitly so a working Vulkan adapter cannot hide it.
+#[test]
+fn opengl_viewport_pipelines_render_a_model() {
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::GL;
+    // NVIDIA's EGL answers wgpu's request for GL 3.3 with exactly 3.3 yet lists
+    // GL_ARB_compute_shader, so wgpu builds its indirect-call validation pipeline, naga cannot
+    // emit compute GLSL below 4.30, and request_device fails as Device(Lost). The test draws
+    // nothing indirect, so the validation is not needed here.
+    desc.flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+    let instance = wgpu::Instance::new(desc);
+    let adapter = match pollster::block_on(instance.request_adapter(&Default::default())) {
+        Ok(adapter) => adapter,
+        Err(e) => {
+            let required = std::env::var_os("SOLIDCRAFT_REQUIRE_GPU").is_some() && wgpu::Backends::from_env() == Some(wgpu::Backends::GL);
+            assert!(!required, "OpenGL is required here: {e}");
+            eprintln!("skipping the OpenGL regression: {e}");
+            return;
+        }
+    };
+    assert_eq!(adapter.get_info().backend, wgpu::Backend::Gl);
+    eprintln!("OpenGL regression: {:?}", adapter.get_info());
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: solidcraft_gpu::depth_features(&adapter),
+        required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+        ..Default::default()
+    }))
+    .unwrap();
+    let c = Capturer::new(&adapter, device, queue).unwrap();
+    let s = session(&[("solid.box", json!({"length": 40, "width": 30, "height": 20}))]);
+    let cam = view::home_camera(&s);
+    let img = c.rgba(&view::scene_with_guides(&s, &cam, None, Guides { grid: false, axes: false }), &cam, 160, 100).unwrap();
+    let empty = c.rgba(&Default::default(), &cam, 160, 100).unwrap();
+    let changed = pixels(&img).zip(pixels(&empty)).filter(|(a, b)| a != b).count();
+    assert!(changed > 500, "the model covers only {changed} pixels");
+}
+
 /// Appearances show as the viewport shows them: a body's colour, a face's own look.
 #[test]
 fn pictures_show_appearances() {
@@ -107,6 +145,26 @@ fn pictures_show_the_section_and_its_cap() {
         let cap = pixels(&img).filter(|p| i32::from(p[0]) - i32::from(p[2]) > 20).count();
         assert!(cap > 500, "fov {fov}: cap pixels {cap}");
     }
+}
+
+/// With the section's hatch off, the cut shows plain in its body's own colour, as the CPU
+/// rasterizer draws it; hatched, it is tinted and striped.
+#[test]
+fn pictures_show_a_plain_cut_without_the_hatch() {
+    let Some(c) = capturer() else { return };
+    let mut s = session(&[
+        ("solid.box", json!({"length": 40, "width": 30, "height": 20})),
+        ("appearance.assign", json!({"bodies": ["Body1"], "color": [40, 160, 90]})),
+    ]);
+    let cam = view::home_camera(&s);
+    let mut picture = |hatch: bool| {
+        s.execute("inspect.section", &json!({"plane": {"origin": [0, 15, 0], "normal": [0, -1, 0]}, "hatch": hatch})).unwrap();
+        c.rgba(&view::scene(&s, &cam), &cam, 300, 220).unwrap()
+    };
+    let solid = |img: &[u8]| pixels(img).filter(|p| p[..3].iter().zip([40u8, 160, 90]).all(|(a, b)| a.abs_diff(b) <= 3)).count();
+    let (hatched, plain) = (picture(true), picture(false));
+    assert!(solid(&plain) > 500, "plain cut: {} pixels in the body's colour", solid(&plain));
+    assert!(solid(&hatched) < 50, "the hatched cut is tinted: {}", solid(&hatched));
 }
 
 /// Surface analysis shades headless pictures as it shades the viewport: a box's flat faces in

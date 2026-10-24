@@ -2430,7 +2430,20 @@ impl Cutter {
 }
 
 pub(crate) fn chamfer_tool(cur: &Body, p: Vec3, s: f64, k: usize) -> Result<Cutter> {
-    chamfer_tool_sides(cur, p, s, None, k)
+    let tool = chamfer_tool_sides(cur, p, s, None, k)?;
+    // A straight edge that runs on into a curved one (a slot's side into its end arc) is one
+    // tangent chain: the cutter would chamfer the straight part only, and whether its overshoot
+    // reaches the next edge's material depends on the size of the part (#2672). The blend
+    // follows the whole chain, as it does for a fillet.
+    let all = Body::unique_edges(&cur.solid);
+    let curved_chain = all
+        .get(tool.edge)
+        .and_then(|e| smooth_chain(&cur.solid, e))
+        .is_some_and(|ids| all.iter().any(|e| ids.contains(&e.id()) && !matches!(e.curve(), mt::Curve::Line(_))));
+    if curved_chain {
+        return Err(unsupported("a straight edge continued by a curved one is chamfered with its chain"));
+    }
+    Ok(tool)
 }
 
 /// A straight plane/cylinder edge has one constant chamfer section. Sweep its cutter
@@ -2579,6 +2592,12 @@ fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, b
         if cur.contains(probe) {
             return Err(unsupported("chamfers ending at a concave corner"));
         }
+    }
+    // So must its far side: it reaches several times the chamfer's size out from the edge, and
+    // beside a wall (a pin standing in a socket) that is inside the wall, which the cut would
+    // take a bite out of.
+    if [0.0, ext + len * 0.5, len + 2.0 * ext].iter().any(|t| cur.contains(e_far + f.d * *t)) {
+        return Err(unsupported("the chamfer cutter reaches other material"));
     }
     let loc: Vec<solidcraft_geom::Vec2> = [a_ext, b_ext, e_far].iter().map(|q| plane.to_local(*q)).collect();
     let mut lp = solidcraft_geom::Loop2::polygon(&loc);
@@ -3076,5 +3095,27 @@ mod tests {
             assert!((actual - removed).abs() < 1e-3 * removed, "{actual} vs {removed}");
             assert!(rounded.validity().is_empty());
         }
+    }
+
+    /// A pin standing in a socket, 3.5 mm from two of its walls, in a large block. The cutters
+    /// for its tip reach several times the chamfer's size past each edge (more on a larger part),
+    /// into the walls, and their union took bites out of them: 7.2 mm³ instead of the tip's.
+    /// A cutter whose far corners are in the material is not used; the tip alone is chamfered.
+    #[test]
+    fn chamfering_a_pin_in_a_socket_leaves_the_socket_walls() {
+        let block = crate::build::box_solid(Vec3::new(0.0, 0.0, -135.0), Vec3::new(82.0, 41.0, 19.0)).unwrap();
+        let socket = crate::build::box_solid(Vec3::new(6.0, 11.5, 0.0), Vec3::new(21.0, 35.5, 25.0)).unwrap();
+        let pin = crate::build::box_solid(Vec3::new(9.5, 30.5, -1.0), Vec3::new(12.5, 32.0, 10.0)).unwrap();
+        let cut = crate::boolean(&block, &socket, crate::BoolOp::Cut).unwrap().unwrap();
+        let body = crate::boolean(&cut, &pin, crate::BoolOp::Union).unwrap().unwrap();
+        let tip = [Vec3::new(11.0, 30.5, 10.0), Vec3::new(9.5, 31.25, 10.0), Vec3::new(11.0, 32.0, 10.0), Vec3::new(12.5, 31.25, 10.0)];
+        let d = 0.5;
+        let out = chamfer(&body, &tip, d).unwrap();
+        // Four wedges along the tip's edges, less the four corner pyramids each pair shares.
+        let removed = 0.5 * d * d * 2.0 * (3.0 + 1.5) - 4.0 * d * d * d / 3.0;
+        let actual = crate::measure(&body).unwrap().volume - crate::measure(&out).unwrap().volume;
+        assert!((actual - removed).abs() < 1e-3, "{actual} vs {removed}");
+        assert_eq!(out.face_count(), body.face_count() + 4);
+        assert!(out.validity().is_empty(), "{:?}", out.validity());
     }
 }

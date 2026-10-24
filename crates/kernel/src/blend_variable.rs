@@ -63,7 +63,7 @@ pub fn fillet_variable(body: &Body, edge_at: Vec3, start: Vec3, r0: f64, r1: f64
 /// A fillet radius along an edge: a clamped B-spline of the position along it (0 at one end, 1
 /// at the other), given by its degree, knots and control radii. The radius is a smooth curve
 /// shaped by its control radii, each pulling it toward itself near its Greville position.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RadiusSpline {
     pub degree: usize,
     pub knots: Vec<f64>,
@@ -503,7 +503,7 @@ const TAPER_SHARE: f64 = 0.9;
 const TAPER_SPANS: usize = 8;
 
 /// The radius a taper gives one edge: its positions from `start`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Taper {
     pub start: Vec3,
     pub spline: RadiusSpline,

@@ -60,7 +60,7 @@ fn every_dimension_kind_has_a_drawable_frame() {
     }
     for f in [
         DimFrame::Linear { p0: Default::default(), p1: Default::default(), dir: Default::default() },
-        DimFrame::Radial { center: Default::default(), radius: 1.0, diameter: true },
+        DimFrame::Radial { center: Default::default(), radius: 1.0, diameter: true, arc: None },
         DimFrame::Angular { vertex: Default::default(), d0: Default::default(), sweep: 1.0 },
         DimFrame::ArcLength { center: Default::default(), radius: 1.0, start: 0.0, sweep: 1.0 },
     ] {
@@ -1542,4 +1542,61 @@ fn cursor_fallback_respects_an_exhausted_live_frame_budget() {
     assert!(s.model.state().sketch(s.active_sketch.unwrap()).unwrap().report.ok());
     run(&mut s, "sketch.drag", json!({"entity": "crank.end", "from": [at.x, at.y], "to": [target.x, target.y], "live": false}));
     assert!(pt(&s, "crank.end").dist(nearest) < 1e-4, "scripted motion retains the full cursor objective");
+}
+
+fn four_bar_drag_sketch() -> Session {
+    let mut s = new_sketch();
+    let x = -10.0 + (1600.0 - 400.0 + 52.0 * 52.0) / 104.0;
+    let y = -(1600.0_f64 - (x + 10.0) * (x + 10.0)).sqrt();
+    run(&mut s, "sketch.line", json!({"points":[[0,0],[-10,0],[x,y],[42,0]],"ids":["crank","coupler","rocker"],"infer":false}));
+    run(&mut s, "sketch.line", json!({"points":["crank.start","rocker.end"],"ids":["ground"],"infer":false}));
+    for (line, len) in [("crank", 10), ("coupler", 40), ("rocker", 20), ("ground", 42)] {
+        run(&mut s, "sketch.dimension", json!({"entities":[line],"value":len}));
+    }
+    run(&mut s, "sketch.constraint.horizontal_vertical", json!({"line":"ground"}));
+    s
+}
+
+#[test]
+fn releasing_a_budget_limited_four_bar_drag_finishes_with_a_bounded_budget() {
+    for (entity, fraction) in [("crank.end", 1.0), ("crank", 0.7)] {
+        let mut s = four_bar_drag_sketch();
+        let target = v(-10.0, 16.0) * fraction;
+        let nearest = target * (10.0 * fraction / target.len());
+        super::drag::last_drag::with_frame_work(0, || {
+            run(&mut s, "sketch.drag", json!({"entity":entity,"from":[-10.0*fraction,0],"to":[target.x,target.y],"live":true}));
+            let at = pt(&s, "crank.end") * fraction;
+            assert!(at.dist(nearest) > 0.5);
+        });
+        // The release is a new frame, with the same normal frame budget, not an unbounded
+        // final solve. The pointer has not moved since the budget-limited frame.
+        let at = pt(&s, "crank.end") * fraction;
+        run(&mut s, "sketch.drag", json!({"entity":entity,"from":[at.x,at.y],"to":[target.x,target.y],"live":true}));
+        assert!((pt(&s, "crank.end") * fraction).dist(nearest) < 1e-4);
+        run(&mut s, "sketch.drag_end", json!({}));
+        assert!((pt(&s, "crank.end") * fraction).dist(nearest) < 1e-4);
+    }
+}
+
+#[test]
+fn budget_limited_cursor_progress_requests_a_frame_with_the_same_target() {
+    let mut exercised = false;
+    for budget in [2048, 4096, 8192, 16384, 32768] {
+        let mut s = four_bar_drag_sketch();
+        let target = v(-7.0, 11.2);
+        let nearest = target * (7.0 / target.len());
+        let r = super::drag::last_drag::with_frame_work(budget, || {
+            run(&mut s, "sketch.drag", json!({"entity":"crank","from":[-7,0],"to":[target.x,target.y],"live":true}))
+        });
+        if r["retry"] != true {
+            continue;
+        }
+        exercised = true;
+        let at = pt(&s, "crank.end") * 0.7;
+        assert!(at.dist(target) < v(-7.0, 0.0).dist(target));
+        let r = run(&mut s, "sketch.drag", json!({"entity":"crank","from":[at.x,at.y],"to":[target.x,target.y],"live":true}));
+        assert!((pt(&s, "crank.end") * 0.7).dist(nearest) < 1e-4);
+        assert_eq!(r["retry"], false);
+    }
+    assert!(exercised, "exercise continuation after budget-limited progress");
 }

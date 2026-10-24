@@ -132,6 +132,7 @@ fn icon_data() -> Result<(), String> {
         ("CONSTRUCTION_PRIMARY", palette.get("accents").and_then(|v| v.get("construction"))),
         ("SKETCH_RED_GREEN", palette.get("variants").and_then(|v| v.get("red-green")).and_then(|v| v.get("sketch"))),
         ("CONSTRUCTION_RED_GREEN", palette.get("variants").and_then(|v| v.get("red-green")).and_then(|v| v.get("construction"))),
+        ("CONSTRAINT_RED_GREEN", palette.get("variants").and_then(|v| v.get("red-green")).and_then(|v| v.get("constraint"))),
         ("CONSTRUCTION_BLUE_YELLOW", palette.get("variants").and_then(|v| v.get("blue-yellow")).and_then(|v| v.get("construction"))),
         ("CONSTRAINT_BLUE_YELLOW", palette.get("variants").and_then(|v| v.get("blue-yellow")).and_then(|v| v.get("constraint"))),
     ] {

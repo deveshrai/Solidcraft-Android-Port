@@ -162,7 +162,7 @@ mod tests {
         let Ok(cyl) = crate::cylinder(Vec3::ZERO, Vec3::Z, 10.0, 5.0) else { panic!("cylinder") };
         for tol in [0.1, 0.01, 0.001] {
             for e in cyl.solid.edge_iter() {
-                let pts = sample_edge(&e, &Rules { tol, max_len: f64::INFINITY, turn: None }, f64::INFINITY).points;
+                let pts = sample_edge(&e, &Rules { tol, max_len: f64::INFINITY, extent: 0.0, turn: None, boundary_tol: None }, f64::INFINITY).points;
                 assert!(pts.len() >= 2);
                 assert_eq!(pts.first().copied(), Some(from_p3(e.absolute_front().point())));
                 assert_eq!(pts.last().copied(), Some(from_p3(e.absolute_back().point())));
@@ -184,7 +184,7 @@ mod tests {
     fn edges_are_split_to_the_side_length_and_turn() {
         let Ok(cyl) = crate::cylinder(Vec3::ZERO, Vec3::Z, 10.0, 5.0) else { panic!("cylinder") };
         for e in cyl.solid.edge_iter() {
-            let pts = sample_edge(&e, &Rules { tol: 1.0, max_len: f64::INFINITY, turn: None }, 1.2).points;
+            let pts = sample_edge(&e, &Rules { tol: 1.0, max_len: f64::INFINITY, extent: 0.0, turn: None, boundary_tol: None }, 1.2).points;
             for w in pts.windows(2) {
                 assert!(w[0].dist(w[1]) <= 1.2 + 1e-9, "side {}", w[0].dist(w[1]));
             }
@@ -198,8 +198,13 @@ mod tests {
         }
         // A coarse tolerance alone would leave a few long chords; a 30° facet angle keeps every
         // side within 30° of arc: at least 12 around each of the two circles.
-        let thirty =
-            Rules { tol: 5.0, max_len: f64::INFINITY, turn: Some(crate::tess::size::Turn { angle: std::f64::consts::PI / 6.0, floor: 0.0 }) };
+        let thirty = Rules {
+            tol: 5.0,
+            max_len: f64::INFINITY,
+            extent: 0.0,
+            turn: Some(crate::tess::size::Turn { angle: std::f64::consts::PI / 6.0, floor: 0.0 }),
+            boundary_tol: None,
+        };
         let mut seen = std::collections::HashSet::new();
         let sides: usize = cyl
             .solid
@@ -217,7 +222,7 @@ mod tests {
         let Ok(pin) = crate::cylinder(Vec3::new(5.0, 5.0, -1.0), Vec3::Z, 2.0, 6.0) else { panic!("pin") };
         let Ok(cross) = crate::cylinder(Vec3::new(5.0, -1.0, 2.0), Vec3::Y, 1.0, 12.0) else { panic!("cross") };
         let Ok(Some(body)) = crate::boolean(&pin, &cross, crate::BoolOp::Cut) else { panic!("cut") };
-        let rules = Rules { tol: 0.01, max_len: f64::INFINITY, turn: None };
+        let rules = Rules { tol: 0.01, max_len: f64::INFINITY, extent: 0.0, turn: None, boundary_tol: None };
         let surfaces: Vec<EvalSurface> = body.solid.face_iter().filter_map(|f| super::super::surface::eval_surface(&f.surface())).collect();
         let (mut edges, mut checked) = (0, 0);
         let mut seen = std::collections::HashSet::new();

@@ -260,7 +260,7 @@ fn join_keeps_exact_face_attachments_from_both_operands() {
     run(&mut s, "sketch.create", json!({"plane":"YZ"}));
     run(&mut s, "sketch.circle.center", json!({"center":[0,20],"radius":5}));
     run(&mut s, "sketch.finish", json!({}));
-    run(&mut s, "solid.extrude", json!({"distance":20,"symmetric":true,"operation":"join"}));
+    run(&mut s, "solid.extrude", json!({"distance":20,"operation":"join"}));
     run(&mut s, "sketch.create", json!({"plane":{"face":[0,0,40]}}));
     run(&mut s, "sketch.circle.center", json!({"center":[0,0],"radius":4}));
     run(&mut s, "sketch.finish", json!({}));

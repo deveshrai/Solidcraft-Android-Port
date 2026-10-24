@@ -1,6 +1,6 @@
 //! Autosave and crash recovery.
 //!
-//! A running app keeps one recovery entry in the recovery folder: `<id>.solidcraft` (the design
+//! Each open design keeps its own recovery entry in the recovery folder: `<id>.solidcraft` (the design
 //! as of the last autosave), `<id>.json` (its file path, name and time) and `<id>.lock`, which
 //! the app holds locked while it runs. Autosaves are written atomically, only when the design
 //! has unsaved changes it hasn't written yet; a design with nothing unsaved has no entry. An
@@ -163,7 +163,7 @@ pub fn remove(dir: &Path, id: &str) -> Result<()> {
     Ok(())
 }
 
-/// One app's autosaver.
+/// One open design's autosaver. Keep it with that design when switching tabs.
 pub struct Autosaver {
     pub dir: PathBuf,
     pub id: String,
@@ -174,10 +174,65 @@ pub struct Autosaver {
     last: Option<(Arc<Document>, crate::Visibility)>,
     last_at: Instant,
     has_entry: bool,
+    /// The autosave being written on a worker thread: the design and what was hidden as it
+    /// started, and the outcome once the thread ends. A large design takes long enough to write
+    /// (and longer with its evaluated model) that the window must not wait for it.
+    writing: Option<Writing>,
+}
+
+/// An autosaver going away with a write still running (the app quit without closing it) lets the
+/// write end first, so the entry it leaves is whole.
+impl Drop for Autosaver {
+    fn drop(&mut self) {
+        if let Some(w) = self.writing.take() {
+            let _ = w.done.recv();
+        }
+    }
+}
+
+/// An autosave a worker thread is writing.
+struct Writing {
+    doc: Arc<Document>,
+    visibility: crate::Visibility,
+    done: std::sync::mpsc::Receiver<Result<()>>,
+}
+
+/// What one autosave writes, taken from the session in an instant.
+struct Snapshot {
+    dir: PathBuf,
+    id: String,
+    doc: Arc<Document>,
+    visibility: crate::Visibility,
+    path: Option<String>,
+}
+
+impl Snapshot {
+    /// Write the design and its entry (the slow part: serialising and compressing the design).
+    fn write(&self) -> Result<()> {
+        let io = |e: std::io::Error| EngineError::Other(format!("autosave: {e}"));
+        let bytes = if self.visibility.is_empty() {
+            solidcraft_io::write_design_container(&self.doc)?
+        } else {
+            let mut doc = (*self.doc).clone();
+            doc.visibility = self.visibility.clone();
+            solidcraft_io::write_design_container(&doc)?
+        };
+        solidcraft_io::write_atomic(&file(&self.dir, &self.id, solidcraft_io::DESIGN_EXT), &bytes, false).map_err(io)?;
+        let entry = Entry {
+            id: self.id.clone(),
+            path: self.path.clone(),
+            name: self.doc.name.clone(),
+            saved_at: unix_now(),
+            features: self.doc.features.len(),
+        };
+        let meta = serde_json::to_vec_pretty(&entry).map_err(|e| EngineError::Other(e.to_string()))?;
+        solidcraft_io::write_atomic(&file(&self.dir, &self.id, "json"), &meta, false).map_err(io)?;
+        Ok(())
+    }
 }
 
 impl Autosaver {
-    /// Start autosaving into `dir` (created if needed), holding this app's lock.
+    /// Start autosaving into `dir` (created if needed), holding this design's lock.
     pub fn new(dir: &Path, interval: Duration) -> Result<Autosaver> {
         let io = |e: std::io::Error| EngineError::Other(format!("{}: {e}", dir.display()));
         fs::create_dir_all(dir).map_err(io)?;
@@ -198,12 +253,62 @@ impl Autosaver {
         let id = format!("{}-{}-{seq}", unix_now(), std::process::id());
         let lock = OpenOptions::new().create(true).truncate(false).write(true).open(file(dir, &id, "lock")).map_err(io)?;
         lock.lock().map_err(io)?;
-        Ok(Autosaver { dir: dir.to_path_buf(), id, interval, lock: Some(lock), last: None, last_at: Instant::now(), has_entry: false })
+        Ok(Autosaver { dir: dir.to_path_buf(), id, interval, lock: Some(lock), last: None, last_at: Instant::now(), has_entry: false, writing: None })
     }
 
     /// Autosave now if the design has unsaved changes not written yet (and drop the entry when
-    /// nothing is unsaved). Returns whether it wrote.
+    /// nothing is unsaved), waiting for the write. Returns whether it wrote.
     pub fn save(&mut self, s: &Session) -> Result<bool> {
+        self.finish(s, true)?;
+        let Some(snapshot) = self.begin(s) else { return Ok(false) };
+        let written = snapshot.write();
+        self.written(s, snapshot.doc, snapshot.visibility, written)?;
+        Ok(true)
+    }
+
+    /// Autosave when the interval has passed, or right away after a big operation. The design
+    /// is written on a worker thread; true when this call started a write.
+    pub fn tick(&mut self, s: &Session, big: bool) -> Result<bool> {
+        // A write still running: nothing new starts until it has ended.
+        if !self.finish(s, false)? {
+            return Ok(false);
+        }
+        if !big && self.last_at.elapsed() < self.interval {
+            return Ok(false);
+        }
+        let Some(snapshot) = self.begin(s) else { return Ok(false) };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (doc, visibility) = (snapshot.doc.clone(), snapshot.visibility.clone());
+            let started = std::thread::Builder::new().name("autosave".into()).spawn(move || {
+                let _ = tx.send(snapshot.write());
+            });
+            match started {
+                Ok(_) => {
+                    self.writing = Some(Writing { doc, visibility, done: rx });
+                    Ok(true)
+                }
+                // No thread to write on: write here, as before.
+                Err(_) => {
+                    let snapshot = Snapshot { dir: self.dir.clone(), id: self.id.clone(), doc, visibility, path: s.path.clone() };
+                    let written = snapshot.write();
+                    self.written(s, snapshot.doc, snapshot.visibility, written)?;
+                    Ok(true)
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let written = snapshot.write();
+            self.written(s, snapshot.doc, snapshot.visibility, written)?;
+            Ok(true)
+        }
+    }
+
+    /// What the next autosave writes: `None` when there is nothing to write (and, with nothing
+    /// unsaved, the entry has been dropped).
+    fn begin(&mut self, s: &Session) -> Option<Snapshot> {
         self.last_at = Instant::now();
         if !s.is_dirty() {
             if self.has_entry {
@@ -215,28 +320,59 @@ impl Autosaver {
             self.last = None;
             // Crash replays start from the saved file (or a new design) from here.
             crate::crash::rebased(s, s.path.as_deref().map(Path::new), false);
-            return Ok(false);
+            return None;
         }
         if self.last.as_ref().is_some_and(|(l, v)| (Arc::ptr_eq(l, &s.doc) || **l == *s.doc) && *v == s.visibility) {
-            return Ok(false);
+            return None;
         }
-        let io = |e: std::io::Error| EngineError::Other(format!("autosave: {e}"));
-        let bytes = solidcraft_io::write_design_container(&s.design())?;
-        solidcraft_io::write_atomic(&file(&self.dir, &self.id, solidcraft_io::DESIGN_EXT), &bytes, false).map_err(io)?;
-        let entry =
-            Entry { id: self.id.clone(), path: s.path.clone(), name: s.doc.name.clone(), saved_at: unix_now(), features: s.doc.features.len() };
-        let meta = serde_json::to_vec_pretty(&entry).map_err(|e| EngineError::Other(e.to_string()))?;
-        solidcraft_io::write_atomic(&file(&self.dir, &self.id, "json"), &meta, false).map_err(io)?;
-        self.last = Some((s.doc.clone(), s.visibility.clone()));
-        self.has_entry = true;
-        // Crash replays start from this autosave from here.
-        crate::crash::rebased(s, Some(&file(&self.dir, &self.id, solidcraft_io::DESIGN_EXT)), true);
+        Some(Snapshot { dir: self.dir.clone(), id: self.id.clone(), doc: s.doc.clone(), visibility: s.visibility.clone(), path: s.path.clone() })
+    }
+
+    /// The running write's outcome, once it has one (`wait`: wait for it). True when no write
+    /// is running any more.
+    fn finish(&mut self, s: &Session, wait: bool) -> Result<bool> {
+        let Some(w) = self.writing.take() else { return Ok(true) };
+        let outcome = if wait {
+            w.done.recv().unwrap_or_else(|_| Err(EngineError::Other("autosave: the writer stopped".into())))
+        } else {
+            match w.done.try_recv() {
+                Ok(r) => r,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.writing = Some(w);
+                    return Ok(false);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(EngineError::Other("autosave: the writer stopped".into())),
+            }
+        };
+        self.written(s, w.doc, w.visibility, outcome)?;
         Ok(true)
     }
 
-    /// Autosave when the interval has passed, or right away after a big operation.
-    pub fn tick(&mut self, s: &Session, big: bool) -> Result<bool> {
-        if big || self.last_at.elapsed() >= self.interval { self.save(s) } else { Ok(false) }
+    /// A write of `doc` (with `visibility`) ended with `outcome`.
+    fn written(&mut self, s: &Session, doc: Arc<Document>, visibility: crate::Visibility, outcome: Result<()>) -> Result<()> {
+        outcome?;
+        self.has_entry = true;
+        // Crash replays start from this autosave from here, unless the design changed while it
+        // was written: the journal then keeps the commands since its older start.
+        if Arc::ptr_eq(&s.doc, &doc) {
+            crate::crash::rebased(s, Some(&file(&self.dir, &self.id, solidcraft_io::DESIGN_EXT)), true);
+        }
+        self.last = Some((doc, visibility));
+        Ok(())
+    }
+
+    /// The user closed this design (saving it or choosing Don't Save): discard only its entry.
+    pub fn discard(mut self) {
+        // A write still running would recreate the entry, without a lock, after it is removed:
+        // the next launch would offer a design the user closed.
+        if let Some(w) = self.writing.take() {
+            let _ = w.done.recv();
+        }
+        for ext in ["json", solidcraft_io::DESIGN_EXT] {
+            let _ = fs::remove_file(file(&self.dir, &self.id, ext));
+        }
+        self.lock = None;
+        let _ = fs::remove_file(file(&self.dir, &self.id, "lock"));
     }
 
     /// Closing the app: with nothing unsaved the entry goes; otherwise it stays for the next
@@ -308,6 +444,37 @@ mod tests {
         assert_eq!(entry.features, 1);
         remove(&d, &entry.id).unwrap();
         assert!(orphans(&d).is_empty());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A tick doesn't wait for the autosave (#3044): it starts the write on a worker and
+    /// returns; the outcome is taken up by a later tick, and nothing new starts meanwhile. The
+    /// entry is the design as it was when the write started, even when it changed since.
+    #[test]
+    fn autosave_writes_on_a_worker_and_a_later_tick_takes_it_up() {
+        let d = dir("worker");
+        let mut s = Session::default();
+        let mut a = Autosaver::new(&d, Duration::ZERO).unwrap();
+        s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        let written = s.doc.clone();
+        assert!(a.tick(&s, false).unwrap(), "a write started");
+        assert!(a.writing.is_some(), "and runs on its own thread");
+        s.execute("solid.box", &json!({"length": 5, "width": 5, "height": 5, "center": [20, 0, 2.5], "operation": "new"})).unwrap();
+        // Ticks while it runs start nothing; the one that finds it ended takes it up and,
+        // the design having changed since, starts the next write.
+        let began = Instant::now();
+        while !a.tick(&s, false).unwrap() {
+            assert!(a.writing.is_some(), "nothing new starts while the write runs");
+            assert!(began.elapsed() < Duration::from_secs(30));
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(a.has_entry);
+        assert!(a.last.as_ref().is_some_and(|(doc, _)| Arc::ptr_eq(doc, &written)), "the first write was the design as it started");
+        assert!(a.writing.as_ref().is_some_and(|w| Arc::ptr_eq(&w.doc, &s.doc)), "the next one writes the changed design");
+        drop(a);
+        let found = orphans(&d);
+        assert_eq!(found.len(), 1);
+        assert_eq!(load(&d, &found[0].id).unwrap().0, *s.doc, "dropping the autosaver lets its write end");
         let _ = fs::remove_dir_all(&d);
     }
 

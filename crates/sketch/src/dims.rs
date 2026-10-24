@@ -19,8 +19,9 @@ pub enum DimFrame {
     /// The distance from `p0` to `p1` along the unit direction `dir` (aligned, horizontal or
     /// vertical).
     Linear { p0: Vec2, p1: Vec2, dir: Vec2 },
-    /// Radius or diameter of a circle or arc.
-    Radial { center: Vec2, radius: f64, diameter: bool },
+    /// Radius or diameter of a circle or arc. `arc` is the arc's (start angle, counter-clockwise
+    /// sweep), None for a full circle: an arrow past the arc's ends gets an extension of the arc.
+    Radial { center: Vec2, radius: f64, diameter: bool, arc: Option<(f64, f64)> },
     /// The angle at `vertex` from the unit ray `d0`, counter-clockwise by `sweep` radians.
     Angular { vertex: Vec2, d0: Vec2, sweep: f64 },
     /// Length along an arc around `center` from angle `start` by `sweep`.
@@ -104,11 +105,15 @@ pub fn dim_frame(sk: &Sketch, k: &ConstraintKind) -> Option<DimFrame> {
             DimFrame::Linear { p0, p1, dir: unit(p1 - p0, normal) }
         }
         Radius { c, .. } | Diameter { c, .. } => {
-            let radius = match sk.curves.get(c)?.kind {
-                CurveKind::Ellipse { r, .. } => r,
-                _ => sk.radius(c)?,
+            let (radius, arc) = match sk.curves.get(c)?.kind {
+                CurveKind::Ellipse { r, .. } => (r, None),
+                CurveKind::Arc { .. } => match sk.segs(c).first()? {
+                    solidcraft_geom::Seg2::Arc { radius, start, sweep, .. } => (*radius, Some((*start, *sweep))),
+                    _ => return None,
+                },
+                _ => (sk.radius(c)?, None),
             };
-            DimFrame::Radial { center: sk.center(c)?, radius, diameter: matches!(k, Diameter { .. }) }
+            DimFrame::Radial { center: sk.center(c)?, radius, diameter: matches!(k, Diameter { .. }), arc }
         }
         ArcLength { c, .. } => match sk.segs(c).first()? {
             solidcraft_geom::Seg2::Arc { center, radius, start, sweep } => {
@@ -187,6 +192,21 @@ pub fn default_text(f: &DimFrame, away: Vec2, px: f64) -> Option<Vec2> {
 fn arc_pts(c: Vec2, r: f64, a0: f64, sweep: f64) -> Vec<Vec2> {
     let n = ((sweep.abs() / 0.08).ceil() as usize).clamp(2, 200);
     (0..=n).map(|i| c + Vec2::from_angle(a0 + sweep * i as f64 / n as f64) * r).collect()
+}
+
+/// The arc around `c` from the nearer end of the arc (`start`, counter-clockwise by `sweep`) to
+/// angle `at`, and `over` past it; None when `at` lies on the arc.
+fn arc_extension(c: Vec2, r: f64, start: f64, sweep: f64, at: f64, over: f64) -> Option<Vec<Vec2>> {
+    if !(r > 0.0 && r.is_finite() && sweep.is_finite() && at.is_finite()) {
+        return None;
+    }
+    let ta = (at - start).rem_euclid(std::f64::consts::TAU);
+    if ta <= sweep + 1e-9 {
+        return None;
+    }
+    let past = over / r;
+    let (after_end, before_start) = (ta - sweep, std::f64::consts::TAU - ta);
+    Some(if after_end <= before_start { arc_pts(c, r, start + sweep, after_end + past) } else { arc_pts(c, r, at - past, before_start + past) })
 }
 
 /// The lines a linear dimension's two extension lines may start from (#1361), for its `p0` and
@@ -285,12 +305,21 @@ pub fn dim_layout_reaching(f: &DimFrame, text: Option<Vec2>, px: f64, half: Vec2
                 }
             }
         }
-        DimFrame::Radial { center, radius, diameter } => {
+        DimFrame::Radial { center, radius, diameter, arc } => {
             let t = text.unwrap_or_else(|| Vec2::new(1.0, 1.0) * ((radius + 18.0 * px) * std::f64::consts::FRAC_1_SQRT_2));
             let u = t.normalized().unwrap_or(Vec2::new(1.0, 1.0) * std::f64::consts::FRAC_1_SQRT_2);
             let d = t.len();
             let at = center + u * radius;
             out.text = center + t;
+            // An arrow past the ends of an arc points at the arc's extension (#3393).
+            if let Some((start, sweep)) = arc {
+                let tips: &[Vec2] = if diameter { &[u, -u] } else { &[u] };
+                for tip in tips {
+                    if let Some(ext) = arc_extension(center, radius, start, sweep, tip.angle(), over) {
+                        out.lines.push(ext);
+                    }
+                }
+            }
             let rim = half.x * u.x.abs() + half.y * u.y.abs() + gap;
             let from = if diameter { center - u * radius } else { center };
             if d > radius {
@@ -402,18 +431,52 @@ mod tests {
         let at = Vec2::new(7.0, 30.0);
         let enc = encode_text(&f, at);
         assert!(close(dim_layout(&f, Some(enc), 0.1, Vec2::ZERO).text, at));
-        let r = DimFrame::Radial { center: Vec2::new(5.0, 5.0), radius: 3.0, diameter: true };
+        let r = DimFrame::Radial { center: Vec2::new(5.0, 5.0), radius: 3.0, diameter: true, arc: None };
         assert!(close(dim_layout(&r, Some(encode_text(&r, at)), 0.1, Vec2::ZERO).text, at));
     }
 
     #[test]
     fn diameter_has_arrows_on_both_sides() {
-        let r = DimFrame::Radial { center: Vec2::ZERO, radius: 10.0, diameter: true };
+        let r = DimFrame::Radial { center: Vec2::ZERO, radius: 10.0, diameter: true, arc: None };
         let l = dim_layout(&r, Some(Vec2::new(20.0, 0.0)), 0.1, Vec2::new(2.0, 1.0));
         assert_eq!(l.arrows.len(), 2);
         assert!(close(l.arrows[0].0, Vec2::new(10.0, 0.0)) && close(l.arrows[1].0, Vec2::new(-10.0, 0.0)));
-        let r = DimFrame::Radial { center: Vec2::ZERO, radius: 10.0, diameter: false };
+        let r = DimFrame::Radial { center: Vec2::ZERO, radius: 10.0, diameter: false, arc: None };
         assert_eq!(dim_layout(&r, None, 0.1, Vec2::ZERO).arrows.len(), 1);
+    }
+
+    #[test]
+    fn an_arrow_past_the_end_of_an_arc_points_at_its_extension() {
+        // #3393: a quarter arc from 0° to 90°; a radius dimension dragged to 135° gets the arc
+        // continued from its 90° end round to the arrow, and a little past it.
+        let mut sk = Sketch::new();
+        let c = sk.add_arc(Vec2::ZERO, Vec2::new(10.0, 0.0), Vec2::new(0.0, 10.0), [None, None, None], None).unwrap_or(0);
+        let f =
+            dim_frame(&sk, &ConstraintKind::Radius { c, value: 10.0 }).unwrap_or(DimFrame::Linear { p0: Vec2::ZERO, p1: Vec2::ZERO, dir: Vec2::X });
+        let DimFrame::Radial { arc: Some((start, sweep)), .. } = f else { panic!("an arc's frame keeps its span: {f:?}") };
+        assert!(start.abs() < 1e-9 && (sweep - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+        let on_circle = |line: &Vec<Vec2>| line.len() > 2 && line.iter().all(|p| (p.len() - 10.0).abs() < 1e-9);
+        let lay = dim_layout(&f, Some(Vec2::from_angle(0.75 * std::f64::consts::PI) * 20.0), 0.1, Vec2::new(2.0, 1.0));
+        let ext: Vec<_> = lay.lines.iter().filter(|l| on_circle(l)).collect();
+        assert_eq!(ext.len(), 1, "{:?}", lay.lines);
+        let (first, last) = (ext[0][0], ext[0][ext[0].len() - 1]);
+        assert!(first.dist(Vec2::new(0.0, 10.0)) < 1e-9, "starts at the arc's end: {first:?}");
+        assert!((last.angle() - (0.75 * std::f64::consts::PI + 0.4 / 10.0)).abs() < 1e-9, "ends just past the arrow: {last:?}");
+        // Dragged before the start (at -45°) the extension runs from the arrow to the start.
+        let lay = dim_layout(&f, Some(Vec2::from_angle(-0.25 * std::f64::consts::PI) * 20.0), 0.1, Vec2::new(2.0, 1.0));
+        let ext: Vec<_> = lay.lines.iter().filter(|l| on_circle(l)).collect();
+        assert_eq!(ext.len(), 1);
+        assert!(ext[0][ext[0].len() - 1].dist(Vec2::new(10.0, 0.0)) < 1e-9);
+        // On the arc, or on a full circle, nothing is added.
+        let on_arc = dim_layout(&f, Some(Vec2::from_angle(0.25 * std::f64::consts::PI) * 20.0), 0.1, Vec2::new(2.0, 1.0));
+        assert!(!on_arc.lines.iter().any(on_circle));
+        let circle = DimFrame::Radial { center: Vec2::ZERO, radius: 10.0, diameter: false, arc: None };
+        assert!(!dim_layout(&circle, Some(Vec2::new(-20.0, 0.0)), 0.1, Vec2::ZERO).lines.iter().any(on_circle));
+        // A diameter of the arc extends towards both arrows.
+        let DimFrame::Radial { center, radius, arc, .. } = f else { return };
+        let dia = DimFrame::Radial { center, radius, diameter: true, arc };
+        let lay = dim_layout(&dia, Some(Vec2::from_angle(0.75 * std::f64::consts::PI) * 20.0), 0.1, Vec2::new(2.0, 1.0));
+        assert_eq!(lay.lines.iter().filter(|l| on_circle(l)).count(), 2);
     }
 
     #[test]
@@ -440,7 +503,7 @@ mod tests {
         let m = sk.add_line(Vec2::new(30.0, -80.0), Vec2::new(30.0, 90.0), None, None, None).unwrap_or(0);
         let p = sk.curves[m].kind.point_ids()[0];
         let k = ConstraintKind::PointLineDistance { p, l, value: 30.0 };
-        let f = dim_frame(&sk, &k).unwrap_or(DimFrame::Radial { center: Vec2::ZERO, radius: 1.0, diameter: false });
+        let f = dim_frame(&sk, &k).unwrap_or(DimFrame::Radial { center: Vec2::ZERO, radius: 1.0, diameter: false, arc: None });
         let reach = dim_reach(&sk, &k);
         assert!(reach[0].is_some() && reach[1].is_some());
         let extension_ys = |at: Vec2| -> Vec<(f64, f64)> {

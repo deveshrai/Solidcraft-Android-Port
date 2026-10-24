@@ -304,9 +304,23 @@ fn is_constant(id: &str) -> bool {
     CONSTANTS.contains(&id)
 }
 
+/// What kind of word the expression language reserves `name` as: `unit`, `constant` or
+/// `function` (None: free for a parameter).
+pub fn reserved_kind(name: &str) -> Option<&'static str> {
+    if unit(name).is_some() {
+        Some("unit")
+    } else if is_constant(name) {
+        Some("constant")
+    } else if FUNCTIONS.iter().any(|(f, _)| *f == name) {
+        Some("function")
+    } else {
+        None
+    }
+}
+
 /// Is this a name the expression language reserves (unit, constant or function)?
 pub fn is_reserved(name: &str) -> bool {
-    unit(name).is_some() || is_constant(name) || FUNCTIONS.iter().any(|(f, _)| *f == name)
+    reserved_kind(name).is_some()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -327,11 +341,22 @@ fn lex_spans(s: &str) -> Result<Vec<(Tok, usize, usize)>, DocError> {
     let mut out = Vec::new();
     // Parentheses open at this point: a comma outside them can only be a decimal comma.
     let mut depth = 0usize;
+    // A single leading `=` marks the text as a formula (`=d3`, #4681) and is not part of it.
+    if let Some(k) = cs.iter().position(|(_, c)| !c.is_whitespace())
+        && cs.get(k).is_some_and(|(_, c)| *c == '=')
+    {
+        i = k + 1;
+    }
     while let Some(&(_, c)) = cs.get(i) {
         if c.is_whitespace() {
             i += 1;
-        } else if c.is_ascii_digit() || c == '.' {
+        } else if c.is_ascii_digit() || c == '.' || leading_decimal_comma(&cs, i, depth, out.last()) {
             let st = i;
+            // A leading decimal comma (`,5` for 0,5, #2966) starts the number as `.5` would.
+            let leading_comma = c == ',';
+            if leading_comma {
+                i += 1;
+            }
             while cs.get(i).is_some_and(|(_, c)| c.is_ascii_digit() || *c == '.') {
                 i += 1;
             }
@@ -340,7 +365,7 @@ fn lex_spans(s: &str) -> Result<Vec<(Tok, usize, usize)>, DocError> {
             // them a comma separates a function's arguments: `max(1,2)`).
             let digit = |k: usize| cs.get(k).is_some_and(|(_, c)| c.is_ascii_digit());
             let has_point = cs.get(st..i).is_some_and(|ds| ds.iter().any(|(_, c)| *c == '.'));
-            if depth == 0 && !has_point && digit(i.wrapping_sub(1)) && cs.get(i).is_some_and(|(_, c)| *c == ',') && digit(i + 1) {
+            if depth == 0 && !leading_comma && !has_point && digit(i.wrapping_sub(1)) && cs.get(i).is_some_and(|(_, c)| *c == ',') && digit(i + 1) {
                 i += 1;
                 while digit(i) {
                     i += 1;
@@ -411,6 +436,22 @@ fn lex_spans(s: &str) -> Result<Vec<(Tok, usize, usize)>, DocError> {
         }
     }
     Ok(out)
+}
+
+/// Whether the comma at `i` starts a number, as a leading decimal comma (`,5` for 0,5, #2966).
+/// It must be outside parentheses (inside them a comma separates arguments, as for any decimal
+/// comma), be followed by a digit, and stand where an operand is expected: at the start or right
+/// after `+ - * / ^`. A comma after a number, name, `)` or `%` keeps its meaning (`2 ,5` and
+/// `1,5,3` stay errors).
+fn leading_decimal_comma(cs: &[(usize, char)], i: usize, depth: usize, prev: Option<&(Tok, usize, usize)>) -> bool {
+    depth == 0
+        && cs.get(i).is_some_and(|(_, c)| *c == ',')
+        && cs.get(i + 1).is_some_and(|(_, c)| c.is_ascii_digit())
+        && match prev {
+            None => true,
+            Some((Tok::Op(op), _, _)) => "+-*/^".contains(*op),
+            Some(_) => false,
+        }
 }
 
 /// The proper fraction of a mixed number whose whole part ends at `i`: spaces, digits, `/`,
@@ -512,6 +553,26 @@ pub fn is_literal(s: &str) -> bool {
 /// Is the expression a bare number without a unit, like `20` or `-1.5`?
 pub fn is_bare_number(s: &str) -> bool {
     is_literal(s) && s.trim().trim_start_matches(['-', '+']).trim().parse::<f64>().is_ok()
+}
+
+/// Is `s` shaped like a parameter name: a letter or `_`, then letters, digits and `_`? The shape
+/// only; whether the name is free or reserved is `Document::param_name_problem`'s business.
+fn is_name_shaped(s: &str) -> bool {
+    let mut cs = s.chars();
+    matches!(cs.next(), Some(c) if c.is_alphabetic() || c == '_') && cs.all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// A value typed as a definition, `name = expression`: the name and the text after the first
+/// `=`, both trimmed (the text may be empty). `None` for anything else, including text whose
+/// left side is not shaped like a name (`2 = 3`), which stays an ordinary expression and fails
+/// to parse as before. The dimension input defines a user parameter this way (#2916); other
+/// value inputs can take the same form later.
+pub fn definition(s: &str) -> Option<(&str, &str)> {
+    let (name, rhs) = s.split_once('=')?;
+    let name = name.trim();
+    let rhs = rhs.trim();
+    // `w == 3` is not a definition: a second `=` would read as a formula marker (#4681).
+    (is_name_shaped(name) && !rhs.starts_with('=')).then_some((name, rhs))
 }
 
 /// The length unit of a design with these units: `mm` unless they name another length unit.
@@ -991,9 +1052,22 @@ mod tests {
         assert_eq!(ev("max(1 mm, 3, 2)", Kind::Length).unwrap(), 3.0);
         assert_eq!(ev("(2,5)", Kind::Unitless).ok(), None, "a comma inside parentheses is not a decimal comma");
         // Not between two digits, or a second comma: still an error.
-        for bad in ["2,", ",5", "2 ,5", "2, 5", "1,5,3", "1.5,3"] {
+        for bad in ["2,", "2 ,5", "2, 5", "1,5,3", "1.5,3", ",5,3", ",5.3", "width ,5", "(1) ,5"] {
             assert!(ev(bad, Kind::Unitless).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_leading_decimal_comma_is_a_number() {
+        // #2966: `,5` is 0,5 where `.5` would be a number: at the start or after an operator.
+        assert_eq!(ev(",5", Kind::Unitless).unwrap(), 0.5);
+        assert_eq!(ev(",5 mm", Kind::Length).unwrap(), 0.5);
+        assert_eq!(ev("-,5", Kind::Unitless).unwrap(), -0.5);
+        assert_eq!(ev("2*,5", Kind::Unitless).unwrap(), 1.0);
+        assert_eq!(ev("width - ,25", Kind::Length).unwrap(), 39.75);
+        // Function arguments are still separated by commas.
+        assert_eq!(ev("max(1,5)", Kind::Unitless).unwrap(), 5.0);
+        assert_eq!(ev("max(,5; 2)", Kind::Unitless).ok(), None, "inside parentheses a comma is a separator");
     }
 
     #[test]
@@ -1169,5 +1243,48 @@ mod tests {
         assert!(!is_literal("d1") && !is_literal("2 * 3") && !is_literal("2 width"));
         assert!(is_bare_number(" -1.5 ") && is_bare_number("+2") && !is_bare_number("20 mm") && !is_bare_number("(2)"));
         assert_eq!((length_unit_or_mm(" in "), length_unit_or_mm("deg"), length_unit_or_mm("")), ("in", "mm", "mm"));
+    }
+
+    /// `name = expression` splits at the first `=` when the left side is shaped like a name; the
+    /// right side is any text, checked by whoever evaluates it.
+    #[test]
+    fn definitions_split_on_a_name_and_an_equals_sign() {
+        let splits = [
+            ("w = 20", "w", "20"),
+            ("w=20", "w", "20"),
+            ("  w  =  20 mm ", "w", "20 mm"),
+            ("w = (a + b) / 2", "w", "(a + b) / 2"),
+            ("w = 2 * (3 + sin(45 deg))", "w", "2 * (3 + sin(45 deg))"),
+            ("w = 1 in - 5.4 mm", "w", "1 in - 5.4 mm"),
+            ("_w1 = 1", "_w1", "1"),
+            ("szerokość = 20", "szerokość", "20"),
+            // Reserved names split too: the parameter check names the reason.
+            ("mm = 5", "mm", "5"),
+            ("w = a = 3", "w", "a = 3"),
+            // An empty expression is the caller's error to report.
+            ("w =", "w", ""),
+            ("w = ", "w", ""),
+        ];
+        for (text, name, rhs) in splits {
+            assert_eq!(definition(text), Some((name, rhs)), "{text:?}");
+        }
+        for text in ["20", "20 mm", "width / 2", "= 20", "=", "", "2w = 3", "a b = 3", "a-b = 3", "w.x = 3", "(w) = 3", "-w = 3", "w == 3"] {
+            assert_eq!(definition(text), None, "{text:?}");
+        }
+    }
+
+    /// A reserved name is refused by saying what kind of word it is.
+    #[test]
+    fn a_reserved_name_is_refused_by_its_kind() {
+        assert_eq!(
+            (reserved_kind("mm"), reserved_kind("deg"), reserved_kind("pi"), reserved_kind("sin"), reserved_kind("width")),
+            (Some("unit"), Some("unit"), Some("constant"), Some("function"), None)
+        );
+        let problem = |n: &str| crate::Document::param_name_problem(n).unwrap_or_default();
+        assert_eq!(problem("mm"), "`mm` is a unit name, so it cannot be a parameter name");
+        assert_eq!(problem("sin"), "`sin` is a function name, so it cannot be a parameter name");
+        assert_eq!(problem("pi"), "`pi` is a constant, so it cannot be a parameter name");
+        assert_eq!(crate::Document::param_name_problem("width"), None);
+        assert!(problem("2w").contains("not a valid parameter name"));
     }
 }

@@ -110,8 +110,7 @@
   }
  },
  {
-  "widget": "20 mm",
-  "near": "Spacing"
+  "click": {"handle": "dialog:Spacing"}
  },
  {
   "key": "A",

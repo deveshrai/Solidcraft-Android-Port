@@ -66,8 +66,8 @@ fn dimension_editor_names_and_reference_picks_drive_new_and_existing_dimensions(
     crate::dim_view::cancel();
 }
 
-#[test]
-fn single_clicking_another_dimension_does_not_change_the_expression() {
+/// Two dimensioned lines, editing `d2` with `typed` in its value field.
+fn editing_d2(typed: &str) -> Harness {
     let mut h = line([20., 0.]);
     h.app.run("sketch.dimension", json!({"entities":["l1"],"value":20,"text_at":[10,8]})).unwrap();
     h.app.run("sketch.line", json!({"points":[[0,-10],[12,-10]],"infer":false})).unwrap();
@@ -75,11 +75,79 @@ fn single_clicking_another_dimension_does_not_change_the_expression() {
     h.settle();
     crate::dim_view::edit_param(&h.app, "d2");
     h.frames(5);
-    type_value(&mut h, "8");
+    type_value(&mut h, typed);
+    h
+}
+
+/// Click `d1`, check the editor stays focused, then apply and return d2's expression.
+fn click_d1_and_apply(h: &mut Harness) -> String {
     h.step(&json!({"click":{"dimension":"d1"}})).unwrap();
-    assert!(crate::dim_view::editing());
+    assert!(crate::dim_view::editing(), "a reference click keeps the editor open");
+    h.frames(2);
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::new("sc_dim_edit")), "the value field keeps the keyboard");
     h.step(&json!({"key":"Enter"})).unwrap();
-    assert_eq!(h.app.session.doc.param("d2").unwrap().expr, "8");
+    assert!(!crate::dim_view::editing(), "{}", h.call("ui.inspect", json!({})));
+    let expr = h.app.session.doc.param("d2").unwrap().expr.clone();
+    crate::dim_view::cancel();
+    expr
+}
+
+#[test]
+fn clicking_another_dimension_appends_its_name_to_the_typed_text() {
+    for (typed, expected) in [("2 * ", "2 * d1"), ("10 + ", "10 + d1")] {
+        let mut h = editing_d2(typed);
+        assert_eq!(click_d1_and_apply(&mut h), expected, "typed {typed:?}");
+    }
+}
+
+#[test]
+fn clicking_another_dimension_replaces_a_lone_value() {
+    for typed in ["10", "10 mm", "-3.5"] {
+        let mut h = editing_d2(typed);
+        assert_eq!(click_d1_and_apply(&mut h), "d1", "typed {typed:?}");
+    }
+    // The cursor inside the number does not matter: the whole value goes.
+    let mut h = editing_d2("125");
+    h.step(&json!({"key":"Home"})).unwrap();
+    h.step(&json!({"key":"ArrowRight"})).unwrap();
+    assert_eq!(click_d1_and_apply(&mut h), "d1");
+}
+
+#[test]
+fn clicking_another_dimension_lets_typing_continue_after_its_name() {
+    let mut h = editing_d2("2 * ");
+    h.step(&json!({"click":{"dimension":"d1"}})).unwrap();
+    h.frames(2);
+    h.step(&json!({"text":" + 1"})).unwrap();
+    h.step(&json!({"key":"Enter"})).unwrap();
+    assert_eq!(h.app.session.doc.param("d2").unwrap().expr, "2 * d1 + 1");
+    crate::dim_view::cancel();
+}
+
+#[test]
+fn clicking_another_dimension_inserts_its_name_at_the_cursor() {
+    let mut h = editing_d2("( ) / 2");
+    h.step(&json!({"key":"Home"})).unwrap();
+    h.step(&json!({"key":"ArrowRight"})).unwrap();
+    h.step(&json!({"key":"ArrowRight"})).unwrap();
+    assert_eq!(click_d1_and_apply(&mut h), "( d1) / 2");
+}
+
+#[test]
+fn clicking_another_dimension_replaces_the_selected_text() {
+    let mut h = editing_d2("5 + 7");
+    h.step(&json!({"key":"ArrowLeft","shift":true})).unwrap();
+    assert_eq!(click_d1_and_apply(&mut h), "5 + d1");
+}
+
+#[test]
+fn double_clicking_another_dimension_inserts_its_name_once() {
+    let mut h = editing_d2("3 * ");
+    // Synthetic input feeds one pointer event per frame, so this is a click and, a frame
+    // later, a second click that egui reads as a double-click.
+    h.step(&json!({"click":{"dimension":"d1"},"double":true})).unwrap();
+    h.step(&json!({"key":"Enter"})).unwrap();
+    assert_eq!(h.app.session.doc.param("d2").unwrap().expr, "3 * d1");
     crate::dim_view::cancel();
 }
 
@@ -676,4 +744,74 @@ fn type_first_keeps_the_place_first_flow() {
     let new = added(&h, dims);
     assert!((new[0].kind.value().unwrap() - 21.).abs() < 1e-6);
     crate::dim_view::cancel();
+}
+
+/// Type-first, the text follows the pointer: moving it from across the picks (the distance
+/// between them) to above or beside them switches to the horizontal or vertical distance and
+/// back. Until something is typed the value follows the dimension, so the preview measures the
+/// picked points where they are (it neither moves nor scales them) and Enter keeps them there.
+#[test]
+fn type_first_switching_between_aligned_horizontal_and_vertical_keeps_the_picked_points() {
+    use solidcraft_engine::sketch::ConstraintKind as K;
+    let end = [12., 16.];
+    let mid = [6., 8.];
+    // Across from the picks, above them, beside them.
+    let (across, above, beside) = ([-5., 12.], [6., 25.], [-10., 1.]);
+    type Kind = fn(&K) -> bool;
+    let aligned: Kind = |k| matches!(k, K::Distance { .. } | K::Length { .. });
+    let horizontal: Kind = |k| matches!(k, K::DistanceX { .. });
+    let vertical: Kind = |k| matches!(k, K::DistanceY { .. });
+    let picks: [Vec<[f64; 2]>; 2] = [vec![[0., 0.], end], vec![mid]];
+    for picks in picks {
+        for (commit_at, commit_kind, commit_value) in [(above, horizontal, 12.), (beside, vertical, 16.), (across, aligned, 20.)] {
+            let mut h = sketch_with(&[("sketch.line", json!({"points":[[0,0],end],"infer":false}))], mid);
+            let undo = h.app.session.undo.len();
+            for p in &picks {
+                h.step(&json!({"click":{"world":[p[0],p[1],0]}})).unwrap();
+            }
+            assert_live(&h);
+            for (at, kind, value) in [
+                (across, aligned, 20.),
+                (above, horizontal, 12.),
+                (across, aligned, 20.),
+                (beside, vertical, 16.),
+                (commit_at, commit_kind, commit_value),
+            ] {
+                h.step(&json!({"move":{"world":[at[0],at[1],0]}})).unwrap();
+                h.settle();
+                let (expr, c, sk) = crate::dim_view::draft_preview().expect("the draft is open");
+                let ctx = format!("{picks:?} at {at:?}: {expr} {:?}", c.kind);
+                assert!(kind(&c.kind), "{ctx}");
+                assert!((c.kind.value().unwrap() - value).abs() < 1e-6, "{ctx}");
+                assert_eq!(expr, format!("{value} mm"), "{ctx}");
+                let a = sk.point(sk.resolve_point("l1.start").unwrap()).unwrap();
+                let b = sk.point(sk.resolve_point("l1.end").unwrap()).unwrap();
+                assert!(
+                    a.dist(solidcraft_engine::geom::Vec2::new(0., 0.)) < 1e-6 && b.dist(solidcraft_engine::geom::Vec2::new(end[0], end[1])) < 1e-6,
+                    "{ctx}: the preview moved the points to {a:?} {b:?}"
+                );
+            }
+            h.step(&json!({"key":"Enter"})).unwrap();
+            assert!(!crate::dim_view::editing());
+            assert_eq!(h.app.session.undo.len(), undo + 1);
+            let sk = solved(&h);
+            let a = sk.point(sk.resolve_point("l1.start").unwrap()).unwrap();
+            let b = sk.point(sk.resolve_point("l1.end").unwrap()).unwrap();
+            assert!(
+                a.dist(solidcraft_engine::geom::Vec2::new(0., 0.)) < 1e-6 && b.dist(solidcraft_engine::geom::Vec2::new(end[0], end[1])) < 1e-6,
+                "{picks:?} at {commit_at:?}: {a:?} {b:?}"
+            );
+            let new = added(&h, 0);
+            assert_eq!(new.len(), 1);
+            assert!(commit_kind(&new[0].kind), "{picks:?} at {commit_at:?}: {:?}", new[0].kind);
+            assert!((new[0].kind.value().unwrap() - commit_value).abs() < 1e-6, "{:?}", new[0].kind);
+            // The committed dimension's text is where the pointer left it, and its extension lines
+            // start at the picked points.
+            h.settle();
+            let shown = crate::dim_view::text_at(&new[0].id).expect("the new dimension is drawn");
+            let [x, y] = h.at(&json!({"world":[commit_at[0],commit_at[1],0]})).unwrap();
+            assert!(shown.distance(egui::pos2(x as f32, y as f32)) < 40.0, "{picks:?}: text at {shown:?}, cursor at {x},{y}");
+            crate::dim_view::cancel();
+        }
+    }
 }

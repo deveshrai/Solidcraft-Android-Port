@@ -105,7 +105,7 @@ fn lost_attachment_ghost_rebind_preview_cancel_apply_and_undo_preserve_sketch() 
     h.frames(4);
     h.step(&json!({"widget":"Reattach selected face"})).unwrap();
     h.frames(8);
-    h.step(&json!({"widget":"Apply"})).unwrap();
+    h.step(&json!({"widget":"OK"})).unwrap();
     assert!(h.app.tree.redefine.is_none(), "{:?}", h.app.tree.redefine_draft);
     assert_eq!(raw_sketch(&h, sketch), raw, "curves, dimensions and expressions remain exact");
     assert_eq!(h.app.session.undo.len(), undo + 1);
@@ -320,7 +320,7 @@ fn nested_anchor_saved_fixed_conversion_preserves_rotated_second_author_plane() 
     assert!(shown.x.dist(expected.x) < 1e-7 && shown.y.dist(expected.y) < 1e-7);
     assert_eq!(h.app.session.doc.to_json(), before);
     h.frames(6);
-    h.step(&json!({"widget":"Apply"})).unwrap();
+    h.step(&json!({"widget":"OK"})).unwrap();
     assert!(h.app.tree.redefine.is_none());
     assert_eq!(h.app.session.doc.sketch(id).unwrap(), &raw);
     assert_eq!(h.app.session.undo.len(), undo + 1);
@@ -369,4 +369,33 @@ fn picked_top_face_of_a_stacked_join_extrude_takes_a_sketch() {
         panic!("attachment must be healthy");
     };
     assert!((plane.origin.z - 20.).abs() < 1e-9);
+}
+
+#[test]
+fn plane_redefinition_uses_dense_card_and_keeps_command_preview_cancel_and_ok() {
+    use crate::scenario;
+    let mut h = Harness::new();
+    let sketch = h.app.run("sketch.create", json!({"plane":"XY"})).unwrap()["sketch"].as_u64().unwrap();
+    h.app.run("sketch.rectangle.two_point", json!({"p0":[10,10],"p1":[30,20]})).unwrap();
+    h.app.finish_sketch();
+    let before = h.app.session.doc.to_json();
+    for apply in [false, true] {
+        crate::browser::redefine_sketch(&mut h.app, sketch);
+        h.frames(5);
+        for rect in ["dialog:header", "dialog:hint:tool", "dialog:field:Plane", "dialog:footer"] {
+            assert!(scenario::rect_of(rect).is_some(), "{rect}");
+        }
+        assert_eq!(scenario::count_of("dialog:ok:enabled"), Some(0.0));
+        h.step(&json!({"widget":"Use XZ plane"})).unwrap();
+        h.frames(3);
+        assert_eq!(crate::sketch_attachment_ui::commands(&h.app).unwrap(), vec![("sketch.redefine".into(), json!({"sketch":sketch,"plane":"XZ"}))]);
+        assert_eq!(h.app.session.doc.to_json(), before, "candidate is scratch preview only");
+        h.step(&json!({"click":{"handle":if apply { "dialog:ok" } else { "dialog:cancel" }}})).unwrap();
+        assert!(h.app.tree.redefine.is_none());
+        if apply {
+            assert_ne!(h.app.session.doc.to_json(), before);
+            h.app.run("edit.undo", json!({})).unwrap();
+        }
+        assert_eq!(h.app.session.doc.to_json(), before);
+    }
 }

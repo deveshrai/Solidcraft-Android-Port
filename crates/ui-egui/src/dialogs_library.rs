@@ -1,8 +1,7 @@
 //! The first local appearance-library consumer, inside the existing Appearance panel.
 #[cfg(not(target_arch = "wasm32"))]
 use crate::dialogs_appearance::selected_params;
-use crate::{SolveApp, dialogs::row_label, dialogs_appearance::Ap, selection::SelInput, theme::Tokens};
-use egui::RichText;
+use crate::{SolveApp, dialogs_appearance::Ap, selection::SelInput, ui_kit};
 use serde_json::json;
 use solidcraft_engine::io::catalog::Catalog;
 #[cfg(not(target_arch = "wasm32"))]
@@ -104,17 +103,20 @@ fn load(app: &mut SolveApp, library: &mut LocalLibrary) -> Result<String, String
 }
 
 pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &[SelInput]) {
-    row_label(ui, "Local library");
-    ui.vertical(|ui| {
+    ui_kit::section(ui, "local_library", "Local library", true, |ui| {
         #[cfg(not(target_arch = "wasm32"))]
         import_rows(app, ui, k, inputs);
         #[cfg(target_arch = "wasm32")]
         {
             let _ = inputs;
-            ui.label("Open local libraries in the desktop app. You can export this design's library here.");
+            ui_kit::text(
+                ui,
+                crate::i18n::tr_label("Open local libraries in the desktop app. You can export this design's library here."),
+                ui_kit::Text::Note("library_platform"),
+            );
         }
-        ui.checkbox(&mut k.local.overwrite, crate::i18n::tr_label("Replace existing library file"));
-        let save = ui.button(crate::i18n::tr_label("Export design library..."));
+        ui_kit::checkbox(ui, crate::i18n::tr_label("Replace existing library file"), &mut k.local.overwrite);
+        let save = ui_kit::button(ui, crate::i18n::tr_label("Export design library..."), ui_kit::Button::Normal);
         crate::scenario::publish_handle("library:export", save.rect.center());
         if save.clicked() {
             if app.services.pick_save.is_some() {
@@ -123,28 +125,30 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &[SelInpu
                 export(app, k, k.local.path.clone(), k.local.overwrite);
             }
         }
-        ui.label(
-            RichText::new("Apply your appearance first. Exports assigned appearances and materials created in this design.")
-                .small()
-                .color(Tokens::get().text_dim),
+        ui_kit::text(
+            ui,
+            crate::i18n::tr_label("Apply your appearance first. Exports assigned appearances and materials created in this design."),
+            ui_kit::Text::Note("library_export"),
         );
     });
-    ui.end_row();
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn import_rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &[SelInput]) {
-    let path = ui.add(egui::TextEdit::singleline(&mut k.local.path).hint_text("Library file").desired_width(200.0));
+    let path = ui_kit::row(ui, "Library file", |ui| {
+        let id = ui.make_persistent_id("library_path");
+        ui_kit::cell_editor(ui, id, &mut k.local.path, "Library file", false)
+    });
     crate::scenario::publish_handle("library:path", path.rect.center());
     if path.changed() {
         k.local.catalog = None;
         k.local.selected = None;
     }
     ui.horizontal(|ui| {
-        if ui.button(crate::i18n::tr_label("Open library...")).clicked() {
+        if ui_kit::button(ui, crate::i18n::tr_label("Open library..."), ui_kit::Button::Normal).clicked() {
             open_library(app, k.local.token.clone());
         }
-        let load_button = ui.add_enabled(!k.local.path.is_empty(), egui::Button::new(crate::i18n::tr_label("Load library")));
+        let load_button = ui_kit::button(ui, "Load library", ui_kit::Button::Enabled(!k.local.path.is_empty()));
         crate::scenario::publish_handle("library:load", load_button.rect.center());
         if load_button.clicked() {
             k.local.catalog = None;
@@ -153,8 +157,11 @@ fn import_rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &[SelI
         }
     });
     if let Some(catalog) = &k.local.catalog {
-        ui.label(RichText::new(&catalog.name).strong());
-        let search = ui.add(egui::TextEdit::singleline(&mut k.local.search).hint_text("Search this library").desired_width(200.0));
+        ui_kit::text(ui, &catalog.name, ui_kit::Text::Report("library_name", false));
+        let search = ui_kit::row(ui, "Search this library", |ui| {
+            let id = ui.make_persistent_id("library_search");
+            ui_kit::search_field(ui, id, &mut k.local.search, "Search this library")
+        });
         crate::scenario::publish_handle("library:search", search.rect.center());
         if search.changed() {
             k.local.selected = None;
@@ -166,30 +173,38 @@ fn import_rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &[SelI
             .filter(|entry| matches!(&entry.definition, Definition::Appearance(_)) && entry.definition.name().to_lowercase().contains(&query))
             .collect();
         if appearances.is_empty() {
-            ui.label("No matching appearance presets.");
+            ui_kit::text(ui, crate::i18n::tr_label("No matching appearance presets."), ui_kit::Text::Note("library_empty"));
         }
-        let row_height = ui.spacing().interact_size.y;
-        egui::ScrollArea::vertical().id_salt("local_library_entries").max_height(120.0).show_rows(ui, row_height, appearances.len(), |ui, range| {
-            for index in range {
-                let Some(entry) = appearances.get(index) else { continue };
-                if let Definition::Appearance(look) = &entry.definition {
-                    ui.horizontal(|ui| {
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                        let [r, g, b] = look.color;
-                        ui.colored_label(egui::Color32::from_rgb(r, g, b), "■");
-                        let button = ui.selectable_label(k.local.selected.as_deref() == Some(entry.id.as_str()), &look.name).on_hover_text(format!(
-                            "Opacity {:.0}% · {} · {}",
-                            look.opacity * 100.0,
-                            entry.provenance.license,
-                            entry.provenance.source_url.as_deref().unwrap_or("Local definition")
-                        ));
-                        crate::scenario::publish_handle(&format!("library:entry:{index}"), button.rect.center());
-                        if button.clicked() {
-                            k.local.selected = Some(entry.id.clone());
+        let row_height = ui_kit::row_height();
+        ui_kit::list_frame(ui, "local_library_entries", |ui| {
+            egui::ScrollArea::vertical().id_salt("local_library_entries").max_height(row_height * 5.0).show_rows(
+                ui,
+                row_height,
+                appearances.len(),
+                |ui, range| {
+                    for index in range {
+                        let Some(entry) = appearances.get(index) else { continue };
+                        if let Definition::Appearance(look) = &entry.definition {
+                            ui.horizontal(|ui| {
+                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                                let [r, g, b] = look.color;
+                                ui_kit::color_thumbnail(ui, ui.id().with((&entry.id, "sample")), egui::Color32::from_rgb(r, g, b), &look.name, ());
+                                let button = ui_kit::list_picker(ui, &entry.id, &look.name, k.local.selected.as_deref() == Some(entry.id.as_str()))
+                                    .on_hover_text(format!(
+                                        "Opacity {:.0}% · {} · {}",
+                                        look.opacity * 100.0,
+                                        entry.provenance.license,
+                                        entry.provenance.source_url.as_deref().unwrap_or("Local definition")
+                                    ));
+                                crate::scenario::publish_handle(&format!("library:entry:{index}"), button.rect.center());
+                                if button.clicked() {
+                                    k.local.selected = Some(entry.id.clone());
+                                }
+                            });
                         }
-                    });
-                }
-            }
+                    }
+                },
+            );
         });
     }
     let entry = k
@@ -205,7 +220,7 @@ fn import_rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &[SelI
         .cloned();
     let picked = inputs.first().map(|input| input.items.as_slice()).unwrap_or(&[]);
     let selected = selected_params(k, picked);
-    let apply = ui.add_enabled(entry.is_some() && selected.is_some(), egui::Button::new(crate::i18n::tr_label("Apply library appearance")));
+    let apply = ui_kit::button(ui, "Apply library appearance", ui_kit::Button::Enabled(entry.is_some() && selected.is_some()));
     crate::scenario::publish_handle("library:apply", apply.rect.center());
     if apply.clicked()
         && let (Some(entry), Some(selected)) = (entry, selected)

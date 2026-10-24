@@ -1434,6 +1434,17 @@ fn mesh_bodies_move_measure_and_refuse_solid_ops() {
     assert!((measure(&moved).unwrap().volume - 1000.0).abs() < 1e-9);
     let mirrored = crate::transform_matrix(&b, [[-1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]).unwrap();
     assert!((measure(&mirrored).unwrap().volume - 1000.0).abs() < 1e-9);
+    // Their size (the diagonal of the box around them) is measured once, when made: a large
+    // scan's size is asked for every frame.
+    for body in [&b, &moved, &mirrored] {
+        assert!(body.size > 0.0, "measured when made");
+        let walked = body.mesh.as_ref().unwrap().positions.iter().fold(solidcraft_geom::Aabb3::EMPTY, |mut a, p| {
+            a.add(*p);
+            a
+        });
+        assert!((body.size() - walked.diagonal()).abs() < 1e-9, "{} vs {}", body.size(), walked.diagonal());
+    }
+    assert!((b.size() - 300.0f64.sqrt()).abs() < 1e-9);
     let solid = box_solid(Vec3::ZERO, Vec3::new(5.0, 5.0, 5.0)).unwrap();
     assert!(fillet(&b, &[Vec3::new(5.0, 0.0, 0.0)], 1.0).unwrap_err().to_string().contains("mesh"));
     assert!(boolean(&solid, &b, BoolOp::Union).is_err());
@@ -2964,6 +2975,53 @@ fn loft_pairs_the_vertices_of_matching_non_convex_sections() {
     assert!(m.centroid.x.abs() < 0.05, "centre of mass x {}", m.centroid.x);
 }
 
+/// #2570: a circle lofted to a C-shaped outline. Seen from its centroid the C's vertices turn
+/// back on themselves; the circle was still split at those directions, forced to increase by
+/// whole turns, so it wound round several times (a closing arc of negative sweep), the walls
+/// crossed and the mesh grew huge. The circle is now split once round, in both section orders
+/// and from a plane facing the other way.
+#[test]
+fn loft_circle_to_non_star_profile_splits_circle_once() {
+    let c = Loop2::polygon(&[
+        Vec2::new(0.0, 0.0),
+        Vec2::new(30.0, 0.0),
+        Vec2::new(30.0, 8.0),
+        Vec2::new(8.0, 8.0),
+        Vec2::new(8.0, 22.0),
+        Vec2::new(30.0, 22.0),
+        Vec2::new(30.0, 30.0),
+        Vec2::new(0.0, 30.0),
+    ]);
+    let circle = (Plane::XY, Loop2::circle(Vec2::ZERO, 20.0));
+    let up = (Plane::XY.offset(48.0), c.clone());
+    let down = (Plane::new(Vec3::new(0.0, 0.0, 48.0), Vec3::Y, Vec3::X).unwrap(), c);
+    for secs in [vec![circle.clone(), up.clone()], vec![up, circle.clone()], vec![circle, down]] {
+        let numbered: Vec<(Plane, crate::numbered::NumberedLoop)> =
+            secs.iter().map(|(p, _)| *p).zip(crate::numbered::number_loops(secs.iter().map(|(_, l)| l))).collect();
+        for reversed in [false, true] {
+            let loops = crate::build::loft_section_loops(&numbered, reversed).unwrap();
+            let arcs: Vec<f64> = loops
+                .iter()
+                .flat_map(|(_, r)| r.lp.segs.iter())
+                .filter_map(|s| match s {
+                    Seg2::Arc { sweep, .. } => Some(*sweep),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(arcs.len(), 8, "{arcs:?}");
+            assert!(arcs.iter().all(|w| w.is_finite() && w.abs() > 1e-9), "{arcs:?}");
+            // One way round: every arc the same way, one turn in all.
+            assert!(arcs.iter().all(|w| w.signum() == arcs[0].signum()), "{arcs:?}");
+            let total: f64 = arcs.iter().sum();
+            assert!((total.abs() - std::f64::consts::TAU).abs() < 1e-9, "{total} {arcs:?}");
+        }
+        let body = loft(&secs).unwrap();
+        assert!(measure(&body).unwrap().volume > 0.0);
+        let mesh = body.tessellate(0.05).unwrap();
+        assert!(mesh.triangles.len() < 4000, "{} triangles", mesh.triangles.len());
+    }
+}
+
 /// Two cylinders crossing at right angles need the kernel's own intersection: with no tries
 /// left the boolean fails at once, a budget inside another uses the outer one's up, and none
 /// lingers after.
@@ -2979,4 +3037,129 @@ fn an_attempt_budget_stops_the_boolean_and_is_shared_by_nesting() {
     });
     assert!(inner && !after);
     assert!(boolean(&a, &b, BoolOp::Intersect).unwrap().is_some());
+}
+
+/// #2847: identical elliptic spline sections (3 x 5 mm, 30 mm off the Z axis) on planes turning
+/// about Z in 10 degree steps. The start vertex was matched by projecting the lead section's
+/// vertex directions onto each plane, which squeezes them as the plane turns (and flips them past
+/// 90 degrees), so the sections were paired round the wrong way and the loft folded (6 % of
+/// Pappus' volume at 180 degrees). The volume follows Pappus: area x 30 mm x angle.
+#[test]
+fn loft_through_identical_sections_turning_about_an_axis_keeps_its_volume() {
+    let pts: Vec<Vec2> = (0..12).map(|a| Vec2::new(30.0 + 3.0 * (a as f64 * PI / 6.0).cos(), 5.0 * (a as f64 * PI / 6.0).sin())).collect();
+    // Periodic Catmull-Rom through the points, as cubic Beziers.
+    let segs: Vec<Seg2> = (0..12)
+        .map(|i| {
+            let p = |k: usize| pts[(i + k + 11) % 12];
+            let (p0, p1, p2, p3) = (p(0), p(1), p(2), p(3));
+            Seg2::Cubic { p0: p1, p1: p1 + (p2 - p0) * (1.0 / 6.0), p2: p2 - (p3 - p1) * (1.0 / 6.0), p3: p2 }
+        })
+        .collect();
+    let section = Loop2 { segs };
+    let area = section.signed_area().abs();
+    for span in [90, 120, 180] {
+        let secs: Vec<(Plane, Loop2)> = (0..=span / 10)
+            .map(|i| {
+                let t = (i as f64 * 10.0).to_radians();
+                (Plane { origin: Vec3::ZERO, x: Vec3::new(t.cos(), t.sin(), 0.0), y: Vec3::Z }, section.clone())
+            })
+            .collect();
+        let want = area * 30.0 * (span as f64).to_radians();
+        let m = measure(&loft(&secs).unwrap()).unwrap();
+        assert!(rel(m.volume, want) < 0.03, "{span} degrees: volume {} vs Pappus {want}", m.volume);
+    }
+}
+
+/// Moving an assembly places every body of it again: a copy placed for showing keeps its
+/// revolved faces where its source turned them, so placing searches none of them again (that search was most
+/// of the time an occurrence move took on a large assembly, #3044), and the copy is the same
+/// solid as placing a freshly turned one.
+#[test]
+fn placing_a_body_does_not_turn_its_revolved_faces_again() {
+    let body = cylinder(Vec3::new(1.0, 2.0, 0.0), Vec3::Z, 3.0, 5.0).unwrap();
+    assert!(body.phased);
+    let m = [[0.0, 1.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [10.0, 20.0, 30.0, 1.0]];
+    crate::body::REPHASED.with(|c| c.set(0));
+    let mut placed = body.clone();
+    for _ in 0..10 {
+        placed = crate::place_matrix(&placed, m).unwrap();
+    }
+    assert_eq!(crate::body::REPHASED.with(|c| c.get()), 0, "no placement searched the revolved faces again");
+    // A modelling move (a pattern's copy, a hole's tool) still turns them in its own frame.
+    let _ = crate::transform_matrix(&body, m).unwrap();
+    assert_eq!(crate::body::REPHASED.with(|c| c.get()), 1);
+    crate::body::REPHASED.with(|c| c.set(0));
+    assert!(placed.phased);
+    let unphased = Body { phased: false, ..body.clone() };
+    let mut turned = unphased;
+    for _ in 0..10 {
+        turned = crate::place_matrix(&turned, m).unwrap();
+    }
+    assert!(crate::body::REPHASED.with(|c| c.get()) > 0, "a body not known to be turned still is");
+    let (a, b) = (measure(&placed).unwrap(), measure(&turned).unwrap());
+    assert!((a.volume - b.volume).abs() < 1e-9 * a.volume && (a.area - b.area).abs() < 1e-9 * a.area);
+    assert_eq!(a.faces, b.faces);
+    assert!(a.bbox.min.dist(b.bbox.min) < 1e-9 && a.bbox.max.dist(b.bbox.max) < 1e-9);
+}
+
+/// A plate 3 m long and 2 mm thick with ten holes of radius `r` along a diagonal, turned by
+/// `tilt` about the X axis and read back from STEP (each rim is then two half circles).
+fn long_plate_with_small_holes(r: f64, tilt: f64) -> (Body, Vec<Vec3>) {
+    let mut p = box_solid(Vec3::new(-1500.0, -150.0, 0.0), Vec3::new(1500.0, 150.0, 2.0)).unwrap();
+    let centres: Vec<Vec3> = (0..10).map(|i| Vec3::new(-1259.3 + 271.3 * i as f64, -120.0 + 27.7 * i as f64, 0.0)).collect();
+    for &c in &centres {
+        let tool = cylinder(c - Vec3::Z, Vec3::Z, r, 4.0).unwrap();
+        p = boolean(&p, &tool, BoolOp::Cut).unwrap().unwrap();
+    }
+    let shift = Vec3::new(0.0, 300.0, 300.0);
+    let p = transform(&p, shift, Vec3::ZERO, Vec3::X, tilt).unwrap();
+    let text = step_export(&[&p], "plate").unwrap();
+    let p = step_import(&text).unwrap().bodies.remove(0).body;
+    let (s, c) = tilt.sin_cos();
+    let placed = centres.iter().map(|q| Vec3::new(q.x, q.y * c - q.z * s, q.y * s + q.z * c) + shift).collect();
+    (p, placed)
+}
+
+/// A small hole in a face of a large body, divided by a boolean. The boolean's tolerance follows
+/// the larger body (a few millimetres on a part a few metres long), so each half circle of the
+/// hole's rim was a single chord; the rim's polygon in the face's parameters had no area, and its
+/// sign, which tells a hole from a face piece, came out at random. The hole then became a face of
+/// its own, inside out, and the face it was cut in was left whole: a box cut round such a hole
+/// gave a piece without it, and the shared part of that piece and a pin in the hole came out
+/// negative or not at all.
+#[test]
+fn a_box_cut_round_a_small_hole_of_a_long_plate_keeps_the_hole() {
+    for (r, tilt) in [(1.8, 0.27), (1.8, 0.7)] {
+        let (p, centres) = long_plate_with_small_holes(r, tilt);
+        for q in centres {
+            let g = Vec3::new(8.0, 8.0, 8.0);
+            let cut = box_solid(q - g, q + g).unwrap();
+            let piece = boolean(&p, &cut, BoolOp::Intersect).unwrap().unwrap();
+            let walls = (0..piece.face_count()).filter(|&i| matches!(face_surface(&piece, i), Some(FaceSurface::Cylinder { .. }))).count();
+            // Both faces of the plate in the box keep the hole: an outer loop and the rim.
+            let holed = piece.solid.face_iter().filter(|f| f.boundaries().len() == 2).count();
+            assert!(walls >= 1 && holed == 2, "r {r}, tilt {tilt}, hole at {q:?}: {walls} walls, {holed} faces with a hole");
+            assert!(measure(&piece).unwrap().volume > 0.0, "r {r}, tilt {tilt}, hole at {q:?}");
+        }
+    }
+}
+
+/// A transform with a perspective term or a singular linear part is refused: placed into the
+/// body, it built a revolved ring whose mesh measured hundreds of millions of mm³, and cutting
+/// a pocket into it ran for over half an hour before failing. A translation still places it.
+#[test]
+fn transform_refuses_a_matrix_that_is_not_an_affine_placement() {
+    let rect = Loop2::polygon(&[Vec2::new(20.0, 0.0), Vec2::new(60.0, 0.0), Vec2::new(60.0, 10.0), Vec2::new(20.0, 10.0)]);
+    let ring = revolve(&Plane::XZ, &[Region2 { outer: rect, holes: vec![] }], Vec2::ZERO, Vec2::Y, std::f64::consts::TAU).unwrap().remove(0);
+    // Column-major: the last entry of the third column is a perspective term.
+    let perspective = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 10.0], [0.0, 0.0, 0.0, 1.0]];
+    let flat = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    for m in [perspective, flat] {
+        assert!(matches!(crate::transform_matrix(&ring, m), Err(KernelError::Invalid(_))), "{m:?}");
+    }
+    let lifted = crate::transform_matrix(&ring, [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 10.0, 1.0]]).unwrap();
+    let pocket = box_solid(Vec3::new(37.0, -3.0, 7.0), Vec3::new(43.0, 3.0, 12.0)).unwrap();
+    let cut = boolean(&lifted, &pocket, BoolOp::Cut).unwrap().unwrap();
+    let removed = measure(&lifted).unwrap().volume - measure(&cut).unwrap().volume;
+    assert!((removed - 6.0 * 6.0 * 3.0).abs() < 1.0, "{removed}");
 }

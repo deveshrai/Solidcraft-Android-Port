@@ -17,6 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
+use solidcraft_geom::Vec3;
 use solidcraft_kernel::history::{FaceOrigin, FaceProv, History};
 
 use crate::ModelBody;
@@ -44,13 +45,14 @@ pub(crate) struct FaceInfo {
 
 impl Names {
     /// Names worked out from geometry: the same names, none of them verified, pieces told apart
-    /// by the faces around them (`adjacent`: pairs of faces sharing an edge).
-    pub(crate) fn unverified(names: Vec<String>, adjacent: &[(usize, usize)]) -> Names {
+    /// by the faces around them (`adjacent`: pairs of faces sharing an edge), then numbered by
+    /// place (`centres`, see [`qualify_at`]).
+    pub(crate) fn unverified(names: Vec<String>, adjacent: &[(usize, usize)], centres: Option<&dyn Fn() -> Vec<Vec3>>) -> Names {
         let named = names
             .into_iter()
             .map(|name| Named { name: crate::naming::strip_piece(&name).to_string(), aliases: Vec::new(), verified: false, origins: None })
             .collect();
-        qualify(named, adjacent)
+        qualify_at(named, adjacent, centres)
     }
 
     /// Names given as they are (a moved copy keeps its source's), taken as exact.
@@ -95,7 +97,8 @@ pub(crate) fn derive(b: &ModelBody, o: &NamingOrigin, lineage: &Lineage) -> Opti
         }
     }
     let named: Vec<Named> = named.into_iter().collect::<Option<_>>()?;
-    Some(qualify(named, &adjacency(h)))
+    let centres = || crate::naming::face_centres(b);
+    Some(qualify_at(named, &adjacency(h), by_place(&o.feature, &centres)))
 }
 
 /// Pairs of faces that share an edge, from a history.
@@ -140,7 +143,8 @@ impl<'a> OperandNames<'a> {
                     .get_or_init(|| {
                         Arc::new(derive(body, o, &stage.lineage).unwrap_or_else(|| {
                             let names = crate::naming::geometric_names(body, o, body.body.face_count());
-                            Names::unverified(names, &crate::naming::mesh_adjacency(body))
+                            let centres = || crate::naming::face_centres(body);
+                            Names::unverified(names, &crate::naming::mesh_adjacency(body), by_place(&o.feature, &centres))
                         }))
                     })
                     .clone();
@@ -266,7 +270,32 @@ pub(crate) fn descends(name: &str, stem: &str) -> bool {
 
 /// Tell pieces apart: faces sharing a name are named by the faces around them that the others
 /// lack (`adjacent`: pairs of faces sharing an edge).
+#[cfg(test)]
 fn qualify(named: Vec<Named>, adjacent: &[(usize, usize)]) -> Names {
+    qualify_at(named, adjacent, None)
+}
+
+/// How the pieces `f` splits a face into are numbered: by place (`centres`), else, for a feature
+/// saved before that (`Feature::kernel_piece_order`), as the build that saved it numbered them.
+pub(crate) fn by_place<'a>(f: &crate::Feature, centres: &'a dyn Fn() -> Vec<Vec3>) -> Option<&'a dyn Fn() -> Vec<Vec3>> {
+    (!f.kernel_piece_order).then_some(centres)
+}
+
+/// [`qualify`], with `centres` giving each face's centre (worked out only when pieces tie): pieces
+/// that nothing else tells apart are numbered along their spread, not in the kernel's order,
+/// which can differ from one evaluation to the next (#3902). Without `centres`, in the kernel's
+/// order and by the faces they came from, as builds before that numbered them.
+fn qualify_at(named: Vec<Named>, adjacent: &[(usize, usize)], centres: Option<&dyn Fn() -> Vec<Vec3>>) -> Names {
+    let by_place = centres.is_some();
+    let worked_out = std::cell::OnceCell::new();
+    // Tied pieces in the order of their spread; as they are when there are no centres.
+    let in_order = |tied: Vec<usize>| -> Vec<usize> {
+        let at: &Vec<Vec3> = worked_out.get_or_init(|| centres.map(|c| c()).unwrap_or_default());
+        if at.len() != named.len() {
+            return tied;
+        }
+        crate::naming::along_spread(tied.into_iter().filter_map(|i| Some((i, *at.get(i)?))).collect())
+    };
     let n = named.len();
     let mut bounds: Vec<BTreeSet<String>> = vec![BTreeSet::new(); n];
     for &(a, b) in adjacent {
@@ -320,8 +349,20 @@ fn qualify(named: Vec<Named>, adjacent: &[(usize, usize)]) -> Names {
             let mut tied = tied;
             let origins: Vec<Option<&Vec<FaceOrigin>>> = tied.iter().map(|i| named.get(*i).and_then(|x| x.origins.as_ref())).collect();
             let distinct = origins.iter().all(Option::is_some) && origins.iter().collect::<BTreeSet<_>>().len() == origins.len();
-            if distinct {
+            if distinct && !by_place {
                 tied.sort_by_key(|i| named.get(*i).and_then(|x| x.origins.clone()));
+            } else if distinct {
+                // By what they came from, but not by where it stood in its operand's face order:
+                // an operand that came out of a boolean can list its faces in another order on
+                // the next evaluation (#3902). Pieces of faces of one kind are numbered by place.
+                let mut by_kind: BTreeMap<Vec<FaceOrigin>, Vec<usize>> = BTreeMap::new();
+                for i in tied {
+                    let kind = named.get(i).and_then(|x| x.origins.as_deref()).unwrap_or_default().iter().map(|o| without_index(*o)).collect();
+                    by_kind.entry(kind).or_default().push(i);
+                }
+                tied = by_kind.into_values().flat_map(&in_order).collect();
+            } else {
+                tied = in_order(tied);
             }
             for (k, i) in tied.iter().enumerate() {
                 if let Some(slot) = names.get_mut(*i) {
@@ -333,17 +374,17 @@ fn qualify(named: Vec<Named>, adjacent: &[(usize, usize)]) -> Names {
             }
         }
     }
-    // A piece's new name can meet a face that already had it: numbered too, never shared.
-    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
-    for name in &names {
-        *seen.entry(name.clone()).or_default() += 1;
+    // A piece's new name can meet a face that already had it: numbered too (along their spread),
+    // never shared.
+    let mut seen: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, name) in names.iter().enumerate() {
+        seen.entry(name.clone()).or_default().push(i);
     }
-    let mut counter: BTreeMap<String, usize> = BTreeMap::new();
-    for (i, name) in names.iter_mut().enumerate() {
-        if seen.get(name.as_str()).is_some_and(|c| *c > 1) {
-            let k = counter.entry(name.clone()).or_default();
-            *k += 1;
-            *name = format!("{name}#{k}");
+    for (name, same) in seen.into_iter().filter(|(_, same)| same.len() > 1) {
+        for (k, i) in in_order(same).into_iter().enumerate() {
+            if let Some(slot) = names.get_mut(i) {
+                *slot = format!("{name}#{}", k + 1);
+            }
             if let Some(v) = verified.get_mut(i) {
                 *v = false;
             }
@@ -351,6 +392,17 @@ fn qualify(named: Vec<Named>, adjacent: &[(usize, usize)]) -> Names {
     }
     let info = named.into_iter().zip(bounds).zip(verified).map(|((x, bounds), verified)| FaceInfo { aliases: x.aliases, bounds, verified }).collect();
     Names { faces: Arc::new(names), info }
+}
+
+/// `origin` with the face or edge it names left out (its kind and operand kept).
+fn without_index(origin: FaceOrigin) -> FaceOrigin {
+    match origin {
+        FaceOrigin::Face { operand, .. } => FaceOrigin::Face { operand, face: 0 },
+        FaceOrigin::Edge { operand, .. } => FaceOrigin::Edge { operand, edge: 0 },
+        FaceOrigin::Offset { operand, .. } => FaceOrigin::Offset { operand, face: 0 },
+        // A profile's segments come in the sketch's order.
+        FaceOrigin::Profile { .. } | FaceOrigin::Cap { .. } => origin,
+    }
 }
 
 /// How a stored face name matches a current face.

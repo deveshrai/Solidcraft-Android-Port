@@ -11,7 +11,7 @@ An assembly is components placed by joints. Work the mechanism out as world poin
 Written against SolidCraft `main` after 0.11.1, which counts the degrees of freedom of closed loops, carries motion links through chains made in any order, and answers drives in degrees with `moved` (and a `reason` when nothing could move).
 
 ## Before the first call
-1. Read `reference.md`.
+1. In SolidCraft's own chat or any MCP client, call `skill_reference {"skill":"solidcraft-mechanisms"}`. Elsewhere, read `reference.md`.
 2. **Open:** if the design is not open yet, run `open {path}`. When the server is bridged to the app and the current design is `dirty`, ask before opening anything.
 3. **Map it:** run `inspect_design {"measure":false,"sketches":false}`, then `execute joint.list`. `joint.list` shows `fixed` (the grounded occurrences, always with the root, 0), `dof` per occurrence, `conflicts`, the joints, links and named origins, at about 0.5 KB per joint. `execute motion.list` lists the motion studies.
 4. **Existing design:** take `edit.checkpoint` in its own call before you move bodies into components. `edit.restore_checkpoint {checkpoint}` goes back exactly.

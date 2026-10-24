@@ -12,9 +12,9 @@ use solidcraft_engine::doc::joints::JointKind;
 
 use super::{ROUND, joint_row, occurrence, pick, picked_radius, trim, turn};
 use crate::SolveApp;
-use crate::dialogs::{check, combo, field, row_label};
+use crate::dialogs::{combo, field, form_row};
 use crate::dialogs_assembly::Asm;
-use crate::selection::{EDGES, FACES, PROFILES, SelInput, VERTICES};
+use crate::selection::{EDGES, FACES, PROFILES, SelInput, SelectionExt as _, VERTICES};
 use crate::theme::Tokens;
 
 /// The follower types, as `joint.cam` takes them, and their labels.
@@ -85,9 +85,9 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, f: &mut CamForm, inputs: &[Se
     let s = &app.session;
     let (cams, followers) = (joints_of(s, &[JointKind::Revolute]), joints_of(s, &[JointKind::Slider, JointKind::Revolute]));
     if cams.is_empty() || followers.len() < 2 && followers.iter().all(|j| cams.iter().any(|c| c.0 == j.0)) {
-        row_label(ui, "");
-        ui.label(RichText::new(crate::i18n::tr_label("needs a joint that turns and one that slides or swings")).color(t.text_dim));
-        ui.end_row();
+        form_row(ui, "", |ui| {
+            ui.label(RichText::new(crate::i18n::tr_label("needs a joint that turns and one that slides or swings")).color(t.text_dim));
+        });
         return false;
     }
     // A profile picked on a part chooses the joint that part turns on, once.
@@ -107,13 +107,12 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, f: &mut CamForm, inputs: &[Se
     let mut enter = false;
     joint_row(ui, "Cam", "cam_a", &cams, &mut f.a);
     joint_row(ui, "Follower", "cam_b", &followers, &mut f.b);
-    row_label(ui, "Type");
-    let labels: Vec<&str> = FOLLOWER_LABELS.iter().map(|l| crate::i18n::tr_label(l)).collect();
-    combo(ui, "cam_follower", &labels, &mut f.follower);
-    ui.end_row();
+    form_row(ui, "Type", |ui| {
+        let labels: Vec<&str> = FOLLOWER_LABELS.iter().map(|l| crate::i18n::tr_label(l)).collect();
+        combo(ui, "cam_follower", &labels, &mut f.follower);
+    });
     if FOLLOWERS.get(f.follower) == Some(&"roller") {
-        row_label(ui, "Radius");
-        match (pick(inputs, ROLLER), picked_radius(s, inputs, ROLLER)) {
+        form_row(ui, "Radius", |ui| match (pick(inputs, ROLLER), picked_radius(s, inputs, ROLLER)) {
             (_, Some(r)) => {
                 ui.label(format!("{} mm  ({})", trim(r), crate::i18n::tr_label("picked")));
             }
@@ -121,20 +120,18 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, f: &mut CamForm, inputs: &[Se
                 ui.label(RichText::new(crate::i18n::tr_label("not a round face")).color(t.warning));
             }
             (None, None) => enter |= field(ui, &mut f.radius),
+        });
+    }
+    crate::ui_kit::options(ui, "cam_options", &mut [("Other side", &mut f.flip)]);
+    form_row(ui, "Animate", |ui| {
+        let label = if f.animate { "■ Stop" } else { "▶ Play" };
+        let r = crate::ui_kit::button(ui, label, crate::ui_kit::Button::Normal)
+            .on_hover_text(crate::i18n::tr_label("Play the joint's motion in the view"));
+        crate::scenario::publish_handle("dialog:Animate", r.rect.center());
+        if r.clicked() {
+            f.animate = !f.animate;
         }
-        ui.end_row();
-    }
-    row_label(ui, "Other side");
-    check(ui, &mut f.flip);
-    ui.end_row();
-    row_label(ui, "Animate");
-    let label = if f.animate { "■ Stop" } else { "▶ Play" };
-    let r = ui.button(label).on_hover_text(crate::i18n::tr_label("Play the joint's motion in the view"));
-    crate::scenario::publish_handle("dialog:Animate", r.rect.center());
-    if r.clicked() {
-        f.animate = !f.animate;
-    }
-    ui.end_row();
+    });
     if f.animate {
         let now = ui.input(|i| i.time);
         // 72 steps over 6 s: each one a preview.
@@ -155,8 +152,7 @@ pub fn commands(app: &SolveApp, f: &CamForm, inputs: &[SelInput]) -> Result<Vec<
     let profile = match items.first() {
         Some(Sel::Profile { sketch, index }) => json!({"sketch": sketch, "index": index}),
         Some(Sel::Edge { body, .. }) => {
-            let pts: Vec<Value> =
-                items.iter().filter_map(|x| if let Sel::Edge { point, .. } = x { Some(json!([point.x, point.y, point.z])) } else { None }).collect();
+            let pts: Vec<Value> = items.edge_points().into_iter().map(crate::selection::point_value).collect();
             let mut p = json!({ "edges": pts });
             if let Some(o) = occurrence(s, body) {
                 p["occurrence"] = json!(o);

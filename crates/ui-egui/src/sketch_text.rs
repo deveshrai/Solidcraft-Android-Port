@@ -14,6 +14,7 @@ use solidcraft_engine::{
 use crate::SolveApp;
 use crate::dialogs::{Dialog, Kind};
 use crate::selection::SelInput;
+use crate::ui_kit;
 
 /// Field rows after the text: position, height (lengths), angle, letter spacing (a length) and
 /// line spacing (a factor).
@@ -448,13 +449,11 @@ pub(crate) fn refresh(app: &SolveApp, k: &mut Tx) -> bool {
 /// starts a new line there). `inputs` and `active`: the dialog's Path input.
 pub(crate) fn rows(ui: &mut egui::Ui, k: &mut Tx, inputs: &mut [SelInput], active: &mut usize) -> bool {
     let mut enter = false;
-    crate::dialogs::row_label(ui, "Text");
-    let width = ui.spacing().text_edit_width;
     let id = egui::Id::new("sketch_text_content");
     if ui.memory(|m| m.has_focus(id)) {
         enter |= ui.input_mut(|i| !i.modifiers.shift && i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
     }
-    let response = ui.add(egui::TextEdit::multiline(&mut k.text).id(id).desired_rows(3).desired_width(width));
+    let response = ui_kit::multiline_text_field(ui, "Text", id, &mut k.text);
     crate::scenario::publish_handle("dialog:Text", response.rect.center());
     if k.focus {
         response.request_focus();
@@ -464,42 +463,44 @@ pub(crate) fn rows(ui: &mut egui::Ui, k: &mut Tx, inputs: &mut [SelInput], activ
         state.store(ui.ctx(), id);
         k.focus = false;
     }
-    ui.end_row();
-    crate::dialogs::row_label(ui, "Font");
-    font_row(ui, k, width);
-    ui.end_row();
-    crate::dialogs::row_label(ui, "Style");
-    ui.horizontal(|ui| {
-        let bold = ui.toggle_value(&mut k.style.bold, egui::RichText::new("B").strong()).on_hover_text(crate::i18n::tr("sketch_text.bold"));
-        crate::scenario::publish_handle("dialog:Bold", bold.rect.center());
-        let italic = ui.toggle_value(&mut k.style.italic, egui::RichText::new("I").italics()).on_hover_text(crate::i18n::tr("sketch_text.italic"));
-        crate::scenario::publish_handle("dialog:Italic", italic.rect.center());
-    });
-    ui.end_row();
-    crate::dialogs::row_label(ui, "Alignment");
-    ui.horizontal(|ui| {
-        for (align, id, handle) in [
-            (TextAlign::Left, "sketch_text.align_left", "dialog:Align left"),
-            (TextAlign::Center, "sketch_text.align_center", "dialog:Align center"),
-            (TextAlign::Right, "sketch_text.align_right", "dialog:Align right"),
-        ] {
-            let response = ui.selectable_value(&mut k.style.align, align, crate::i18n::tr(id));
-            crate::scenario::publish_handle(handle, response.rect.center());
+    ui_kit::row(ui, "Font", |ui| font_row(ui, k));
+    ui_kit::row(ui, "Style", |ui| ui_kit::text_emphasis(ui, &mut k.style.bold, &mut k.style.italic));
+    ui_kit::row(ui, "Alignment", |ui| {
+        let mut selected = match k.style.align {
+            TextAlign::Left => 0,
+            TextAlign::Center => 1,
+            TextAlign::Right => 2,
+        };
+        let labels = ["sketch_text.align_left", "sketch_text.align_center", "sketch_text.align_right"].map(crate::i18n::tr);
+        ui_kit::segmented(ui, &mut selected, &labels, ui_kit::Segments { compact: true, ..Default::default() });
+        k.style.align = match selected {
+            1 => TextAlign::Center,
+            2 => TextAlign::Right,
+            _ => TextAlign::Left,
+        };
+        for (label, handle) in labels.iter().zip(["dialog:Align left", "dialog:Align center", "dialog:Align right"]) {
+            if let Some(at) = crate::scenario::handle_at(&format!("dialog:Alignment:{label}")) {
+                crate::scenario::publish_handle(handle, at);
+            }
         }
     });
-    ui.end_row();
     // On a path the curve places the text: X, Y and the angle do not.
     let on_path = k.style.path.is_some();
-    for (i, (label, value)) in LABELS.iter().zip(k.values.iter_mut()).enumerate() {
-        crate::dialogs::row_label(ui, label);
-        let placed = on_path && matches!(i, 0 | 1 | ANGLE);
-        if placed {
-            let response = ui.add_enabled_ui(false, |ui| crate::dialogs::field(ui, value));
+    let (xy, rest) = k.values.split_at_mut(2);
+    if let [x, y] = xy {
+        let response = ui.add_enabled_ui(!on_path, |ui| ui_kit::value_pair(ui, "Position", [x, y], ["X", "Y"], None));
+        enter |= response.inner;
+        if on_path {
             response.response.on_disabled_hover_text(crate::i18n::tr("sketch_text.on_path"));
-        } else {
-            enter |= crate::dialogs::field(ui, value);
         }
-        ui.end_row();
+    }
+    for (i, (label, value)) in LABELS.iter().skip(2).zip(rest).enumerate() {
+        let index = i + 2;
+        let response = ui.add_enabled_ui(!(on_path && index == ANGLE), |ui| ui_kit::row(ui, label, |ui| ui_kit::field(ui, value)));
+        enter |= response.inner;
+        if on_path && index == ANGLE {
+            response.response.on_disabled_hover_text(crate::i18n::tr("sketch_text.on_path"));
+        }
     }
     path_row(ui, k, inputs, active);
     enter
@@ -508,25 +509,21 @@ pub(crate) fn rows(ui: &mut egui::Ui, k: &mut Tx, inputs: &mut [SelInput], activ
 /// The curve the text follows: a chip that, clicked, takes the next curve clicked on the canvas;
 /// × takes the text off it; Reverse runs it the other way along.
 fn path_row(ui: &mut egui::Ui, k: &mut Tx, inputs: &mut [SelInput], active: &mut usize) {
-    let t = crate::theme::Tokens::get();
-    crate::dialogs::row_label(ui, "Path");
-    ui.horizontal(|ui| {
+    ui_kit::row(ui, "Path", |ui| {
         let on = k.style.path.is_some();
-        let text = if on {
-            egui::RichText::new(crate::i18n::format("dialog.selected_count", &[("count", "1")])).color(egui::Color32::WHITE)
-        } else {
-            egui::RichText::new(crate::i18n::tr("dialog.select")).color(t.text)
-        };
-        let stroke = if k.picking { egui::Stroke::new(1.5, t.accent) } else { egui::Stroke::new(1.0, t.dialog_border.gamma_multiply(1.6)) };
-        let chip = egui::Button::new(text).fill(if on { t.chip } else { egui::Color32::TRANSPARENT }).stroke(stroke).min_size(egui::vec2(0.0, 22.0));
-        let chip = crate::frame::add_outlined(ui, chip, stroke.width).on_hover_text(crate::i18n::tr("sketch_text.path_hint"));
+        let text = if on { crate::i18n::format("dialog.selected_count", &[("count", "1")]) } else { crate::i18n::tr("dialog.select").into() };
+        let chip = ui_kit::selection_field(ui, &text, ui_kit::Selection { active: k.picking, filled: on })
+            .on_hover_text(crate::i18n::tr("sketch_text.path_hint"));
+        let chip_rect = chip.rect;
         crate::scenario::publish_handle("dialog:Path", chip.rect.center());
         if chip.clicked() {
             k.picking = true;
             *active = 0;
         }
         if on {
-            let clear = ui.small_button("\u{d7}").on_hover_text(crate::i18n::tr("sketch_text.path_clear"));
+            let size = crate::theme::Tokens::get().space_24;
+            let rect = egui::Rect::from_center_size(egui::pos2(chip_rect.right() - size / 2.0, chip_rect.center().y), egui::vec2(size, size));
+            let clear = ui_kit::icon_button_at(ui, rect, "close", "sketch_text.path_clear");
             crate::scenario::publish_handle("dialog:Path clear", clear.rect.center());
             if clear.clicked() {
                 for input in inputs.iter_mut() {
@@ -537,12 +534,11 @@ fn path_row(ui: &mut egui::Ui, k: &mut Tx, inputs: &mut [SelInput], active: &mut
             }
         }
     });
-    ui.end_row();
     if k.style.path.is_some() {
-        crate::dialogs::row_label(ui, "Reverse");
-        let reverse = ui.checkbox(&mut k.style.reverse, "");
-        crate::scenario::publish_handle("dialog:Reverse", reverse.rect.center());
-        ui.end_row();
+        ui_kit::section(ui, "path_options", "Options", true, |ui| {
+            let reverse = ui_kit::checkbox(ui, crate::i18n::tr_label("Reverse"), &mut k.style.reverse);
+            crate::scenario::publish_handle("dialog:Reverse", reverse.rect.center());
+        });
     }
 }
 
@@ -578,70 +574,25 @@ fn is_font_file(s: &str) -> bool {
     lower.contains(['/', '\\']) || [".ttf", ".otf", ".ttc", ".otc"].iter().any(|e| lower.ends_with(e))
 }
 
-/// Height of the font list (points).
-const FONT_LIST_PX: f32 = 260.0;
-
-/// The font: a list of the installed families (the built-in font first) with a search box; a
-/// font file's path typed there can be used too.
-fn font_row(ui: &mut egui::Ui, k: &mut Tx, width: f32) {
+/// The application supplies families/file recognition; the kit owns search and list widgets.
+fn font_row(ui: &mut egui::Ui, k: &mut Tx) {
     let builtin = crate::i18n::format("sketch_text.builtin_font", &[("family", solidcraft_engine::sketch::DEFAULT_FONT_FAMILY)]);
     let current = if k.font.trim().is_empty() { builtin.clone() } else { k.font.clone() };
-    let mut chosen = None;
-    let response = egui::ComboBox::from_id_salt("sketch_text_font")
-        .width(width)
-        .height(FONT_LIST_PX + 80.0)
-        .selected_text(current)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show_ui(ui, |ui| {
-            let search = egui::TextEdit::singleline(&mut k.font_filter)
-                .id_salt("sketch_text_font_search")
-                .hint_text(crate::i18n::tr("sketch_text.font_search"));
-            let search = ui.add(search.desired_width(f32::INFINITY));
-            crate::scenario::publish_handle("dialog:Font search", search.rect.center());
-            let typed = k.font_filter.trim();
-            if is_font_file(typed) {
-                let file = ui.selectable_label(false, crate::i18n::format("sketch_text.use_font_file", &[("path", typed)]));
-                crate::scenario::publish_handle("dialog:Font file", file.rect.center());
-                if file.clicked() {
-                    chosen = Some(typed.to_string());
-                    ui.close();
-                }
-                return;
-            }
-            let filter = typed.to_lowercase();
-            // The list scrolls below the search box, at one height whatever it holds.
-            let list = egui::ScrollArea::vertical()
-                .id_salt("sketch_text_font_list")
-                .max_height(FONT_LIST_PX)
-                .min_scrolled_height(FONT_LIST_PX)
-                .auto_shrink([false, false]);
-            list.show(ui, |ui| {
-                if builtin.to_lowercase().contains(&filter) {
-                    let item = ui.selectable_label(k.font.trim().is_empty(), &builtin);
-                    crate::scenario::publish_handle("dialog:Font built-in", item.rect.center());
-                    if item.clicked() {
-                        chosen = Some(String::new());
-                        ui.close();
-                    }
-                }
-                match families(ui.ctx()) {
-                    None => {
-                        ui.label(crate::i18n::tr("sketch_text.loading_fonts"));
-                    }
-                    Some(list) => {
-                        for family in list.iter().filter(|f| f.to_lowercase().contains(&filter)) {
-                            if ui.selectable_label(k.font.trim() == family, family).clicked() {
-                                chosen = Some(family.clone());
-                                ui.close();
-                            }
-                        }
-                    }
-                }
-            });
-        })
-        .response;
-    crate::scenario::publish_handle("dialog:Font", response.rect.center());
-    if let Some(font) = chosen {
+    let families = families(ui.ctx());
+    let mut options = vec![ui_kit::SearchOption { value: "", label: &builtin, handle: Some("dialog:Font built-in") }];
+    if let Some(list) = &families {
+        options.extend(list.iter().map(|family| ui_kit::SearchOption { value: family, label: family, handle: None }));
+    }
+    let custom = is_font_file(&k.font_filter).then(|| crate::i18n::format("sketch_text.use_font_file", &[("path", k.font_filter.trim())]));
+    if let Some(font) = ui_kit::searchable_dropdown(
+        ui,
+        "sketch_text_font",
+        &current,
+        &mut k.font_filter,
+        &options,
+        custom.as_deref(),
+        families.is_none().then(|| crate::i18n::tr("sketch_text.loading_fonts")),
+    ) {
         k.font = font;
         k.font_filter.clear();
     }
@@ -714,13 +665,7 @@ mod tests {
     use crate::scenario::Harness;
 
     fn setup() -> (Harness, String, String) {
-        let mut h = Harness::new();
-        h.app.home.open = false;
-        h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
-        let result = h.app.run("sketch.text", json!({"text":"I","at":[0,0],"height":10})).unwrap();
-        let link = result["link"].as_str().unwrap().to_owned();
-        let curve = result["curves"][0].as_str().unwrap().to_owned();
-        h.app.session.selection = vec![Sel::SketchCurve { id: curve.clone() }];
+        let (mut h, link, curve) = crate::test_support::selected_text("I", [0, 0]);
         h.frames(3);
         (h, link, curve)
     }

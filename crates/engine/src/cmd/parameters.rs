@@ -348,11 +348,16 @@ fn complete(s: &mut Session, p: &Value) -> Result<Value> {
     let text = str_(p, "prefix").unwrap_or("");
     // The identifier being typed: trailing letters, digits and underscores.
     let word: String = text.chars().rev().take_while(|c| c.is_alphanumeric() || *c == '_').collect::<Vec<_>>().into_iter().rev().collect();
-    let starts = |n: &str| word.is_empty() || n.to_ascii_lowercase().starts_with(&word.to_ascii_lowercase());
+    let lower = word.to_ascii_lowercase();
+    let starts = |n: &str| word.is_empty() || n.to_ascii_lowercase().starts_with(&lower);
+    // A parameter matches wherever the word appears in its name (`side` finds
+    // `cab_side_thickness`, #2757); functions, constants and units match from the start.
+    let within = |n: &str| word.is_empty() || n.to_ascii_lowercase().contains(&lower);
     let mut out: Vec<Value> = Vec::new();
-    let mut rows: Vec<solidcraft_doc::ParamRow> = s.doc.param_rows().into_iter().filter(|r| starts(&r.name)).collect();
-    // Favourites, then user parameters, then the rest.
-    rows.sort_by_key(|r| (!r.favorite, r.source != "user"));
+    let mut rows: Vec<solidcraft_doc::ParamRow> = s.doc.param_rows().into_iter().filter(|r| within(&r.name)).collect();
+    // Names that start with the word, then the rest; within each, favourites, then user
+    // parameters, then the others.
+    rows.sort_by_key(|r| (!starts(&r.name), !r.favorite, r.source != "user"));
     for r in rows.into_iter().take(200) {
         let v = r.value.map(|v| format!("{v:.4} {}", r.unit).trim().to_string()).unwrap_or_else(|| "error".into());
         let mut detail = format!("{} = {v}", r.expression);

@@ -92,14 +92,14 @@ pub enum PointDef {
 }
 
 /// Resolved construction geometry, kept in the model state by feature.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ConstructGeom {
     Plane(Plane),
     Axis { origin: Vec3, dir: Vec3 },
     Point(Vec3),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Construct {
     pub feature: u64,
     pub name: String,

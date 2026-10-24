@@ -2,6 +2,32 @@ use super::*;
 use solidcraft_engine::sketch::CurveKind;
 
 #[test]
+fn three_point_arc_follows_its_snapped_through_point_after_dimension_change() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+    h.app.run("sketch.line", json!({"points":[[-20,0],[20,0]],"ids":["base"]})).unwrap();
+    h.app.run("sketch.constraint.fix", json!({"entity":"base"})).unwrap();
+    h.app.run("sketch.line", json!({"points":["origin",[0,10]],"ids":["height"],"infer":true})).unwrap();
+    let dim = h.app.run("sketch.dimension", json!({"entities":["height"],"value":10})).unwrap();
+    h.settle();
+    h.step(&json!({"start":"sketch.arc.three_point"})).unwrap();
+    for point in [[-20, 0, 0], [20, 0, 0], [0, 10, 0]] {
+        h.step(&json!({"click":{"world":point}})).unwrap();
+    }
+    h.app.run("parameters.change", json!({"name":dim["param"],"expression":"15 mm"})).unwrap();
+    let sid = h.app.session.active_sketch.unwrap();
+    let state = h.app.session.model.state();
+    let ss = state.sketch(sid).unwrap();
+    let sk = &ss.sketch;
+    let arc = sk.curves.iter().position(|c| matches!(c.kind, CurveKind::Arc { .. })).unwrap();
+    let through = sk.point(sk.resolve_point("height.end").unwrap()).unwrap();
+    assert!(ss.report.ok());
+    assert!(through.dist(Vec2::new(0.0, 15.0)) < 1e-6, "{through:?}");
+    let distance = sk.shape(arc).unwrap().dist(through);
+    assert!(distance < 1e-6, "the arc misses its snapped through point by {distance} mm");
+}
+
+#[test]
 fn clicked_periodic_fit_closes_at_start_and_right_click_keeps_natural() {
     let mut h = crate::scenario::Harness::new();
     h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
@@ -469,6 +495,9 @@ fn fully_constrained_center_rectangle_corners_can_be_picked_and_filleted() {
     h.frames(2);
     h.step(&json!({"start":"sketch.fillet"})).unwrap();
     h.frames(2);
+    // Fit after opening the dialog so all four corners clear the shell and both panels.
+    h.app.fit_view();
+    h.settle();
     for corner in [[-20, -15, 0], [20, -15, 0], [20, 15, 0], [-20, 15, 0]] {
         h.step(&json!({"click":{"world":corner}})).unwrap();
         h.frames(2);
@@ -619,4 +648,81 @@ fn trim_hover_shows_the_piece_a_click_takes_away() {
     h.step(&json!({"key":"Escape"})).unwrap();
     h.step(&json!({"move":{"world":[15,0,0]}})).unwrap();
     assert!(trim_hover_piece(&h.app, sid, &line).is_none(), "only Trim shows a piece");
+}
+
+/// #3141: the 2-tangent circle tool, clicked on two sides of a rectangle drawn away from the
+/// origin, puts its circle in the corner between the clicks without moving the rectangle, and
+/// fixed sides no longer make it fail.
+#[test]
+fn two_tangent_circle_clicked_on_two_sides_fits_the_corner_and_moves_nothing() {
+    for fixed in [false, true] {
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+        let r = h.app.run("sketch.rectangle.two_point", json!({"p0":[-800,0],"p1":[-300,500]})).unwrap();
+        if fixed {
+            h.app.run("sketch.constraint.fix", json!({"entities": r["curves"]})).unwrap();
+        }
+        h.step(&json!({"call":"ui.view","params":{"view":"fit"}})).unwrap();
+        h.settle();
+        let sid = h.app.session.active_sketch.unwrap();
+        let points =
+            |h: &crate::scenario::Harness| h.app.session.model.state().sketch(sid).unwrap().sketch.points.iter().map(|p| p.pos).collect::<Vec<_>>();
+        let before = points(&h);
+        h.step(&json!({"start":"sketch.circle.two_tangent"})).unwrap();
+        h.step(&json!({"click":{"world":[-550,0,0]}})).unwrap();
+        h.step(&json!({"click":{"world":[-800,250,0]}})).unwrap();
+        let sk = h.app.session.model.state().sketch(sid).unwrap().sketch.clone();
+        let circle = sk.curves.iter().position(|c| matches!(c.kind, CurveKind::Circle { .. }));
+        let circle = circle.unwrap_or_else(|| panic!("fixed {fixed}: no circle: {:?}", h.app.status));
+        assert!(sk.center(circle).unwrap().dist(Vec2::new(-750.0, 50.0)) < 1e-6, "fixed {fixed}: {:?}", sk.center(circle));
+        let after = points(&h);
+        assert!(before.iter().zip(&after).all(|(a, b)| a.dist(*b) < 1e-9), "fixed {fixed}: the rectangle moved: {after:?}");
+    }
+}
+
+/// #3099: the centre circle tool, its centre snapped to a line's midpoint and its second click
+/// to the line's end, keeps the circle through that end: nothing is left free.
+#[test]
+fn centre_circle_clicked_through_a_line_end_stays_on_it() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+    h.app.run("sketch.line", json!({"points":[[0,30],[40,30]]})).unwrap();
+    h.step(&json!({"call":"ui.view","params":{"view":"fit"}})).unwrap();
+    h.settle();
+    let sid = h.app.session.active_sketch.unwrap();
+    h.step(&json!({"start":"sketch.circle.center"})).unwrap();
+    for at in [[20, 30, 0], [40, 30, 0]] {
+        h.step(&json!({"move":{"world":at}})).unwrap();
+        h.step(&json!({"click":{"world":at}})).unwrap();
+    }
+    let sk = h.app.session.model.state().sketch(sid).unwrap().sketch.clone();
+    let circle = sk.curves.iter().position(|c| matches!(c.kind, CurveKind::Circle { .. })).unwrap();
+    let end = sk.resolve_point("l1.end").unwrap();
+    assert!(
+        sk.constraints.iter().any(|k| matches!(k.kind, solidcraft_engine::sketch::ConstraintKind::Midpoint { l: 0, .. })),
+        "{:?}",
+        sk.constraints
+    );
+    assert!(
+        sk.constraints.iter().any(|k| k.kind == solidcraft_engine::sketch::ConstraintKind::PointOnCurve { p: end, c: circle }),
+        "the circle stays on the line's end: {:?}",
+        sk.constraints
+    );
+}
+
+/// #4691: the Point tool clicked on a line's midpoint makes a point held there (a MidPoint
+/// constraint), not a free point that happens to sit on the middle.
+#[test]
+fn a_point_clicked_on_a_line_midpoint_is_held_there() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+    h.app.run("sketch.line", json!({"points":[[0,0],[20,0]],"ids":["base"]})).unwrap();
+    h.settle();
+    h.step(&json!({"start":"sketch.point"})).unwrap();
+    h.step(&json!({"click":{"world":[10, 0, 0]}})).unwrap();
+    let sid = h.app.session.active_sketch.unwrap();
+    let state = h.app.session.model.state();
+    let sk = &state.sketch(sid).unwrap().sketch;
+    let held = sk.constraints.iter().any(|c| matches!(c.kind, solidcraft_engine::sketch::ConstraintKind::Midpoint { .. }));
+    assert!(held, "no MidPoint constraint: {:?}", sk.constraints.iter().map(|c| &c.kind).collect::<Vec<_>>());
 }

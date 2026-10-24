@@ -1,11 +1,12 @@
 # Agent chat
 
 Agent chat is a side panel where you talk to a coding agent you already use (Claude Code,
-Codex, Google Antigravity, OpenCode, Grok Build and others), or to a model behind an OpenAI-compatible endpoint you
-choose (Ollama or LM Studio on your computer, OpenAI, any other URL), and have it work on the
-design that's open. A coding agent runs on your computer under **your own account** with that
-agent: SolidCraft doesn't sell or proxy a model and needs no key for it. An endpoint's key, if
-it needs one, goes into your system keychain, never into SolidCraft's settings.
+Codex, Google Antigravity, OpenCode, Grok Build and others), or to a model behind an
+OpenAI-compatible or Anthropic-compatible endpoint you choose (Ollama or LM Studio on your
+computer, OpenAI, Anthropic, any other URL), and have it work on the design that's open. A
+coding agent runs on your computer under **your own account** with that agent: SolidCraft
+doesn't sell or proxy a model and needs no key for it. An endpoint's key, if it needs one, goes
+into your system keychain, never into SolidCraft's settings.
 
 Desktop app only.
 
@@ -16,13 +17,13 @@ Everything about it is on one page: **Preferences → AI**.
 - **Show AI features** (on by default) is the master switch. Turned off, SolidCraft shows nothing
   of it: no AI button, no shortcut, no menu entry, no panel, and nothing is looked for or
   started. The page stays, so you can turn it back on.
-- **Show button in toolbar** (on by default): the **AI** button at the right end of the toolbar
+- **Show Assistant button in application bar** (on by default): the **Assistant** icon in the application bar
   row, which stays there however wide the window is. Turn it off to keep only the shortcut and
   the menu entry.
 
 With AI features on, the panel opens from:
 
-- the **AI** button at the right end of the toolbar;
+- the **Assistant** icon in the application bar;
 - **Ctrl+Shift+A** (Cmd+Shift+A on a Mac), which also works from the chat's own text box;
 - **View settings** (the last button of the navigation bar under the view) → **Agent chat**.
 
@@ -32,7 +33,12 @@ when you send a message or press **Connect**.
 
 ## The panel
 
-- **Docking:** drag the panel's header (the dotted grip and the title) to the other half of the
+In the floating layout, Assistant fills the viewport height in the shared rounded panel, with
+space around its edges. The compass and navigation bar move into the remaining space beside it. It overlays the model without changing the viewport projection;
+clicks and scrolling over the panel stay in the chat. The docked layout retains its side panel.
+
+- **Docking:** on the left, Assistant is the first panel, before vertical history and the browser.
+  The drag highlight shows the actual destination bounds. Drag the panel's header (the dotted grip and the title) to the other half of the
   window and let go. The side it would land on lights up while you drag. You can also pick
   **Left** or **Right** under Preferences → AI → Panel. SolidCraft remembers the side.
 - **Width:** drag the panel's inner edge. SolidCraft remembers it.
@@ -42,7 +48,7 @@ when you send a message or press **Connect**.
   time; **Dock** (the same place in its header) puts it back in the side panel. You can also
   pick **Own window** under Preferences → AI → Panel. SolidCraft remembers where the window
   was and how big.
-- **Minimise** (the line in the header) folds the panel into a thin strip that keeps the chat
+- **Minimise** (the line in the header) folds the panel into a small floating strip (a side strip in the docked layout) that keeps the chat
   icon, the agent's state, and a count of anything waiting for your answer. Click the icon to
   unfold it. **Close** (×) hides the panel. Neither stops the agent; **Stop** does.
 - **The agent switcher** under the title picks the agent for this conversation; switching stops
@@ -52,6 +58,13 @@ when you send a message or press **Connect**.
   SolidCraft remembers the last choice for each agent and puts it back on the next session. An
   endpoint's agent also keeps it as its default model. An agent that reports no models shows no
   drop-down.
+
+Messages use right-aligned user bubbles and plain assistant text. Consecutive tool calls share
+an activity group: click a row to inspect its output; failed calls have an error tint. Approval
+cards retain the agent’s permission choices, and SolidCraft’s own approvals offer Deny, Always
+allow and Allow once. The composer’s permission menu uses the same Ask / Edits / All policy as
+Preferences, for the selected agent, and shows the actual changes used against the configured
+turn limit. Queue, Send now and Stop keep their existing behavior.
 
 ## Files and pictures
 
@@ -143,6 +156,30 @@ The panel lists agents that aren't installed with their install command and a **
 **Refresh** looks again after you install one. **Test** starts an agent briefly, asks it for a
 session and ends it again.
 
+### Flatpak
+
+The Flatpak sandbox has no home-folder or network access by default. Agents installed
+through nvm or `~/.local/bin` can therefore work in a terminal while SolidCraft reports
+that no agent was found. For Claude Code and its ACP adapter, run:
+
+```sh
+flatpak override --user ai.storyteller.solidcraft --filesystem=~/.nvm:ro --filesystem=~/.local/bin:ro --filesystem=~/.local/share/claude:ro --filesystem=~/.claude --filesystem=~/.claude.json --share=network
+```
+
+These permissions apply to SolidCraft for your user account:
+
+- `~/.nvm:ro` exposes Node and globally installed npm adapters read-only.
+- `~/.local/bin:ro` exposes locally installed executables read-only.
+- `~/.local/share/claude:ro` exposes Claude Code's native installation read-only,
+  including the targets of links in `~/.local/bin`.
+- `~/.claude` and `~/.claude.json` allow Claude Code to read and update its sign-in
+  and configuration files.
+- `--share=network` lets the adapter reach its service. It also gives SolidCraft
+  network access, including making an enabled control server reachable from the host.
+
+Restart SolidCraft after applying the override. Other agents or installation folders
+may need different filesystem permissions.
+
 ### XAI Grok
 
 Install **Grok Build** and run `grok login` in a terminal to sign in with your Grok account.
@@ -163,11 +200,15 @@ Grok Build also supports `XAI_API_KEY` for users who choose API authentication.
   `my-agent --acp`. SolidCraft starts it directly, not through a shell.
 - **OpenAI-compatible API:** a preset (Ollama `http://localhost:11434/v1`, LM Studio
   `http://localhost:1234/v1`, OpenAI) or a custom URL, the model name, and an optional key.
-  The key goes into the system keychain (Keychain on macOS, Credential Manager on Windows, the
-  Secret Service on Linux) and is only ever sent over HTTPS or to this computer. **Test** asks the
-  endpoint for its models. For these agents SolidCraft runs the conversation itself, with the
-  same tools, limits and questions as for a coding agent, and at most 24 model requests per
-  message.
+- **Anthropic-compatible API:** a preset (Anthropic) or a custom URL, for an endpoint that
+  speaks the Anthropic Messages API (`{base}/v1/messages`). This covers Anthropic itself and
+  providers that offer an Anthropic-compatible endpoint, such as DeepSeek and Qwen.
+- The key goes into the system keychain (Keychain on macOS, Credential Manager on Windows, the
+  Secret Service on Linux) and is only ever sent over HTTPS or to this computer. **Test** asks an
+  OpenAI-compatible endpoint for its models; an Anthropic-compatible one gets a short message,
+  because not every such endpoint lists models (Qwen's has no model list). For these agents
+  SolidCraft runs the conversation itself, with the same tools, limits and questions as for a
+  coding agent, and at most 24 model requests per message.
 
 ## Signing in
 
@@ -278,3 +319,36 @@ cargo build --release -p solidcraft-ui-egui --example acp_test_agent
 Then add it under Preferences → AI → **Add agent… → Custom command** with the path of
 `target/release/examples/acp_test_agent`. Put "save" in your message to see an Allow / Deny card,
 or "ask" to see the agent ask its own permission.
+
+## Benchmarking the Assistant
+
+`solidcraft-cli bench-assistant` runs the eleven tasks of the
+[standard model test (v1, #4851)](https://github.com/tangency-labs/solidcraft/issues/4851) against a
+desktop app that is already running with a control port, and checks each result on the design
+itself. Use it to see how well a local model drives SolidCraft before you post its results.
+
+```sh
+solidcraft --control 9271
+# In another terminal:
+solidcraft-cli bench-assistant --connect 127.0.0.1:9271 \
+  --base-url http://localhost:11434/v1 --model qwen2.5:7b \
+  --json results.json --markdown results.md
+```
+
+Each task replaces the open design with a new one, so save your work first. The command adds the
+endpoint as an API agent named "bench", starts a new chat with All permissions for every task,
+sends the prompt once, and waits for the turn to end. It runs only the setup the test prescribes
+(the box some tasks start from) and does none of the modelling itself. When it finishes it stops
+the agent and puts your permission setting back.
+
+- The control token comes from `--token`, `SOLIDCRAFT_CONTROL_TOKEN`, or the app's
+  [token file](control-protocol.md#token), in that order.
+- `--tasks 1,2,5` runs only those tasks, `--repeat N` runs the test N times, and `--timeout-s`
+  (default 300) is each turn's deadline; a turn that runs past it is stopped and fails as "timeout".
+- A failed task gets one of the issue's failure categories ("wrote the call as text", "wrong or
+  unknown command", "wrong arguments", "the endpoint refused tools", "an empty reply", "only
+  talked", "gave up after errors", or "hit the request limit"), or "wrong result" when the calls
+  worked but the design is not what the task asks for.
+- `--markdown` writes the issue's comment template filled in; add the quantization, download
+  size, and runtime before you post it. `--json` keeps each task's failed rules, conversation, and
+  design before and after. Both files are rewritten after every task.

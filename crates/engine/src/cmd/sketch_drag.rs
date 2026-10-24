@@ -104,34 +104,62 @@ impl Path {
     }
 }
 
-/// Drag: the grabbed entity follows the cursor where possible (a point moves toward it; a line or spline
-/// slides by the cursor's move; a circle or arc grabbed on its edge changes radius about its
+/// Drag: the grabbed entity follows the cursor where possible (a point or a material point on a
+/// line moves toward it; a spline slides by the cursor's move; a circle or arc changes radius about its
 /// centre; a conic grabbed on its curve reads its fullness, `rho`, off the cursor) and the rest
 /// of the sketch moves as little as it can, staying on the
 /// solution it started on. Fixed geometry stays. A step that cannot be solved with the entity
 /// held (the path crosses where the geometry cannot reach) is approached by halving the way to
 /// it, and the next steps are tried from the last solved state, the last of them being the whole
-/// remaining move. A point whose exact pin fails instead minimizes cursor distance in the
-/// design's remaining freedom, retaining only corrected, feasible poses. For other entities,
+/// remaining move. A point or line whose exact pin fails instead minimizes cursor distance in
+/// the design's remaining freedom, retaining only corrected, feasible poses. For other entities,
 /// when none past it solves, the first failed step stays placed but unsolved:
 /// the edit's ordinary, non-strict solve that follows (seeded on the last solved state, see
 /// [`Left::MovedFrom`]) then pulls it back (fully constrained geometry) or leaves the sketch
 /// unsolved for the user to see. A step that would sweep an arc through its own start is undone
 /// and the drag ends there. Returns how far it got and what it leaves for the edit's solve
-/// ([`Left::Solved`]: the held solve of the last step it kept left the sketch solved).
+/// ([`Left::Solved`]: the retained pose satisfies the design constraints, even without progress).
 ///
 /// `with`: the rest of a selection dragged by one of its entities; all of it slides by the
 /// cursor's move as one (see [`plan_group`]).
 ///
 /// `live`: one frame of an interactive drag, whose held solves and cursor correction share
 /// one frame's work budget ([`Budget::frame`]); otherwise each has a solve's own.
-pub(super) fn drag_entity(sk: &mut Sketch, e: Ent, with: &[Ent], from: Vec2, to: Vec2, live: bool) -> (Dragged, Left) {
+///
+/// `solved`: the sketch as last evaluated. When it is unchanged and solved, a grabbed entity it
+/// determined is not dragged.
+pub(super) fn drag_entity(
+    sk: &mut Sketch,
+    e: Ent,
+    with: &[Ent],
+    from: Vec2,
+    to: Vec2,
+    live: bool,
+    solved: Option<&solidcraft_doc::SolvedSketch>,
+) -> (Dragged, Left) {
+    // An unchanged, solved entity with no freedom cannot follow a drag. Holding it at a
+    // different position only makes its constraints conflict, and a large pattern would spend
+    // minutes trying dense solves before returning to the same geometry (#2006).
+    if solved.is_some_and(|ss| {
+        ss.report.ok()
+            && ss.sketch == *sk
+            && match e {
+                Ent::Point(q) => ss.report.point_determined.get(q),
+                Ent::Curve(c) => ss.report.curve_determined.get(c),
+            }
+            .copied()
+            .unwrap_or(false)
+    }) {
+        return (Dragged::default(), Left::Solved);
+    }
     let Some((path, hold, n, short)) = prepare(sk, e, with, from, to) else {
-        return (Dragged { reached: 0.0, moving: Vec::new() }, Left::Unsolved);
+        return (Dragged::default(), Left::Unsolved);
     };
     #[cfg(test)]
     let (n, short) = (n.min(step_cap::get()), short.min(step_cap::get()));
     let moving: Vec<_> = path.points().filter_map(|q| Some((q, sk.point(q)?))).collect();
+    let line_grab = if with.is_empty() { LineGrab::new(sk, e, from) } else { None };
+    let start = line_grab.and_then(|g| g.point(sk)).or_else(|| if let Ent::Point(q) = e { sk.point(q) } else { None });
     let mut frame = live.then(frame_budget);
     // Only success matters to these solves: the degrees of freedom of a sketch with the entity
     // held are not the sketch's. Each is seeded on the last solved state (`last`), so what the
@@ -167,6 +195,7 @@ pub(super) fn drag_entity(sk: &mut Sketch, e: Ent, with: &[Ent], from: Vec2, to:
     // short steps.
     let (mut base, mut dt, mut k, mut t) = (0.0, 1.0 / n as f64, 0, 0.0);
     let mut shortened = false;
+    let mut wrapped = false;
     'walk: while t < 1.0 {
         if solves.cut && !shortened {
             shortened = true;
@@ -189,10 +218,17 @@ pub(super) fn drag_entity(sk: &mut Sketch, e: Ent, with: &[Ent], from: Vec2, to:
                 continue;
             }
             Step::Wrapped => {
+                wrapped = true;
                 failed = None;
                 break 'walk;
             }
             Step::Failed => {}
+        }
+        // Translating both ends can be impossible although a link can rotate. Do not spend
+        // the frame walking more impossible pins: optimize the point actually grabbed.
+        if line_grab.is_some() {
+            failed = Some(t);
+            break 'walk;
         }
         if failed.is_none() {
             // Halve the way to the failed step, so the state the next steps start from (and are
@@ -209,7 +245,10 @@ pub(super) fn drag_entity(sk: &mut Sketch, e: Ent, with: &[Ent], from: Vec2, to:
                         good = mid;
                         last.take(sk);
                     }
-                    Step::Wrapped => break 'walk,
+                    Step::Wrapped => {
+                        wrapped = true;
+                        break 'walk;
+                    }
                     Step::Failed => miss = mid,
                 }
             }
@@ -219,19 +258,26 @@ pub(super) fn drag_entity(sk: &mut Sketch, e: Ent, with: &[Ent], from: Vec2, to:
     // First retain held continuation across unreachable stretches of an otherwise reachable
     // path (for example an arm dragged through the hole around its shoulder). If it cannot
     // arrive, optimize the full cursor target without relaxing the design constraints.
-    if failed.is_some()
-        && let Ent::Point(q) = e
+    if !wrapped
+        && with.is_empty()
+        && (matches!(e, Ent::Point(_)) || line_grab.is_some())
+        && (failed.is_some() || line_grab.and_then(|g| g.point(sk)).is_some_and(|at| at.dist(to) > 1e-7))
     {
         let (points, radii) = sk.coupled(&hold.points, &hold.radii);
         let size = smallest_size(sk, &hold, Some(Group { points: &points, radii: &radii }));
         let max_step = (size * SHORT_STEP_FRACTION).min(path.length()).max(MIN_STEP);
         #[cfg(test)]
         let spent = frame.as_ref().map_or(0, Budget::spent);
-        let followed = solidcraft_sketch::move_point_towards(sk, q, to, max_step, frame.as_mut(), |before, after| {
+        let valid = |before: &Sketch, after: &Sketch| {
             let mut geometry = Geometry::default();
             geometry.take(before);
             !geometry.sweep_wrapped(after)
-        });
+        };
+        let followed = match (e, line_grab) {
+            (Ent::Point(q), _) => solidcraft_sketch::move_point_towards(sk, q, to, max_step, frame.as_mut(), valid),
+            (_, Some(g)) => solidcraft_sketch::move_line_towards(sk, g.curve, g.local, to, max_step, frame.as_mut(), valid),
+            _ => false,
+        };
         #[cfg(test)]
         if let Some(budget) = &frame {
             solves.work += budget.spent() - spent;
@@ -240,15 +286,13 @@ pub(super) fn drag_entity(sk: &mut Sketch, e: Ent, with: &[Ent], from: Vec2, to:
         if followed {
             #[cfg(test)]
             last_drag::set(solves);
-            let reached = moving
-                .iter()
-                .find(|(p, _)| *p == q)
-                .and_then(|(_, start)| {
-                    let d = to - *start;
-                    sk.point(q).map(|at| if at.dist(to) < 1e-6 || d.dot(d) == 0.0 { 1.0 } else { ((at - *start).dot(d) / d.dot(d)).clamp(0.0, 1.0) })
-                })
-                .unwrap_or(0.0);
-            return (Dragged { reached, moving }, Left::Solved);
+            let at = line_grab.and_then(|g| g.point(sk)).or_else(|| if let Ent::Point(q) = e { sk.point(q) } else { None });
+            let reached = start.zip(at).map_or(0.0, |(start, at)| {
+                let d = to - start;
+                if at.dist(to) < 1e-6 || d.dot(d) == 0.0 { 1.0 } else { ((at - start).dot(d) / d.dot(d)).clamp(0.0, 1.0) }
+            });
+            let retry = frame.as_ref().is_some_and(Budget::exhausted) && start.zip(at).is_some_and(|(a, b)| a.dist(b) > 1e-9);
+            return (Dragged { reached, moving, line_grab, retry }, Left::Solved);
         }
     }
     #[cfg(test)]
@@ -262,7 +306,7 @@ pub(super) fn drag_entity(sk: &mut Sketch, e: Ent, with: &[Ent], from: Vec2, to:
         None if good > 0.0 => Left::Solved,
         None => Left::Unsolved,
     };
-    (Dragged { reached: good, moving }, left)
+    (Dragged { reached: good, moving, line_grab, retry: false }, left)
 }
 
 /// The held solves of one drag: how many, their shared work (including cursor correction),
@@ -333,12 +377,54 @@ enum Step {
 }
 
 /// How far a drag got.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Dragged {
     /// The part of the way from where it was grabbed to the cursor the geometry followed (0..1).
     pub reached: f64,
     /// The points the drag moves (not the fixed ones it holds), where they were before it.
     pub moving: Vec<(usize, Vec2)>,
+    pub line_grab: Option<LineGrab>,
+    /// Cursor work stopped at its budget after making progress; another frame can continue.
+    pub retry: bool,
+}
+
+impl Dragged {
+    pub(super) fn at(&self, sk: &Sketch, from: Vec2) -> Vec2 {
+        if let Some(at) = self.line_grab.and_then(|g| g.point(sk)) {
+            return at;
+        }
+        let moves: Vec<_> = self.moving.iter().filter_map(|&(q, was)| Some(sk.point(q)? - was)).collect();
+        from + moves.iter().fold(Vec2::ZERO, |a, m| a + *m) * (1.0 / moves.len().max(1) as f64)
+    }
+}
+
+/// The grabbed position in a line's frame, retained through rotation and constraint correction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct LineGrab {
+    curve: usize,
+    a: usize,
+    b: usize,
+    local: Vec2,
+}
+
+impl LineGrab {
+    fn new(sk: &Sketch, e: Ent, from: Vec2) -> Option<Self> {
+        let Ent::Curve(curve) = e else { return None };
+        let CurveKind::Line { a, b } = sk.curves.get(curve)?.kind else { return None };
+        let pa = sk.point(a)?;
+        let d = sk.point(b)? - pa;
+        let len2 = d.dot(d);
+        if !(len2 > 1e-18) {
+            return None;
+        }
+        Some(Self { curve, a, b, local: Vec2::new((from - pa).dot(d) / len2, d.cross(from - pa) / len2) })
+    }
+
+    fn point(self, sk: &Sketch) -> Option<Vec2> {
+        let a = sk.point(self.a)?;
+        let d = sk.point(self.b)? - a;
+        Some(a + d * self.local.x + Vec2::new(-d.y, d.x) * self.local.y)
+    }
 }
 
 /// The geometry a step changes (point positions; curves, for radii and the arc ends a solve

@@ -228,8 +228,10 @@ fn a_small_hole_on_a_large_plate_has_a_round_rim() {
     let segments = (TAU / DISPLAY_ANGLE).ceil() as usize;
     assert_eq!(segments, 18);
     for z in [0.0, 2.0] {
-        // The chord tolerance alone: each half circle is one segment, the rim a line.
-        assert_eq!(rim(&coarse, centre, 2.0, z).0, 2);
+        // The chord tolerance alone leaves each half circle one segment, the rim a line no face
+        // can be bounded by: its edges are divided again, and the rim stays a coarse polygon.
+        let (n, _) = rim(&coarse, centre, 2.0, z);
+        assert!((3..segments).contains(&n), "{n} segments around the rim at the chord tolerance");
         let (n, widest) = rim(&round, centre, 2.0, z);
         assert!(n >= segments, "{n} segments around the rim at z = {z}");
         assert!(widest <= DISPLAY_ANGLE * 1.001, "a segment spans {} degrees", widest.to_degrees());
@@ -291,9 +293,12 @@ fn a_face_crowded_with_holes_gets_a_coarser_angle_and_bounded_work() {
     let boundary = |m: &Mesh, z: f64| m.edges.iter().filter(|e| e.iter().all(|p| (p.z - z).abs() < 1e-6)).map(|e| e.len() - 1).sum::<usize>();
     let budget = truck_meshalgo::tessellation::Deflection::MAX_ANGLE_BOUNDARY;
     for z in [0.0, 2.0] {
-        assert_eq!(boundary(&coarse, z), 4 + 2 * centres.len());
+        // At the chord tolerance alone each rim is divided only as far as a face can be bounded
+        // by it (two segments, a line, are divided again).
+        assert!(boundary(&coarse, z) < 6 * centres.len(), "{}", boundary(&coarse, z));
         let n = boundary(&round, z);
-        assert!(n > boundary(&coarse, z), "the rims are still rounder than the chord tolerance leaves them: {n}");
+        let (rounder, chord) = (rim(&round, centres[0], 2.0, z).0, rim(&coarse, centres[0], 2.0, z).0);
+        assert!(rounder >= chord, "the rims are at least as round as the chord tolerance leaves them: {rounder} < {chord}");
         assert!(n <= budget, "{n} segments bound the face at z = {z}");
     }
     // Every rim got the same share, and the walls follow their rims.
@@ -387,5 +392,26 @@ fn a_cylinder_wall_split_along_its_seam_meshes_round() {
             let r = Vec2::new(centre.x, centre.y).len();
             assert!(r > 50.0 - 10.0 * tol.max(0.05), "tolerance {tol}: an outer wall triangle passes {r:.2} mm from the axis");
         }
+    }
+}
+
+/// A body's outline box, made without meshing, holds its display mesh and is not much larger.
+#[test]
+fn outline_bounds_hold_the_display_mesh() {
+    let cube = crate::box_solid(Vec3::ZERO, Vec3::new(40., 30., 10.)).unwrap();
+    let rounded = crate::fillet(&cube, &[Vec3::new(20., 0., 10.)], 3.).unwrap();
+    let rod = crate::cylinder(Vec3::new(5., 5., 0.), Vec3::Z, 4., 25.).unwrap();
+    for body in [cube, rounded, rod] {
+        let outline = body.outline_bounds();
+        let mesh = body.reference_display_mesh_angular(body.size() * 1e-3, crate::DISPLAY_ANGLE).unwrap().bounds();
+        let slack = body.size() * 1e-6;
+        for (lo, hi, m_lo, m_hi) in [
+            (outline.min.x, outline.max.x, mesh.min.x, mesh.max.x),
+            (outline.min.y, outline.max.y, mesh.min.y, mesh.max.y),
+            (outline.min.z, outline.max.z, mesh.min.z, mesh.max.z),
+        ] {
+            assert!(lo <= m_lo + slack && hi >= m_hi - slack, "outline {outline:?} holds the mesh {mesh:?}");
+        }
+        assert!(outline.diagonal() <= mesh.diagonal() * 1.5, "and is not much larger");
     }
 }

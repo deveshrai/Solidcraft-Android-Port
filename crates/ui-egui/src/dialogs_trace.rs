@@ -2,6 +2,7 @@
 //! two values or a motion study plays. The path is computed on a scratch copy (`motion.trace`)
 //! and drawn in the viewport; OK keeps it as a 3D sketch spline (`motion.trace.keep`).
 
+use crate::ui_kit::{choice_row, expr_row, text_row};
 use egui::{Pos2, RichText, Stroke};
 use serde_json::{Value, json};
 use solidcraft_engine::doc::{IDENTITY, Mat, apply_point, mat_inverse, mat_mul};
@@ -9,7 +10,7 @@ use solidcraft_engine::geom::Vec3;
 use solidcraft_engine::{Sel, Session};
 
 use super::{Hover, body_of, capital, movable, num, pt, sel_items, snap_of};
-use crate::dialogs::{combo, field, row_label};
+use crate::dialogs::{combo, form_row};
 use crate::selection::SelInput;
 use crate::theme::Tokens;
 use crate::viewport::Proj;
@@ -72,6 +73,22 @@ pub(super) fn placement(s: &Session, inputs: &[SelInput]) -> Option<(Vec<u64>, V
 /// The trace's parameters (OK's `motion.trace.keep` and the preview's `motion.trace`).
 pub fn params(s: &Session, f: &TraceForm, inputs: &[SelInput]) -> Result<Value, String> {
     let mut p = picked_point(s, inputs)?;
+    // Retain a geometric snap, rather than just its current world coordinates. Map a pick
+    // shown in an exploded view back to the actual placement, as picked_point does.
+    if let Some(pick) = sel_items(inputs, 0).first()
+        && let Some(snap) = snap_of(s, pick)
+        && let Some((path, _, shown, placed)) = placement(s, inputs)
+        && let Some(inverse) = mat_inverse(&shown)
+    {
+        let mut reference = snap.param;
+        reference["occurrence"] = json!(path.last().copied().unwrap_or(0));
+        for key in ["point", "face", "circle", "edge"] {
+            if let Some(at) = reference.get(key).and_then(solidcraft_engine::params::vec3) {
+                reference[key] = pt(apply_point(&placed, apply_point(&inverse, at)));
+            }
+        }
+        p["point_ref"] = reference;
+    }
     if f.by_study {
         p["study"] = json!(s.doc.assembly.studies.get(f.study).ok_or("no motion study yet")?.id);
     } else {
@@ -97,14 +114,15 @@ pub fn picked_point(s: &Session, inputs: &[SelInput]) -> Result<Value, String> {
 }
 
 /// Where and why the motion stopped short, ending the trace (`None`: it went all the way).
-fn stop_text(v: &Value) -> Option<String> {
+pub(crate) fn stop_text(v: &Value) -> Option<String> {
     let at = v["stopped_at"].as_u64()?.to_string();
-    let name = |x: &Value| x.as_str().unwrap_or_default().to_string();
+    // The values come from the engine: a missing key is an empty name, never a panic.
+    let name = |m: &serde_json::Map<String, Value>, key: &str| m.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
     if let Some(l) = v["stopped_by_loop"].as_object() {
-        return Some(crate::i18n::format("trace.stopped_by_loop", &[("sample", &at), ("joint", &name(&l["joint"]))]));
+        return Some(crate::i18n::format("trace.stopped_by_loop", &[("sample", &at), ("joint", &name(l, "joint"))]));
     }
     let c = v["stopped_by_contact"].as_object()?;
-    Some(crate::i18n::format("trace.stopped_by_contact", &[("sample", &at), ("a", &name(&c["a"])), ("b", &name(&c["b"]))]))
+    Some(crate::i18n::format("trace.stopped_by_contact", &[("sample", &at), ("a", &name(c, "a")), ("b", &name(c, "b"))]))
 }
 
 /// The dialog's rows; true when Enter was pressed in a value.
@@ -115,58 +133,47 @@ pub fn rows(app: &mut crate::SolveApp, ui: &mut egui::Ui, f: &mut TraceForm, inp
     let studies: Vec<&str> = s.doc.assembly.studies.iter().map(|m| m.name.as_str()).collect();
     f.by_study &= !studies.is_empty();
     if !studies.is_empty() {
-        row_label(ui, "Motion");
-        let mut by = usize::from(f.by_study);
-        combo(ui, "tr_by", &["Joint", "Motion Study"], &mut by);
-        f.by_study = by == 1;
-        ui.end_row();
+        form_row(ui, "Motion", |ui| {
+            let mut by = usize::from(f.by_study);
+            combo(ui, "tr_by", &["Joint", "Motion Study"], &mut by);
+            f.by_study = by == 1;
+        });
     }
     if f.by_study {
-        row_label(ui, "Study");
-        combo(ui, "tr_study", &studies, &mut f.study);
-        ui.end_row();
+        choice_row(ui, "Study", "tr_study", &mut f.study, &studies);
     } else {
         let list = movable(s);
         if list.is_empty() {
-            row_label(ui, "");
-            ui.label(RichText::new(crate::i18n::tr_label("no joint that moves yet")).color(t.text_dim));
-            ui.end_row();
+            form_row(ui, "", |ui| {
+                ui.label(RichText::new(crate::i18n::tr_label("no joint that moves yet")).color(t.text_dim));
+            });
             return false;
         }
         let labels: Vec<&str> = list.iter().filter_map(|i| s.doc.assembly.joints.get(*i)).map(|j| j.name.as_str()).collect();
         let mut pos = list.iter().position(|i| *i == f.joint).unwrap_or(0);
-        row_label(ui, "Joint");
-        combo(ui, "tr_joint", &labels, &mut pos);
-        ui.end_row();
+        choice_row(ui, "Joint", "tr_joint", &mut pos, &labels);
         let joint = list.get(pos).copied().unwrap_or(0);
         let dofs = s.doc.assembly.joints.get(joint).map(|j| j.kind.dofs()).unwrap_or(&[]);
         let mut index = if joint == f.joint { f.index.min(dofs.len().saturating_sub(1)) } else { 0 };
         if dofs.len() > 1 {
-            row_label(ui, "  Of");
-            let caps: Vec<String> = dofs.iter().map(|d| capital(d)).collect();
-            let refs: Vec<&str> = caps.iter().map(String::as_str).collect();
-            combo(ui, "tr_index", &refs, &mut index);
-            ui.end_row();
+            form_row(ui, "  Of", |ui| {
+                let caps: Vec<String> = dofs.iter().map(|d| capital(d)).collect();
+                let refs: Vec<&str> = caps.iter().map(String::as_str).collect();
+                combo(ui, "tr_index", &refs, &mut index);
+            });
         }
         if joint != f.joint || index != f.index {
             (f.joint, f.index) = (joint, index);
             (f.from, f.to) = range(s, joint, index);
         }
-        row_label(ui, "From");
-        enter |= field(ui, &mut f.from);
-        ui.end_row();
-        row_label(ui, "To");
-        enter |= field(ui, &mut f.to);
-        ui.end_row();
+        enter |= expr_row(ui, "From", &mut f.from);
+        enter |= expr_row(ui, "To", &mut f.to);
     }
     let default = match s.doc.assembly.studies.get(f.study).filter(|_| f.by_study) {
         Some(m) => (u64::from(m.steps) + 1).clamp(2, 500),
         None => 100,
     };
-    row_label(ui, "Samples");
-    let r = ui.add(egui::TextEdit::singleline(&mut f.samples).hint_text(default.to_string()));
-    enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-    ui.end_row();
+    enter |= text_row(ui, "Samples", &mut f.samples, &default.to_string()).0;
     // The preview, traced again when what it traces (or the design) changes.
     let p = params(s, f, inputs);
     let key = format!("{}:{p:?}", s.revision);
@@ -183,9 +190,9 @@ pub fn rows(app: &mut crate::SolveApp, ui: &mut egui::Ui, f: &mut TraceForm, inp
             },
             Err(e) => (e.clone(), t.text_dim),
         };
-        row_label(ui, "");
-        ui.add(egui::Label::new(RichText::new(text).color(colour)).wrap());
-        ui.end_row();
+        form_row(ui, "", |ui| {
+            ui.add(egui::Label::new(RichText::new(text).color(colour)).wrap());
+        });
     }
     enter
 }
@@ -201,4 +208,39 @@ pub fn overlay(painter: &egui::Painter, proj: &Proj, f: &TraceForm) {
         painter.circle_filled(*first, 3.5, t.preview_sketch);
     }
     painter.add(egui::Shape::line(pts, Stroke::new(2.0, t.preview_sketch)));
+}
+
+#[cfg(test)]
+mod shared_status_baseline_tests {
+    use super::*;
+
+    #[test]
+    fn stop_text_tolerates_missing_keys() {
+        for v in [
+            json!({"stopped_at":1,"stopped_by_contact":{}}),
+            json!({"stopped_at":1,"stopped_by_contact":{"a":"A"}}),
+            json!({"stopped_at":1,"stopped_by_loop":{}}),
+        ] {
+            assert!(stop_text(&v).is_some());
+        }
+    }
+
+    #[test]
+    fn stop_text_preserves_missing_values_and_loop_precedence() {
+        for v in [json!({}), json!({"stopped_at":-1}), json!({"stopped_at":2}), json!({"stopped_at":2.5,"stopped_by_loop":{}})] {
+            assert_eq!(stop_text(&v), None);
+        }
+        assert_eq!(
+            stop_text(&json!({"stopped_at":3,"stopped_by_loop":{"joint":"Hinge"},"stopped_by_contact":{"a":"A","b":"B"}})),
+            Some(crate::i18n::format("trace.stopped_by_loop", &[("sample", "3"), ("joint", "Hinge")]))
+        );
+        assert_eq!(
+            stop_text(&json!({"stopped_at":4,"stopped_by_contact":{"a":"A","b":"B"}})),
+            Some(crate::i18n::format("trace.stopped_by_contact", &[("sample", "4"), ("a", "A"), ("b", "B")]))
+        );
+        assert_eq!(
+            stop_text(&json!({"stopped_at":0,"stopped_by_contact":{"a":1,"b":null}})),
+            Some(crate::i18n::format("trace.stopped_by_contact", &[("sample", "0"), ("a", ""), ("b", "")]))
+        );
+    }
 }

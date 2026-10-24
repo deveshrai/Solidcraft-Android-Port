@@ -162,7 +162,7 @@ fn selected_second_placement_custom_axis_handle_and_preview_stay_in_its_frame() 
         _ => panic!("revolve"),
     };
     open(&mut h);
-    assert!(h.widget("↖ Custom Axis").is_some());
+    assert_eq!(crate::scenario::count_of("dialog:selection:Axis:filled"), Some(1.0), "the stored custom axis stays selected");
     handle_at(&mut h, "revolve", world(90.0));
     h.step(&json!({"drag":[{"handle":"revolve"},{"world":world(60.0)}]})).unwrap();
     let commands = crate::dialogs::apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();

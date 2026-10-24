@@ -37,6 +37,58 @@ impl NavCaps {
     pub const RENDER: NavCaps = NavCaps { orbit: true, pick: false };
 }
 
+/// Supplies the scroll phases browsers omit, before the shared navigation sees input.
+#[derive(Default)]
+pub struct WebWheelGestures {
+    last_scroll: Option<f64>,
+}
+
+impl WebWheelGestures {
+    /// Bracket point-mode swipes and return the delay until their idle timeout.
+    ///
+    /// Browsers expose no device identity. A bare vertical delta of at least
+    /// `WHEEL_STEP_MIN` points is a wheel notch (browsers report about 100 points per notch,
+    /// scaled by page zoom and display scaling); smaller point deltas and horizontal input
+    /// start a swipe. Once started, larger deltas and momentum belong to that swipe too.
+    pub fn update(&mut self, raw: &mut egui::RawInput, now: f64) -> Option<std::time::Duration> {
+        use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, Vec2};
+        const IDLE: f64 = 0.1;
+        const WHEEL_STEP_MIN: f32 = 40.0;
+        let phase_event = |phase| Event::MouseWheel { unit: MouseWheelUnit::Point, delta: Vec2::ZERO, modifiers: Modifiers::NONE, phase };
+        let valid_time = now.is_finite() && now >= 0.0;
+        let events = std::mem::take(&mut raw.events);
+        if self.last_scroll.is_some_and(|last| !valid_time || now < last || now - last >= IDLE) {
+            raw.events.push(phase_event(TouchPhase::End));
+            self.last_scroll = None;
+        }
+        for event in events {
+            match &event {
+                Event::MouseWheel { unit, delta, modifiers, .. } => {
+                    let point = *unit == MouseWheelUnit::Point;
+                    let valid_delta = delta.is_finite() && *delta != Vec2::ZERO;
+                    let step = delta.x == 0.0 && delta.y.abs() >= WHEEL_STEP_MIN;
+                    let swipe = valid_time && point && valid_delta && !modifiers.ctrl && (self.last_scroll.is_some() || !step);
+                    if swipe {
+                        if self.last_scroll.is_none() {
+                            raw.events.push(phase_event(TouchPhase::Start));
+                        }
+                        self.last_scroll = Some(now);
+                    } else if self.last_scroll.take().is_some() {
+                        raw.events.push(phase_event(TouchPhase::End));
+                    }
+                }
+                // eframe converts browser pinch Ctrl+wheel to Zoom before the hook.
+                Event::Zoom(_) if self.last_scroll.take().is_some() => {
+                    raw.events.push(phase_event(TouchPhase::End));
+                }
+                _ => {}
+            }
+            raw.events.push(event);
+        }
+        self.last_scroll.and_then(|last| std::time::Duration::try_from_secs_f64((IDLE - (now - last)).clamp(0.0, IDLE)).ok())
+    }
+}
+
 /// Raw wheel/trackpad input for one frame, split by source.
 ///
 /// Mouse wheels report lines or pages; trackpads report points. Trackpad
@@ -171,7 +223,6 @@ pub(crate) fn modifier_motion(
         app.viewport.orbit_pivot = None;
         app.viewport.orbit_from = None;
         app.viewport.orbit_free = None;
-        app.viewport.orbit_snap = None;
     }
     app.viewport.modifier_nav = next;
     next.map(|(mode, p)| {
@@ -181,17 +232,38 @@ pub(crate) fn modifier_motion(
     })
 }
 
-/// View keys (#1541): the arrows turn the view 15° (with Shift a quarter turn, as the navigation
-/// cube's arrows), Ctrl+arrows pan it a tenth of the view, and Ctrl+8 looks straight at the
-/// selected face, plane or sketch. Not while a menu, the command box or a focused widget has the
-/// arrows. Returns whether the key was used.
-pub(crate) fn view_key(app: &mut SolveApp, ctx: &egui::Context, key: egui::Key, mods: egui::Modifiers) -> bool {
-    use egui::Key;
-    let menu_open = egui::Popup::is_any_open(ctx)
+/// A tap (press and release) shorter than this is one animated step; held longer, the arrow
+/// turns the view continuously.
+const TAP_SECONDS: f64 = 0.15;
+/// How fast a held arrow turns the view (Shift: twice as fast).
+const HOLD_DEGREES_PER_SECOND: f64 = 90.0;
+
+/// An arrow key turning the view that is still down (`ViewportState::key_hold`).
+#[derive(Clone, Copy)]
+pub(crate) struct KeyHold {
+    key: egui::Key,
+    action: &'static str,
+    shift: bool,
+    since: f64,
+}
+
+/// A menu, the command box or a focused widget has the keyboard, so the view keys are not ours.
+fn view_keys_blocked(app: &SolveApp, ctx: &egui::Context) -> bool {
+    egui::Popup::is_any_open(ctx)
         || app.viewport.context_menu.is_some()
         || app.ui.palette_open
         || ctx.memory(|m| m.focused().is_some())
-        || ctx.data(|d| d.get_temp::<egui::Id>(egui::Id::new("sc_panel_open")).is_some());
+        || ctx.data(|d| d.get_temp::<egui::Id>(egui::Id::new("sc_panel_open")).is_some())
+}
+
+/// View keys (#1541): the arrows turn the view 15° (with Shift a quarter turn, as the navigation
+/// cube's arrows), Ctrl+arrows pan it a tenth of the view, and Ctrl+8 looks straight at the
+/// selected face, plane or sketch. Held longer than a tap, an arrow keeps turning the view at a
+/// steady rate (`step_key_hold`); the operating system's key repeat does nothing. Not while a
+/// menu, the command box or a focused widget has the arrows. Returns whether the key was used.
+pub(crate) fn view_key(app: &mut SolveApp, ctx: &egui::Context, key: egui::Key, mods: egui::Modifiers, repeat: bool) -> bool {
+    use egui::Key;
+    let menu_open = view_keys_blocked(app, ctx);
     let ctrl = mods.command || mods.ctrl;
     if mods.alt || menu_open {
         return false;
@@ -200,7 +272,7 @@ pub(crate) fn view_key(app: &mut SolveApp, ctx: &egui::Context, key: egui::Key, 
         crate::viewport::look_at_selection(app);
         return true;
     }
-    let (action, dx, dy) = match key {
+    let (action, dx, dy): (&'static str, f32, f32) = match key {
         Key::ArrowLeft => ("left", -1.0, 0.0),
         Key::ArrowRight => ("right", 1.0, 0.0),
         Key::ArrowUp => ("up", 0.0, -1.0),
@@ -213,11 +285,45 @@ pub(crate) fn view_key(app: &mut SolveApp, ctx: &egui::Context, key: egui::Key, 
             let step = rect.height() * 0.1;
             camera_motion(app, rect, json!({"motion": "pan", "delta": [dx * step, dy * step]}));
         }
-    } else {
+    } else if !repeat {
         let degrees = if mods.shift { 90.0 } else { 15.0 };
-        let _ = app.run("view.navigate", json!({"camera": app.cam, "action": action, "degrees": degrees}));
+        app.viewport.key_hold = Some(KeyHold { key, action, shift: mods.shift, since: app.now });
+        // Turn from where a step in flight is going, so taps add up and the one animation is
+        // retargeted rather than a second started.
+        let from = app.cam_anim.map_or(app.cam, |a| a.to);
+        let _ = app.run("view.navigate", json!({"camera": from, "action": action, "degrees": degrees}));
     }
     true
+}
+
+/// Each frame an arrow turning the view is held past a tap: turn at a steady rate by the frame's
+/// time, with no animation of its own. Ends when the key is released or the keyboard goes
+/// elsewhere.
+pub(crate) fn step_key_hold(app: &mut SolveApp, ctx: &egui::Context) {
+    let Some(hold) = app.viewport.key_hold else { return };
+    let (down, dt) = ctx.input(|i| (i.key_down(hold.key), f64::from(i.unstable_dt)));
+    if !down || view_keys_blocked(app, ctx) {
+        app.viewport.key_hold = None;
+        return;
+    }
+    ctx.request_repaint();
+    if app.now - hold.since < TAP_SECONDS {
+        return;
+    }
+    let rate = if hold.shift { 2.0 * HOLD_DEGREES_PER_SECOND } else { HOLD_DEGREES_PER_SECOND };
+    let degrees = rate * if dt.is_finite() { dt.clamp(0.0, 0.1) } else { 0.0 };
+    if degrees <= 1e-6 {
+        return;
+    }
+    let params = json!({"camera": app.cam, "action": hold.action, "degrees": degrees});
+    if let Ok(v) = app.session.execute("view.navigate", &params)
+        && let Some(cam) = v.get("camera").and_then(|c| serde_json::from_value::<Camera>(c.clone()).ok())
+        && cam.is_valid()
+    {
+        app.cancel_view_animation();
+        app.viewport.orbit_free = None;
+        app.cam = cam;
+    }
 }
 
 /// Continuous camera changes use the same JSON command as programmatic callers.
@@ -225,6 +331,7 @@ pub(crate) fn camera_motion(app: &mut SolveApp, rect: Rect, mut params: serde_js
     let stored_fov = app.cam.fov;
     params["camera"] = json!(projection(app, rect).cam);
     params["viewport"] = json!([rect.width().max(1.0), rect.height().max(1.0)]);
+    params["free_orbit"] = json!(app.preferences.free_orbit);
     let _ = app.run("view.navigate", params);
     app.cam.fov = stored_fov;
 }
@@ -274,6 +381,7 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
             i.pointer.delta(),
         )
     });
+    let hover = hover.filter(|p| !crate::frame::dock_dragging(ui.ctx()) && !crate::shell::covered(app, *p));
     // The right button belongs to the marking menu while it is open.
     let secondary_down = secondary_down && app.viewport.context_menu.is_none();
     // The axis view handles its own clicks; the model underneath must not see them.
@@ -285,7 +393,7 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
     // A lifted finger is no longer over anything; the view had it when it took the click.
     let lifted = ui.input(|i| i.pointer.hover_pos().is_none());
     let over = if lifted { resp.clicked() || resp.drag_stopped() } else { resp.contains_pointer() && ui.rect_contains_pointer(rect) };
-    let inside = over && hover.is_some_and(|p| rect.contains(p) && !axes.contains(p));
+    let inside = ui.is_enabled() && over && hover.is_some_and(|p| rect.contains(p) && !axes.contains(p));
     app.viewport.mouse = hover.filter(|_| inside);
     // Sketch snap suppression is set once in `viewport::show` from preferences.
     middle_double_click(app, ui, inside);
@@ -323,7 +431,6 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
     let pinch = ui.input(pinch_factor);
     let h = rect.height().max(1.0) as f64;
     if inside && pinch != 1.0 {
-        app.viewport.orbit_snap = None;
         app.viewport.orbit_free = None;
         // Spread zooms in: the camera distance shrinks by the pinch factor.
         let f = f64::from(pinch).powf(-crate::prefs::zoom_sign(app));
@@ -340,7 +447,6 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
         }
     }
     if inside && scroll != 0.0 {
-        app.viewport.orbit_snap = None;
         app.viewport.orbit_free = None;
         let f = (-scroll as f64 * 0.0015 * crate::prefs::zoom_sign(app)).exp();
         let anchor = zoom_anchor(app, rect, hover, caps.orbit);
@@ -357,7 +463,6 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
     }
     // Two-finger scroll pans the model with the fingers.
     if inside && pan != egui::Vec2::ZERO {
-        app.viewport.orbit_snap = None;
         app.viewport.orbit_free = None;
         if app.preferences.nav == crate::prefs::TOUCHPAD_NAV {
             camera_motion(app, rect, json!({"motion":"pan","delta":[pan.x,pan.y]}));
@@ -371,7 +476,6 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
     let (touching, touch) = ui.input(|i| (i.any_touches(), i.multi_touch()));
     if let Some(t) = touch.filter(|t| t.num_touches >= 2 && (inside || app.viewport.touch_gesture)) {
         app.viewport.touch_gesture = true;
-        app.viewport.orbit_snap = None;
         app.viewport.orbit_free = None;
         app.cancel_view_animation();
         let moved = t.translation_delta;
@@ -451,7 +555,10 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
     } else {
         None
     };
-    let dragging = resp.dragged() || (inside && button.is_some());
+    // An orbit started on the viewport owns its button until release, including over a
+    // floating shell card that disables the underlying egui response.
+    let captured_orbit = app.viewport.orbit_from.is_some() && button.is_some();
+    let dragging = resp.dragged() || (inside && button.is_some()) || captured_orbit;
     // Without orbit (a flat page), bindings that orbit do nothing.
     let allowed = |m: NavMode| caps.orbit || m != NavMode::Orbit;
     let motion = modifier_motion(app, ui, inside, hover, mods, picking).filter(|(m, _)| allowed(*m));
@@ -505,9 +612,6 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
             };
         orbit_drag(app, rect, f64::from(delta.x), f64::from(delta.y), press, snap, true);
     } else {
-        if matches!(mode, Some(NavMode::Pan | NavMode::Zoom)) {
-            app.viewport.orbit_snap = None;
-        }
         if app.viewport.axis_drag.is_none() {
             app.viewport.orbit_free = None;
         }
@@ -544,20 +648,14 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
         if pressed || key || dragging || motion.is_some() || !caps.orbit {
             app.viewport.spin = false;
         } else {
-            app.cam.orbit(f64::from(dt.min(0.1)) * 30.0, 0.0);
+            orbit_camera(app, f64::from(dt.min(0.1)) * 30.0, 0.0);
             ui.ctx().request_repaint();
         }
     }
     if !app.cam.is_valid() {
         app.viewport.orbit_free = None;
-        app.viewport.orbit_snap = None;
         app.cam = Camera::default();
         app.fit_view();
-    }
-
-    step_orbit_snap(app, rect, ui.input(|i| f64::from(i.stable_dt)));
-    if app.viewport.orbit_snap.is_some() {
-        ui.ctx().request_repaint();
     }
     CameraInput { hover, scroll, mods, middle, secondary_down, primary_down, primary_pressed, delta, inside, axes, pinch, pan, primary_nav, mode }
 }
@@ -570,13 +668,13 @@ pub(crate) fn device(app: &mut SolveApp, rect: Rect, caps: NavCaps) {
     let Some(queued) = app.viewport.device_motion.take() else { return };
     let turn = caps.orbit && app.session.active_sketch.is_none();
     let height = f64::from(rect.height().max(1.0));
-    device_camera(&mut app.cam, queued.motion, queued.seconds, height, turn, app.preferences.zoom_reverse);
+    device_camera(&mut app.cam, queued.motion, queued.seconds, height, turn, app.preferences.zoom_reverse, app.preferences.free_orbit);
 }
 
 /// `seconds` of 3D mouse `motion` on `cam`, in a view `height` points tall. A full deflection
 /// pans about 0.6 of the view's height a second and turns about two radians a second, whatever
 /// the frame rate. With `turn` off the view keeps its orientation.
-pub(crate) fn device_camera(cam: &mut Camera, motion: Motion, seconds: f64, height: f64, turn: bool, reverse_zoom: bool) {
+pub(crate) fn device_camera(cam: &mut Camera, motion: Motion, seconds: f64, height: f64, turn: bool, reverse_zoom: bool, free_orbit: bool) {
     if !(seconds > 0.0) || !seconds.is_finite() {
         return;
     }
@@ -591,8 +689,12 @@ pub(crate) fn device_camera(cam: &mut Camera, motion: Motion, seconds: f64, heig
         // These are logical 3DxWare coordinates after the profile mapping: Rx is Tilt, Ry is
         // Roll and Rz is Spin. The KMJ profile swaps physical Ry/Rz for the selected navigation
         // mode, so swapping them again here would make Roll behave like Spin.
-        cam.orbit(ry * 250.0 * seconds, rx * 250.0 * seconds);
-        cam.roll_by(rz * 2.0 * seconds);
+        if free_orbit {
+            cam.rotate_in_view(Vec3::new(-rx, -ry, rz) * (2.0 * seconds));
+        } else {
+            cam.orbit(ry * 250.0 * seconds, rx * 250.0 * seconds);
+            cam.roll_by(rz * 2.0 * seconds);
+        }
     }
 }
 
@@ -614,19 +716,23 @@ pub(crate) fn snapped_axis_camera(cam: Camera) -> Camera {
     to
 }
 
-pub(crate) struct OrbitSnap {
-    pub(crate) target: Camera,
-    pub(crate) yaw_velocity: f64,
-    pub(crate) pitch_velocity: f64,
-    /// The pivot and where it lies in the camera's frame ([`Camera::frame_coords`]).
-    pub(crate) pivot: Option<(Vec3, Vec3)>,
-}
-
-/// Pointer motion accumulates independently of the spring preview, so many small deltas
-/// still cross snap boundaries. Keep a small angular margin to avoid boundary flicker.
+/// Orbit by a pointer drag. With `snap` the displayed view is the nearest standard or diagonal
+/// direction at once; the unsnapped orbit is kept in `orbit_free` so many small deltas still
+/// cross snap boundaries. A small angular margin avoids flicker at a boundary.
 pub(crate) fn orbit_drag(app: &mut SolveApp, rect: Rect, dx: f64, dy: f64, press: Option<Pos2>, snap: bool, around_cursor: bool) {
+    // Free rotation must not enter the yaw/pitch snap: it discards roll at the poles.
+    if app.preferences.free_orbit {
+        app.viewport.orbit_free = None;
+        if around_cursor {
+            orbit(app, rect, dx, dy, press);
+        } else {
+            orbit_camera(app, dx, dy);
+        }
+        return;
+    }
     let displayed = app.cam;
-    if let Some(free) = app.viewport.orbit_free.take() {
+    let previous_free = app.viewport.orbit_free.take();
+    if let Some(free) = previous_free {
         app.cam = free;
     }
     if around_cursor {
@@ -636,62 +742,31 @@ pub(crate) fn orbit_drag(app: &mut SolveApp, rect: Rect, dx: f64, dy: f64, press
     }
     let free = app.cam;
     app.viewport.orbit_free = Some(free);
-    if snap || !around_cursor || app.viewport.orbit_snap.is_some() {
-        let mut target = if snap { snapped_axis_camera(free) } else { free };
-        if snap && let Some(previous) = app.viewport.orbit_snap.as_ref() {
-            let b = free.back();
-            if previous.target.back().dot(b) + 0.025 >= target.back().dot(b) {
-                target.yaw = previous.target.yaw;
-                target.pitch = previous.target.pitch;
-            }
+    if !snap {
+        return;
+    }
+    let mut target = snapped_axis_camera(free);
+    // Keep the direction already chosen unless the orbit has clearly left it.
+    if previous_free.is_some_and(|p| p != displayed) {
+        let b = free.back();
+        if displayed.back().dot(b) + 0.025 >= target.back().dot(b) {
+            target.yaw = displayed.yaw;
+            target.pitch = displayed.pitch;
         }
-        // The cursor and origin pivots stay still while a snap eases in; the axis gizmo has no
-        // pivot (it orbits about the view centre, see `axis_view`).
-        let pivot = if around_cursor {
-            match app.preferences.orbit_around {
-                crate::prefs::OrbitAround::Origin => Some(Vec3::ZERO),
-                _ => app.viewport.orbit_pivot,
-            }
-        } else {
-            None
+    }
+    // The cursor and origin pivots stay still; the axis gizmo has no pivot (it orbits about the
+    // view centre, see `axis_view`).
+    let pivot = if around_cursor {
+        match app.preferences.orbit_around {
+            crate::prefs::OrbitAround::Origin => Some(Vec3::ZERO),
+            _ => app.viewport.orbit_pivot,
         }
-        .map(|p| (p, displayed.frame_coords(p)));
-        let spring = app.viewport.orbit_snap.get_or_insert(OrbitSnap { target, yaw_velocity: 0.0, pitch_velocity: 0.0, pivot });
-        spring.target = target;
-        spring.pivot = pivot;
-        app.cam = displayed;
-    }
-}
-
-/// A lightly damped spring: mostly settled in about a third of a second, with a small
-/// elastic finish. Bounded substeps keep the behavior consistent across frame rates.
-pub(crate) fn step_orbit_snap(app: &mut SolveApp, _rect: Rect, dt: f64) {
-    let Some(mut spring) = app.viewport.orbit_snap.take() else { return };
-    let dt = if dt.is_finite() { dt.clamp(0.0, 0.05) } else { 1.0 / 60.0 };
-    let steps = (dt * 240.0).ceil().max(1.0) as usize;
-    let h = dt / steps as f64;
-    let omega = 16.0;
-    let damping = 0.82;
-    let yaw_error = |yaw: f64| (spring.target.yaw - yaw + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
-    for _ in 0..steps.min(12) {
-        spring.yaw_velocity += (omega * omega * yaw_error(app.cam.yaw) - 2.0 * damping * omega * spring.yaw_velocity) * h;
-        spring.pitch_velocity += (omega * omega * (spring.target.pitch - app.cam.pitch) - 2.0 * damping * omega * spring.pitch_velocity) * h;
-        app.cam.yaw += spring.yaw_velocity * h;
-        app.cam.pitch = (app.cam.pitch + spring.pitch_velocity * h).clamp(-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
-    }
-    app.cam.target = spring.target.target;
-    let done = yaw_error(app.cam.yaw).abs() < 1e-5
-        && (spring.target.pitch - app.cam.pitch).abs() < 1e-5
-        && spring.yaw_velocity.abs() < 1e-4
-        && spring.pitch_velocity.abs() < 1e-4;
-    if done {
-        app.cam = spring.target;
-    }
-    if let Some((pivot, coords)) = spring.pivot {
-        app.cam.place(pivot, coords);
-    }
-    if !done {
-        app.viewport.orbit_snap = Some(spring);
+    } else {
+        None
+    };
+    app.cam = target;
+    if let Some(p) = pivot {
+        app.cam.place(p, displayed.frame_coords(p));
     }
 }
 
@@ -743,6 +818,14 @@ pub fn orbit(app: &mut SolveApp, rect: egui::Rect, dx: f64, dy: f64, press: Opti
             }
         }),
     };
+    if app.preferences.free_orbit {
+        app.viewport.orbit_from = None;
+        match pivot {
+            Some(p) => orbit_about(app, rect, dx, dy, p),
+            None => orbit_camera(app, dx, dy),
+        }
+        return;
+    }
     // The drag's whole turn so far, applied to the camera it began with: the view depends on
     // where the pointer is, not on the path it took, so fast or erratic drags (a pitch held at
     // straight up or down for a while, many tiny steps) can't drift. Anything else that moves
@@ -771,16 +854,399 @@ pub struct OrbitFrom {
     last: Camera,
 }
 
+/// Rotate rigidly about the chosen pivot, keeping its camera-frame position unchanged.
+pub(crate) fn orbit_about(app: &mut SolveApp, _rect: egui::Rect, dx: f64, dy: f64, pivot: Vec3) {
+    let coords = app.cam.frame_coords(pivot);
+    orbit_camera(app, dx, dy);
+    app.cam.place(pivot, coords);
+}
+
+fn orbit_camera(app: &mut SolveApp, dx: f64, dy: f64) {
+    if app.preferences.free_orbit {
+        app.cam.rotate_in_view(Vec3::new(-dy * 0.008, -dx * 0.008, 0.0));
+    } else {
+        app.cam.orbit(dx, dy);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    fn web_wheel(unit: egui::MouseWheelUnit, delta: egui::Vec2, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::MouseWheel { unit, delta, modifiers, phase: egui::TouchPhase::Move }
+    }
+
+    fn web_frame(
+        state: &mut super::WebWheelGestures,
+        time: f64,
+        events: Vec<egui::Event>,
+        gesture: &mut bool,
+    ) -> (super::RawWheel, Vec<egui::Event>) {
+        let mut raw = egui::RawInput { time: Some(time), events, focused: true, ..Default::default() };
+        let _ = state.update(&mut raw, time);
+        let events = raw.events.clone();
+        let mut input = egui::InputState::default();
+        input.events = raw.events;
+        (super::immediate_wheel(&input, egui::InputOptions::default(), 600.0, gesture), events)
+    }
+
+    #[test]
+    fn web_swipes_pan_from_the_first_delta_and_end_after_idle() {
+        use egui::{Modifiers, MouseWheelUnit::Point, TouchPhase, vec2};
+        let mut state = super::WebWheelGestures::default();
+        let mut gesture = false;
+        for (time, delta) in [(0.0, vec2(0.0, 7.5)), (0.04, vec2(3.0, 0.0)), (0.09, vec2(0.0, 120.0))] {
+            let (wheel, events) = web_frame(&mut state, time, vec![web_wheel(Point, delta, Modifiers::NONE)], &mut gesture);
+            assert_eq!(wheel.pan, delta);
+            assert_eq!(wheel.zoom, 0.0);
+            assert!(gesture);
+            let starts = events.iter().filter(|e| matches!(e, egui::Event::MouseWheel { phase: TouchPhase::Start, .. })).count();
+            assert_eq!(starts, usize::from(time == 0.0));
+        }
+        let delay = state.update(&mut egui::RawInput::default(), 0.10).expect("schedule the idle end even without more input");
+        assert!((delay.as_secs_f64() - 0.09).abs() < 1e-9);
+        web_frame(&mut state, 0.18, vec![], &mut gesture);
+        assert!(gesture);
+        let (_, events) = web_frame(&mut state, 0.20, vec![], &mut gesture);
+        assert!(!gesture);
+        assert!(matches!(events.as_slice(), [egui::Event::MouseWheel { phase: TouchPhase::End, delta, .. }] if *delta == egui::Vec2::ZERO));
+        let (wheel, _) = web_frame(&mut state, 0.21, vec![web_wheel(Point, vec2(0.0, -2.0), Modifiers::NONE)], &mut gesture);
+        assert_eq!(wheel.pan, vec2(0.0, -2.0));
+    }
+
+    #[test]
+    fn web_wheel_steps_and_pinch_keep_zooming() {
+        use egui::{Modifiers, MouseWheelUnit::*, vec2};
+        for (unit, delta, mods) in [
+            (Point, vec2(0.0, 120.0), Modifiers::NONE),
+            (Point, vec2(0.0, -100.0), Modifiers::NONE),
+            (Point, vec2(0.0, 125.0), Modifiers::NONE),
+            (Point, vec2(0.0, -111.111), Modifiers::NONE),
+            (Line, vec2(1.0, 3.0), Modifiers::NONE),
+            (Page, vec2(0.0, 1.0), Modifiers::NONE),
+            (Point, vec2(0.0, 2.5), Modifiers::CTRL),
+        ] {
+            let mut state = super::WebWheelGestures::default();
+            let mut gesture = false;
+            let event = web_wheel(unit, delta, mods);
+            let (wheel, events) = web_frame(&mut state, 0.0, vec![event.clone()], &mut gesture);
+            assert_eq!(events, vec![event.clone()]);
+            assert_eq!(wheel.pan, egui::Vec2::ZERO);
+            if !mods.ctrl {
+                assert_ne!(wheel.zoom, 0.0);
+            }
+            web_frame(&mut state, 0.01, vec![web_wheel(Point, vec2(0.0, 2.5), Modifiers::NONE)], &mut gesture);
+            assert!(gesture);
+            let (wheel, _) = web_frame(&mut state, 0.02, vec![event], &mut gesture);
+            // Point steps can occur during a swipe; explicit line/page wheels and Ctrl cannot.
+            if unit != Point || mods.ctrl {
+                assert!(!gesture);
+                assert_eq!(wheel.pan, egui::Vec2::ZERO);
+            }
+        }
+        let mut state = super::WebWheelGestures::default();
+        let mut gesture = false;
+        web_frame(&mut state, 0.0, vec![web_wheel(Point, vec2(0.0, 2.5), Modifiers::NONE)], &mut gesture);
+        assert!(gesture);
+        let (_, events) = web_frame(&mut state, 0.01, vec![egui::Event::Zoom(1.1)], &mut gesture);
+        assert!(!gesture);
+        assert_eq!(events.last(), Some(&egui::Event::Zoom(1.1)));
+        let mut input = egui::InputState::default();
+        input.events = events;
+        assert!((super::pinch_factor(&input) - 1.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn web_gesture_timeout_and_invalid_input_do_not_leave_a_gesture_active() {
+        use egui::{Modifiers, MouseWheelUnit::Point, vec2};
+        let mut state = super::WebWheelGestures::default();
+        let mut gesture = false;
+        web_frame(&mut state, 1.0, vec![web_wheel(Point, vec2(0.0, 3.5), Modifiers::NONE)], &mut gesture);
+        let (wheel, events) = web_frame(&mut state, 1.2, vec![web_wheel(Point, vec2(0.0, 120.0), Modifiers::NONE)], &mut gesture);
+        assert_eq!(wheel.zoom, 120.0);
+        assert!(!gesture);
+        assert_eq!(events.len(), 2);
+        for time in [f64::NAN, f64::INFINITY, -1.0] {
+            web_frame(&mut state, 2.0, vec![web_wheel(Point, vec2(0.0, 3.5), Modifiers::NONE)], &mut gesture);
+            web_frame(&mut state, time, vec![], &mut gesture);
+            assert!(!gesture);
+        }
+        for delta in [vec2(f32::NAN, 1.0), vec2(0.0, f32::INFINITY), vec2(0.0, 0.0)] {
+            let (_, events) = web_frame(&mut state, 3.0, vec![web_wheel(Point, delta, Modifiers::NONE)], &mut gesture);
+            assert_eq!(events.len(), 1);
+            assert!(!gesture);
+        }
+    }
+
+    #[test]
+    fn clamped_drag_stays_reversible_and_restarts_after_free_orbit() {
+        use super::*;
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+        for fov in [0.0, 0.6] {
+            let mut app = crate::SolveApp::new(Default::default(), crate::Services::default());
+            app.preferences.orbit_around = OrbitAround::Origin;
+            app.cam = Camera { target: Vec3::new(2.0, 3.0, 4.0), pitch: 1.4, roll: 0.7, fov, ..Default::default() };
+            let start = app.cam;
+            for (dx, dy) in [(120.0, 400.0), (90.0, -200.0), (-210.0, -200.0)] {
+                orbit(&mut app, rect, dx, dy, None);
+            }
+            assert!(app.cam.back().dist(start.back()) < 1e-9);
+            assert!(app.cam.target.dist(start.target) < 1e-9);
+            app.preferences.free_orbit = true;
+            orbit(&mut app, rect, 0.0, 80.0, None);
+            assert!((app.cam.back().dot(start.back()) - 0.64_f64.cos()).abs() < 1e-9);
+            let mut next = app.cam;
+            next.orbit_about(10.0, 20.0, Vec3::ZERO);
+            app.preferences.free_orbit = false;
+            orbit(&mut app, rect, 10.0, 20.0, None);
+            assert!(app.cam.back().dist(next.back()) < 1e-9);
+            assert!(app.cam.target.dist(next.target) < 1e-9);
+        }
+    }
+
+    fn touchpad_frame(app: &mut crate::SolveApp, ctx: &egui::Context, caps: super::NavCaps, at: egui::Pos2, mods: egui::Modifiers, time: &mut f64) {
+        *time += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 1400.0))),
+            time: Some(*time),
+            focused: true,
+            events: vec![egui::Event::ModifiersChanged(mods), egui::Event::PointerMoved(at)],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| {
+            let rect = ui.max_rect();
+            app.viewport.rect = Some(rect);
+            let response = ui.interact(rect, ui.id().with("touchpad-setting"), egui::Sense::click_and_drag());
+            super::handle(app, ui, rect, &response, caps);
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn touchpad_free_orbit_setting_reaches_the_shared_command() {
+        use super::*;
+        for caps in [NavCaps::MODEL, NavCaps::RENDER, NavCaps { orbit: false, pick: false }] {
+            for up in [solidcraft_engine::render::UpAxis::Y, solidcraft_engine::render::UpAxis::Z] {
+                for free in [false, true] {
+                    let ctx = egui::Context::default();
+                    let mut app = crate::SolveApp::new(Default::default(), crate::Services::default());
+                    app.preferences.nav = crate::prefs::TOUCHPAD_NAV.into();
+                    app.preferences.free_orbit = free;
+                    app.ui.up_axis = up;
+                    app.cam = Camera { pitch: 1.4, roll: 0.7, up, ..Default::default() };
+                    let before = app.cam;
+                    let design = app.session.doc.to_json();
+                    let mut time = 0.0;
+                    touchpad_frame(&mut app, &ctx, caps, pos2(400.0, 300.0), egui::Modifiers::NONE, &mut time);
+                    touchpad_frame(&mut app, &ctx, caps, pos2(400.0, 300.0), egui::Modifiers::ALT, &mut time);
+                    touchpad_frame(&mut app, &ctx, caps, pos2(400.0, 380.0), egui::Modifiers::ALT, &mut time);
+                    if !caps.orbit {
+                        assert_eq!(app.cam, before);
+                    } else if free {
+                        let expected = before.back() * 0.64_f64.cos() + before.basis().1 * 0.64_f64.sin();
+                        assert!(app.cam.back().dist(expected) < 1e-8, "{caps:?} {up:?}: {:?}", app.cam);
+                    } else {
+                        assert!(app.cam.pitch > before.pitch && app.cam.pitch < std::f64::consts::FRAC_PI_2);
+                    }
+                    assert_eq!((app.cam.target, app.cam.distance, app.cam.fov), (before.target, before.distance, before.fov));
+                    assert!(app.viewport.orbit_free.is_none());
+                    assert!(!ctx.input(|i| i.pointer.any_down()));
+                    assert_eq!(app.session.doc.to_json(), design);
+                    assert!(app.session.undo.is_empty() && app.session.selection.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn touchpad_free_orbit_keeps_the_rigid_pivot_in_both_projections() {
+        use super::*;
+        for up in [solidcraft_engine::render::UpAxis::Y, solidcraft_engine::render::UpAxis::Z] {
+            for fov in [0.0, 0.6] {
+                for around in [OrbitAround::Origin, OrbitAround::Cursor] {
+                    let ctx = egui::Context::default();
+                    let mut app = crate::SolveApp::new(Default::default(), crate::Services::default());
+                    app.preferences.nav = crate::prefs::TOUCHPAD_NAV.into();
+                    app.preferences.free_orbit = true;
+                    app.preferences.orbit_around = around;
+                    app.ui.perspective = fov > 0.0;
+                    app.ui.up_axis = up;
+                    app.cam = Camera { target: Vec3::new(2.0, 3.0, 4.0), pitch: 1.4, roll: 0.7, fov, up, ..Default::default() };
+                    let caps = NavCaps::MODEL;
+                    let mut time = 0.0;
+                    touchpad_frame(&mut app, &ctx, caps, pos2(400.0, 300.0), egui::Modifiers::NONE, &mut time);
+                    touchpad_frame(&mut app, &ctx, caps, pos2(400.0, 300.0), egui::Modifiers::ALT, &mut time);
+                    let pivot = if around == OrbitAround::Origin { Vec3::ZERO } else { Vec3::new(10.0, 20.0, 30.0) };
+                    app.viewport.orbit_pivot = Some(pivot);
+                    let rect = app.viewport.rect.unwrap();
+                    let coords = app.cam.frame_coords(pivot);
+                    let pixel = projection(&app, rect).to_screen(pivot).unwrap();
+                    touchpad_frame(&mut app, &ctx, caps, pos2(400.0, 380.0), egui::Modifiers::ALT, &mut time);
+                    assert!(app.cam.frame_coords(pivot).dist(coords) < 1e-8, "{up:?} {fov} {around:?}");
+                    assert!(projection(&app, rect).to_screen(pivot).unwrap().distance(pixel) < 1e-3);
+                    assert_eq!((app.cam.distance, app.cam.fov), (Camera::default().distance, fov));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn touchpad_free_orbit_completes_a_turn_and_stops_on_release() {
+        use super::*;
+        let ctx = egui::Context::default();
+        let mut app = crate::SolveApp::new(Default::default(), crate::Services::default());
+        app.preferences.nav = crate::prefs::TOUCHPAD_NAV.into();
+        app.preferences.free_orbit = true;
+        app.cam = Camera { pitch: 1.4, roll: 0.7, ..Default::default() };
+        let initial = app.cam;
+        let design = app.session.doc.to_json();
+        let log = app.session.log.len();
+        let mut time = 0.0;
+        let caps = NavCaps::MODEL;
+        touchpad_frame(&mut app, &ctx, caps, pos2(400.0, 300.0), egui::Modifiers::NONE, &mut time);
+        touchpad_frame(&mut app, &ctx, caps, pos2(400.0, 300.0), egui::Modifiers::ALT, &mut time);
+        let mut at = pos2(400.0, 300.0);
+        for step in 1..=128 {
+            at.y = 300.0 + (std::f64::consts::TAU * step as f64 / (128.0 * 0.008)) as f32;
+            touchpad_frame(&mut app, &ctx, caps, at, egui::Modifiers::ALT, &mut time);
+        }
+        assert!(app.cam.back().dist(initial.back()) < 1e-6);
+        assert!(app.cam.basis().0.dist(initial.basis().0) < 1e-6);
+        let stopped = app.cam;
+        for _ in 0..60 {
+            touchpad_frame(&mut app, &ctx, caps, at, egui::Modifiers::NONE, &mut time);
+        }
+        assert_eq!(app.cam, stopped);
+        assert_eq!(app.session.doc.to_json(), design);
+        assert_eq!(app.session.log.len(), log);
+        assert!(app.session.undo.is_empty() && app.session.selection.is_empty());
+    }
+
+    #[test]
+    fn free_orbit_is_opt_in_for_every_preset_and_shared_by_mouse_and_device() {
+        use super::*;
+        use crate::space_mouse::DeviceMotion;
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+        let initial = Camera { yaw: 0.0, pitch: 1.4, ..Default::default() };
+        for preset in crate::prefs::NAV_PRESETS {
+            for enabled in [false, true] {
+                let mut h = crate::scenario::Harness::new();
+                h.app.preferences.nav = preset.id.into();
+                h.app.preferences.free_orbit = enabled;
+                h.app.cam = initial;
+                orbit_drag(&mut h.app, rect, 0.0, 80.0, None, true, false);
+                if enabled {
+                    assert!((h.app.cam.back().dot(initial.back()) - 0.64_f64.cos()).abs() < 1e-9);
+                    assert!(h.app.viewport.orbit_free.is_none());
+                } else {
+                    assert!(h.app.cam.pitch < std::f64::consts::FRAC_PI_2);
+                    assert!(h.app.viewport.orbit_free.is_some(), "{} keeps Shift snap", preset.id);
+                }
+                h.app.cam = initial;
+                h.app.viewport.device_motion =
+                    Some(DeviceMotion { motion: Motion { translation: [0.0; 3], rotation: [1.0, 0.0, 0.0] }, seconds: 0.32 });
+                device(&mut h.app, rect, NavCaps::MODEL);
+                if enabled {
+                    assert!((h.app.cam.back().dot(initial.back()) - 0.64_f64.cos()).abs() < 1e-9);
+                } else {
+                    assert!(h.app.cam.pitch > initial.pitch && h.app.cam.pitch < std::f64::consts::FRAC_PI_2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn solidworks_mouse_orbit_passes_the_pole_without_snapping() {
+        use serde_json::json;
+        for up in [solidcraft_engine::render::UpAxis::Z, solidcraft_engine::render::UpAxis::Y] {
+            for button in ["middle", "right"] {
+                let mut h = crate::scenario::Harness::new();
+                h.app.home.open = false;
+                h.app.preferences.nav = "solidworks".into();
+                h.app.preferences.free_orbit = true;
+                h.app.ui.up_axis = up;
+                h.app.cam = solidcraft_engine::render::Camera { yaw: 0.0, pitch: 1.4, up, ..Default::default() };
+                let before = h.app.cam;
+                h.call("ui.drag", json!({"x0":800,"y0":400,"x1":800,"y1":480,"button":button,"steps":40}));
+                assert!((h.app.cam.back().dot(before.back()) - 0.64_f64.cos()).abs() < 1e-6, "{up:?} {button}: {:?}", h.app.cam);
+                assert!(h.app.viewport.orbit_free.is_none());
+                let before = h.app.cam;
+                h.call("ui.drag", json!({"x0":800,"y0":400,"x1":850,"y1":400,"button":"right","shift":true,"steps":20}));
+                assert!((h.app.cam.back().dot(before.back()) - 0.4_f64.cos()).abs() < 1e-6);
+                assert!(h.app.viewport.orbit_free.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn solidworks_device_and_mouse_keep_turning_with_the_same_screen_axes() {
+        use super::*;
+        use crate::space_mouse::DeviceMotion;
+        for caps in [NavCaps::MODEL, NavCaps::RENDER] {
+            for rotation in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
+                let mut h = crate::scenario::Harness::new();
+                h.app.preferences.nav = "solidworks".into();
+                h.app.preferences.free_orbit = true;
+                let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+                let initial = Camera { yaw: 0.0, pitch: 0.0, roll: 0.7, ..Default::default() };
+                h.app.cam = initial;
+                let mut mouse = initial;
+                let seconds = std::f64::consts::TAU / 512.0;
+                for _ in 0..256 {
+                    let before = h.app.cam;
+                    h.app.viewport.device_motion = Some(DeviceMotion { motion: Motion { translation: [0.0; 3], rotation }, seconds });
+                    device(&mut h.app, rect, caps);
+                    assert!((before.back().dot(h.app.cam.back()) - (seconds * 2.0).cos()).abs() < 1e-9);
+                    let device_cam = h.app.cam;
+                    h.app.cam = mouse;
+                    orbit_drag(&mut h.app, rect, rotation[1] * seconds * 250.0, rotation[0] * seconds * 250.0, None, true, false);
+                    mouse = h.app.cam;
+                    assert!(mouse.back().dist(device_cam.back()) < 1e-9 && mouse.basis().0.dist(device_cam.basis().0) < 1e-9);
+                    h.app.cam = device_cam;
+                }
+                assert!(h.app.cam.back().dist(initial.back()) < 1e-8 && h.app.cam.basis().0.dist(initial.basis().0) < 1e-8);
+            }
+        }
+        // Other presets keep the existing upright camera behavior.
+        let mut cam = Camera { yaw: 0.0, pitch: 1.5, ..Default::default() };
+        device_camera(&mut cam, Motion { translation: [0.0; 3], rotation: [1.0, 0.0, 0.0] }, 0.1, 600.0, true, false, false);
+        assert!(cam.pitch < std::f64::consts::FRAC_PI_2 && cam.pitch > 1.5);
+    }
+
+    #[test]
+    fn solidworks_free_orbit_keeps_the_configured_pivot_on_screen() {
+        use super::*;
+        let mut h = crate::scenario::Harness::new();
+        h.app.preferences.nav = "solidworks".into();
+        h.app.preferences.free_orbit = true;
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+        for fov in [0.0, 0.6] {
+            h.app.ui.perspective = fov > 0.0;
+            for pivot in [Vec3::ZERO, Vec3::new(10.0, 20.0, 30.0), Vec3::new(10.0, -20.0, -30.0)] {
+                h.app.cam = Camera { target: Vec3::new(2.0, 3.0, 4.0), yaw: 0.0, pitch: 1.5, roll: 0.7, fov, ..Default::default() };
+                let before = projection(&h.app, rect).to_screen(pivot).unwrap();
+                orbit_about(&mut h.app, rect, 30.0, 50.0, pivot);
+                let after = projection(&h.app, rect).to_screen(pivot).unwrap();
+                assert!(before.distance(after) < 1e-3, "{fov} {pivot:?}: {before:?} -> {after:?}");
+            }
+        }
+    }
+
     /// Every page with a camera navigates through [`super::handle`] (#1454). A page that reads
     /// the wheel or moves the view camera itself would drift from the user's navigation settings,
     /// so outside this module the camera may only be moved through it, the view commands or the
     /// navigators. The 3D mouse in both apps hands its motion to [`super::device`].
     #[test]
     fn hand_rolled_camera_input_is_rejected() {
-        const PATTERNS: [&str; 7] =
-            ["smooth_scroll_delta", "raw_scroll_delta", "zoom_delta()", "cam.orbit(", "cam.pan(", "cam.zoom_at(", "cam.roll_by("];
+        const PATTERNS: [&str; 8] = [
+            "smooth_scroll_delta",
+            "raw_scroll_delta",
+            "zoom_delta()",
+            "cam.orbit(",
+            "cam.pan(",
+            "cam.zoom_at(",
+            "cam.roll_by(",
+            "cam.rotate_in_view(",
+        ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let dirs = [root.join("src"), root.join("../../apps/solidcraft/src"), root.join("../../apps/solidcraft-web/src")];
         let allowed = ["navigation.rs"];
@@ -825,7 +1291,7 @@ mod tests {
             let mut app = crate::SolveApp::new(s, crate::Services::default());
             app.preferences.nav = preset.into();
             app.viewport.spin = true;
-            let ctx = egui::Context::default();
+            let ctx = crate::fonts::test_context();
             let mut time = 0.0;
             let mut frame = |app: &mut crate::SolveApp, mods: Modifiers, events: Vec<Event>| {
                 time += 1.0 / 60.0;
@@ -890,7 +1356,7 @@ mod tests {
             let mut s = solidcraft_engine::Session::default();
             s.execute("solid.box", &serde_json::json!({"length":40,"width":30,"height":20})).unwrap();
             let mut app = crate::SolveApp::new(s, crate::Services::default());
-            let ctx = egui::Context::default();
+            let ctx = crate::fonts::test_context();
             let before = app.cam;
             app.viewport.device_motion = Some(every_axis);
             let raw = egui::RawInput {
@@ -976,6 +1442,96 @@ mod view_key_tests {
             }
         }
         assert!(crate::keymap::RESERVED.contains(&crate::keymap::key_name(egui::Key::Num8, egui::Modifiers::COMMAND).as_str()));
+    }
+
+    fn arrow(pressed: bool, repeat: bool) -> egui::Event {
+        egui::Event::Key { key: egui::Key::ArrowLeft, physical_key: None, pressed, repeat, modifiers: egui::Modifiers::NONE }
+    }
+
+    /// A press and release in one frame, without the harness settling the view after it.
+    fn tap(h: &mut Harness) {
+        h.app.synthetic.push(arrow(true, false));
+        h.app.synthetic.push(arrow(false, false));
+        h.frame();
+    }
+
+    /// The signed turn from `a` to `b`, past the wrap.
+    fn turn(a: f64, b: f64) -> f64 {
+        (b - a + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
+    }
+
+    fn front_view() -> Harness {
+        let mut h = Harness::new();
+        h.app.preferences.look_at_anim = true;
+        h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        h.step(&json!({"call": "ui.view", "params": {"view": "front"}})).unwrap();
+        h.settle();
+        h
+    }
+
+    /// Holding an arrow turns the view steadily, by frame time, whatever the key repeat does:
+    /// one animation at most, never a second one fighting the first.
+    #[test]
+    fn a_held_arrow_turns_the_view_steadily_and_ignores_key_repeat() {
+        let hold = |repeats: bool| {
+            let mut h = front_view();
+            let mut last = h.app.cam.yaw;
+            h.app.synthetic.push(arrow(true, false));
+            h.frame();
+            let log = h.app.session.log.len();
+            let mut deltas = Vec::new();
+            for frame in 0..60 {
+                if repeats && frame % 3 == 2 {
+                    h.app.synthetic.push(arrow(true, true));
+                }
+                h.frame();
+                deltas.push(turn(last, h.app.cam.yaw));
+                last = h.app.cam.yaw;
+            }
+            assert!(h.app.cam_anim.is_none(), "the held turn runs on key state, not on a tween");
+            assert_eq!(h.app.session.log.len(), log, "turn frames do not flood the command log");
+            assert!(deltas.iter().all(|d| *d > 0.0), "the view never stops or reverses while held: {deltas:?}");
+            let steady = &deltas[20..];
+            let per_frame = 90f64.to_radians() / 60.0;
+            assert!(steady.iter().all(|d| (d - per_frame).abs() < 1e-3), "{steady:?}");
+            let held = h.app.cam.yaw;
+            h.app.synthetic.push(arrow(false, false));
+            h.frames(5);
+            assert_eq!(h.app.cam.yaw, held, "releasing stops the turn at once");
+            h.app.cam.yaw
+        };
+        assert!((hold(false) - hold(true)).abs() < 1e-9, "OS key repeat changes nothing");
+    }
+
+    /// A tap is still one animated step of 15°, with one animation.
+    #[test]
+    fn a_tap_is_one_animated_step() {
+        let mut h = front_view();
+        let before = h.app.cam.yaw;
+        tap(&mut h);
+        h.frames(2);
+        assert!(h.app.cam_anim.is_some(), "the step animates");
+        h.settle();
+        assert!(h.app.cam_anim.is_none());
+        assert!((turn(before, h.app.cam.yaw).abs() - 15f64.to_radians()).abs() < 1e-6);
+    }
+
+    /// A tap while a step is in flight retargets that animation: the turns add up and only one
+    /// animation exists, starting where the camera is.
+    #[test]
+    fn a_tap_during_a_step_retargets_the_one_animation() {
+        let mut h = front_view();
+        let before = h.app.cam.yaw;
+        tap(&mut h);
+        h.frames(5);
+        let mid = h.app.cam;
+        tap(&mut h);
+        h.frames(1);
+        let anim = h.app.cam_anim.expect("one animation");
+        assert!((turn(before, anim.to.yaw).abs() - 30f64.to_radians()).abs() < 1e-6, "retargeted past the first step");
+        assert!(turn(mid.yaw, anim.from.yaw).abs() < 15f64.to_radians(), "continues from the camera as it is");
+        h.settle();
+        assert!((turn(before, h.app.cam.yaw).abs() - 30f64.to_radians()).abs() < 1e-6);
     }
 
     /// #1886: Ctrl+8 looks straight at the sketch; pressed again while the view faces it, it

@@ -7,8 +7,10 @@
   and one tab per open design (each with its own undo history, selection and camera; a dot marks
   unsaved changes). On the right: Report a bug, Help (?), Preferences (which hold the theme) and the
   window's buttons.
-- **Toolbar.** The workspace switcher (DESIGN) sits on the left. The tabs (SOLID, SURFACE,
-  SHEET METAL, PLASTIC, UTILITIES, and SKETCH while you sketch) hold panels of commands. Click a
+- **Toolbar.** The workspace switcher (DESIGN) sits on the left. The tabs (MODEL, SURFACE,
+  ASSEMBLE, INSERT, INSPECT, MANAGE, VIEW and SHEET METAL) hold sections of commands. SKETCH appears while
+  editing a sketch; SHEET METAL is always there and is highlighted for the active sheet body. Both select automatically
+  when entered, and the other tabs remain available. Click a
   panel's name for all its commands. Drag a command from the dropdown onto a panel's label
   or empty space to append it; the insertion line shows its destination. Drop onto an existing
   button to insert before it. Buttons can also move between panels, and the layout is saved.
@@ -32,6 +34,21 @@
   in the default and Inventor presets. In every preset, Ctrl+left drag (Cmd on macOS) that starts
   on empty space orbits; a Ctrl+click still adds to the selection. Shift+right-drag snaps to the nearest standard or
   diagonal view; Shift does not request snapping when the preset already requires it to orbit.
+
+  Enable **Preferences → Navigation → Free orbit** to rotate the mouse and 3D mouse continuously
+  through both poles, preserving roll without axis snapping. It defaults to off for every mouse
+  preset. With SolidWorks navigation, right-click a planar face and choose **Normal to Selection**
+  to use Look At (also Ctrl+8); repeat to flip the side, preserving scale and projection.
+
+  **Mouse gestures** (Preferences › Navigation, off by default) work with the SolidWorks mouse preset
+  only (the wheel orbits, Ctrl + wheel pans) and take over the right button, which then no longer
+  orbits: hold it and move the pointer 4 pt to open a ring of tools (280 pt inside, 350 pt outside), even
+  while a tool is active, and touch a tool's zone to take it. A right-click that does not move still
+  opens the usual context menu. Each studio has its own
+  tools, and **Customize…** sets how many tools a studio's ring holds and in which place. Zones
+  alternate between two tints, three when the number of tools is odd. The optional radial context
+  menu is a separate setting, and gestures take the right button from it while they are on.
+
   With **Touchpad** selected in Preferences › Navigation, hold **Shift** and move the pointer to
   pan, or hold **Alt** (**Option** on macOS) and move it to orbit—no mouse button is needed.
   Vertical two-finger scrolling zooms in this preset, regardless of the saved two-finger pan
@@ -55,17 +72,42 @@
 - **Dialogs** dock on the right with a live preview. Most features also show drag handles and a
   value box in the viewport.
 - **Timeline** (bottom). Every feature in order. Double-click to edit, drag the marker to roll
-  back, and drag features to reorder them.
-- **S box.** Press S anywhere for a command search at the cursor. Pin the commands you use most
-  to its top.
+  back, and drag features to reorder them. Preferences can put the timeline vertically at the
+  far left of the viewport, beside the browser. Its seam handle switches between icon
+  chips and compact feature names; the browser can collapse to a rail beside either width.
+  Previous, Play and Next sit at the top. Double-click Previous to roll to the start.
+- **Command search (S).** Click the ribbon search field or press S to open the search popup
+  below it. Results group commands by their ribbon path and show matching features and user
+  parameters from this design. With an empty query, recent commands appear first, followed by
+  pinned commands in the Commands group. Up/Down
+  choose, Enter runs, Tab fills the selected name, and Esc closes. A feature opens its existing
+  editor; a parameter opens Change Parameters filtered to its name. To run with explicit values,
+  enter an id and JSON object, for example `solid.extrude {"distance": 20}`. The popup validates
+  JSON as you type and shows parser errors. Shift+Enter runs it and keeps the popup open.
+  Right-click a command for its existing pin and toolbar actions.
 
-Preferences (File › Preferences) hold the theme, the units of new designs, the mouse preset, the
+Preferences (File › Preferences) hold the theme, workspace layout, the units of new designs, the mouse preset, the
 visual style and autosave. Graphics › Colour vision gives the colours that carry a meaning (sketch
 states, axes, bends, analyses, icons) values for a weak red, green or blue sense: Protan, Deutan or
 Tritan. In a mode, the faces Draft and Accessibility Analysis mark as failing are striped too.
 Command messages and errors show for a few seconds in the status chip at the bottom left of the view. Click the chip, or choose Help › **Messages…**, for every message of the session: newest first, errors in red, each line selectable, with **Copy all** for a bug report.
 Help › Keyboard Shortcuts lists every key, and File › Keyboard
 Shortcuts changes them.
+
+### Workspace layout
+
+General › **Workspace layout** switches between **Floating** cards and **Compact**
+panels. Compact joins the workspace selector and ribbon into one top bar, puts
+Browser flush underneath with a square join, and docks tool sheets below the
+compass. Tool sheets remain draggable: their four corners round away from the right
+edge, and their two right corners square when docked there. Browser keeps only the height its contents need. Assistant remains on the
+outside edge, and History keeps its chosen bottom, left or shared Browser column.
+The choice is saved between launches. Switching preserves the current tool,
+camera, selection and design; Cancel and Restore Defaults work like other preferences.
+
+General › **Show text under ribbon icons** is a separate, saved option for either
+layout. Turn it off for shorter icon-only command buttons; tooltips, section names
+and command menus remain available.
 
 ### Colour themes
 
@@ -95,12 +137,25 @@ colours by name:
 Colours are `#rrggbb`, or `#rrggbbaa` for translucent ones. A few colours, such as the view
 triad's X, Y and Z, take a list. Any colour the file leaves out keeps the base palette's value.
 
+Tab accents also have separate fill, small-text ink and tint keys. Sketch uses
+`sketch_accent`, `sketch_ink`, `sketch_soft`; Surface, Mesh, Sheet Metal and Render
+use `<tab>_fill`, `<tab>_ink`, `<tab>_soft` (`sheet` for Sheet Metal). Form uses
+`form_fill`, `form_tab_ink`, `form_soft` because `form_ink` names the general form
+text. Model keeps `accent`, `selected_ink`, `accent_soft`. The older
+`surface_accent`, `mesh_accent`, `form_accent` and `render_accent` keys retain their
+existing roles and values. `tab_on_fill_dark` is the dark text fallback for tab
+pills when `on_accent` has less than 4.5:1 contrast with the fill. See the
+[per-tab token reference](../dev/ui-kit.md#per-tab-accent-tokens) for all pairs.
+
 - **Import…** adds a theme file and turns it on. Importing a file with the same name again updates
   that theme. A file with an unknown colour name or a malformed colour is refused, and the message
   names every problem.
 - **Export…** saves the theme on now as a complete file listing every colour. It is a good starting
   point for your own theme.
 - **Remove** deletes the selected imported theme.
+
+Retired window-band and procedural icon colours in older exports are discarded on import.
+Command icons use the shared SVG palette.
 
 Imported themes are kept with your preferences, so they work in the browser app too. Colour
 vision modes still apply on top of any theme.

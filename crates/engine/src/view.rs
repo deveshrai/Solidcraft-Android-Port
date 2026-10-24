@@ -110,10 +110,21 @@ pub fn bounds(s: &Session) -> Aabb3 {
 
 /// [`bounds`], with the browser's Sketches folder shown (`sketches`) or hidden.
 pub fn visible_bounds(s: &Session, sketches: bool) -> Aabb3 {
+    bounds_by(s, sketches, |body| body.mesh_bounds())
+}
+
+/// [`visible_bounds`] without meshing anything: a body not meshed yet counts with its outline
+/// ([`solidcraft_kernel::Body::outline_bounds`]), which a face curving out past all of its edges
+/// can exceed. Frames a design whose bodies are still being meshed.
+pub fn unmeshed_bounds(s: &Session, sketches: bool) -> Aabb3 {
+    bounds_by(s, sketches, |body| body.cached_mesh().map(|m| m.bounds()).unwrap_or_else(|| body.outline_bounds()))
+}
+
+fn bounds_by(s: &Session, sketches: bool, of: impl Fn(&solidcraft_doc::ModelBody) -> Aabb3) -> Aabb3 {
     let st = s.world_state();
     let mut b = Aabb3::EMPTY;
     for body in st.bodies.iter().filter(|x| s.body_visible(&x.name)) {
-        b = b.union(&body.mesh().bounds());
+        b = b.union(&of(body));
     }
     for ss in st.sketches.iter().filter(|x| sketch_drawn(s, x.feature, sketches)) {
         // All four corners: on a tilted plane two opposite ones don't span the rectangle.
@@ -442,6 +453,7 @@ fn build_scene(
         background: Some(p.background),
         clip: section.map(|(o, n)| (n, n.dot(o))),
         cap: Some(p.cap),
+        plain_cap: !s.section_hatch,
         analysis: s.analysis.map(|a| SceneAnalysis { mode: a.mode(), colors: p.analysis }),
         ..Default::default()
     };
@@ -533,23 +545,102 @@ fn build_scene(
 /// Where the plane through `o` with normal `n` cuts a mesh: one segment per crossed triangle,
 /// nudged a hair to the kept side (so the clip leaves them drawn).
 pub fn section_segments(m: &solidcraft_geom::Mesh, o: Vec3, n: Vec3) -> Vec<(Vec3, Vec3)> {
-    let eps = 1e-4 * (1.0 + m.bounds().diagonal());
+    let eps = section_nudge(m);
     let mut out = Vec::new();
     for t in &m.triangles {
-        let Some(p) = m.tri(t) else { continue };
-        let d = p.map(|q| n.dot(q - o));
-        let mut pts = Vec::with_capacity(2);
-        for (i, j) in [(0, 1), (1, 2), (2, 0)] {
-            if (d[i] < 0.0) != (d[j] < 0.0) {
-                let s = d[i] / (d[i] - d[j]);
-                pts.push(p[i] + (p[j] - p[i]) * s - n * eps);
-            }
-        }
-        if let [a, b] = pts[..] {
-            out.push((a, b));
-        }
+        cut_triangle(m, t, o, n, eps, &mut out);
     }
     out
+}
+
+/// How far [`section_segments`] nudges the cut to the kept side.
+fn section_nudge(m: &solidcraft_geom::Mesh) -> f64 {
+    1e-4 * (1.0 + m.bounds().diagonal())
+}
+
+/// The segment where the plane through `o` with normal `n` crosses triangle `t`, if it does.
+fn cut_triangle(m: &solidcraft_geom::Mesh, t: &[u32; 3], o: Vec3, n: Vec3, eps: f64, out: &mut Vec<(Vec3, Vec3)>) {
+    let Some(p) = m.tri(t) else { return };
+    let d = p.map(|q| n.dot(q - o));
+    let mut pts = Vec::with_capacity(2);
+    for (i, j) in [(0, 1), (1, 2), (2, 0)] {
+        if (d[i] < 0.0) != (d[j] < 0.0) {
+            let s = d[i] / (d[i] - d[j]);
+            pts.push(p[i] + (p[j] - p[i]) * s - n * eps);
+        }
+    }
+    if let [a, b] = pts[..] {
+        out.push((a, b));
+    }
+}
+
+/// A mesh's triangles sorted into slabs along one normal, so cuts with that normal at any
+/// height look only at the triangles of one slab: dragging a Section Analysis keeps the normal
+/// and moves the cut, and an imported part can have millions of triangles. The same segments
+/// as [`section_segments`].
+pub struct SectionIndex {
+    normal: Vec3,
+    /// The lowest height (`normal · p`) of the mesh, and the slab thickness.
+    start: f64,
+    step: f64,
+    /// Per slab, the triangles whose heights reach into it.
+    slabs: Vec<Vec<u32>>,
+    eps: f64,
+}
+
+/// Slabs a [`SectionIndex`] makes, at most.
+const SECTION_SLABS: usize = 4096;
+
+impl SectionIndex {
+    pub fn new(m: &solidcraft_geom::Mesh, normal: Vec3) -> SectionIndex {
+        let heights: Vec<Option<(f64, f64)>> = m
+            .triangles
+            .iter()
+            .map(|t| {
+                let d = m.tri(t)?.map(|q| normal.dot(q));
+                Some((d[0].min(d[1]).min(d[2]), d[0].max(d[1]).max(d[2])))
+            })
+            .collect();
+        let (lo, hi) = heights.iter().flatten().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), (l, h)| (a.min(*l), b.max(*h)));
+        let count = if lo.is_finite() && hi.is_finite() { (m.triangles.len() / 64).clamp(1, SECTION_SLABS) } else { 0 };
+        let step = if count > 0 && hi > lo { (hi - lo) / count as f64 } else { 1.0 };
+        let mut index = SectionIndex { normal, start: lo, step, slabs: vec![Vec::new(); count], eps: section_nudge(m) };
+        for (i, h) in heights.iter().enumerate() {
+            let (Some((l, h)), Ok(i)) = (h, u32::try_from(i)) else { continue };
+            for k in index.slab(*l)..=index.slab(*h) {
+                if let Some(slab) = index.slabs.get_mut(k) {
+                    slab.push(i);
+                }
+            }
+        }
+        index
+    }
+
+    /// The normal this index was made for.
+    pub fn normal(&self) -> Vec3 {
+        self.normal
+    }
+
+    fn slab(&self, height: f64) -> usize {
+        let k = ((height - self.start) / self.step).floor();
+        if k.is_finite() { (k.max(0.0) as usize).min(self.slabs.len().saturating_sub(1)) } else { 0 }
+    }
+
+    /// [`section_segments`] of `m` (the mesh this index was made from) at the plane through
+    /// `o` with this index's normal.
+    pub fn segments(&self, m: &solidcraft_geom::Mesh, o: Vec3) -> Vec<(Vec3, Vec3)> {
+        let mut out = Vec::new();
+        let at = self.normal.dot(o);
+        if self.slabs.is_empty() || !at.is_finite() || at < self.start {
+            return out;
+        }
+        for i in self.slabs.get(self.slab(at)).into_iter().flatten() {
+            if let Some(t) = m.triangles.get(*i as usize) {
+                cut_triangle(m, t, o, self.normal, self.eps, &mut out);
+            }
+        }
+        out
+    }
 }
 
 /// Is a sketch drawn? The active one is; others unless hidden. Finished sketches are hidden
@@ -811,6 +902,28 @@ mod tests {
             let cap = px().filter(|p| p[0] as i32 - p[2] as i32 > 20).count();
             assert!(cap > 500, "fov {fov}: cap pixels {cap}");
         }
+    }
+
+    /// The cut faces are hatched (stripes over the body's colour tinted toward the cap colour)
+    /// unless the section's `hatch` is off; then the cut is the body's own solid colour.
+    #[test]
+    fn cpu_picture_section_hatch_is_optional() {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length": 40, "width": 30, "height": 20})).unwrap();
+        s.execute("appearance.assign", &json!({"bodies": ["Body1"], "color": [40, 160, 90]})).unwrap();
+        let cam = home_camera(&s);
+        let mut picture = |hatch: bool| {
+            let plane = json!({"origin": [0, 15, 0], "normal": [0, -1, 0]});
+            s.execute("inspect.section", &json!({"plane": plane, "hatch": hatch})).unwrap();
+            solidcraft_render::render(&scene(&s, &cam), &cam, 300, 220).rgba
+        };
+        // Pixels in the body's exact colour: only a plain cut has them (lit faces are shaded).
+        let solid = |img: &[u8]| img.chunks(4).filter(|p| p[..3] == [40, 160, 90]).count();
+        let (hatched, plain) = (picture(true), picture(false));
+        assert!(solid(&plain) > 500, "plain cut: {} pixels in the body's colour", solid(&plain));
+        assert_eq!(solid(&hatched), 0, "the hatched cut is tinted");
+        let shades = |img: &[u8]| img.chunks(4).map(|p| [p[0], p[1], p[2]]).collect::<std::collections::BTreeSet<_>>().len();
+        assert!(shades(&hatched) > shades(&plain), "the hatch adds its stripes' shades");
     }
 }
 

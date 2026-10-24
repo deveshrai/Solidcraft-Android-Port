@@ -150,6 +150,44 @@ fn tangent_chains_follow_smooth_edges() {
     assert_eq!(c, vec![0, 1]);
     assert_eq!(m.tangent_chain(2, 5f64.to_radians()), vec![2]);
     assert_eq!(m.face_edges(1), vec![1, 2]);
+    // A smooth seam where two faces share the same normal along the edge is not a corner to round,
+    // so tangent chaining stops at it.
+    let seam = Mesh {
+        positions: vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0), Vec3::new(20.0, 0.0, 0.0), Vec3::new(15.0, 5.0, 0.0)],
+        normals: vec![Vec3::Z; 4],
+        triangles: vec![[0, 1, 3], [1, 2, 3], [1, 2, 3]],
+        tri_face: vec![0, 1, 2],
+        edges: vec![vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(10.0, 0.0, 0.0)], vec![Vec3::new(10.0, 0.0, 0.0), Vec3::new(20.0, 0.0, 0.0)]],
+        edge_faces: vec![vec![0], vec![1, 2]],
+        ..Default::default()
+    };
+    assert_eq!(seam.tangent_chain(0, 5f64.to_radians()), vec![0]);
+}
+
+/// #3745: the tangent chain of a long helix (a thread's crest, in many edge pieces) is found
+/// without scanning every edge for every edge of it: hovering a threaded part's edge looked for
+/// its rim this way, and took seconds inside the frame. Every piece joins, in edge order, and
+/// a mesh of 3 000 pieces takes well under a frame.
+#[test]
+fn a_long_helical_tangent_chain_is_found_quickly() {
+    let pieces = 3_000usize;
+    let at = |t: f64| Vec3::new(4.0 * t.cos(), 4.0 * t.sin(), 0.2 * t);
+    let step = 0.05;
+    let mut m = Mesh::default();
+    for k in 0..pieces {
+        let t0 = k as f64 * step * 4.0;
+        m.edges.push((0..=4).map(|j| at(t0 + j as f64 * step)).collect());
+        m.edge_faces.push(vec![0]);
+    }
+    // The mesh's points (its size sets the join tolerance).
+    m.positions = m.edges.iter().flatten().copied().collect();
+    let began = std::time::Instant::now();
+    let chain = m.tangent_chain(pieces / 2, 2f64.to_radians());
+    let ms = began.elapsed().as_secs_f64() * 1000.0;
+    let mut sorted = chain.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, (0..pieces).collect::<Vec<_>>(), "every piece of the helix is in the chain");
+    assert!(ms < 200.0, "{ms:.1} ms for {pieces} pieces");
 }
 
 #[test]

@@ -474,6 +474,57 @@ fn a_roller_pressed_into_a_large_plate_is_reported() {
     assert!((f(&overlaps[0]["volume_mm3"]) - want).abs() < 0.01 * want, "{want} {res}");
 }
 
+/// Two STL copies of a cube inserted into a design. Returns the names of the two mesh bodies.
+fn insert_two_mesh_cubes(s: &mut Session, tag: &str) -> Vec<String> {
+    let dir = std::env::temp_dir().join(format!("solidcraft-mesh-unchecked-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let stl = dir.join("cube.stl");
+    let mut cube = Session::default();
+    run(&mut cube, "solid.box", json!({"length": 20, "width": 20, "height": 20, "corner": [0, 0, 0], "body_name": "Cube"}));
+    run(&mut cube, "file.export", json!({"path": stl.to_string_lossy()}));
+    for _ in 0..2 {
+        run(s, "file.insert_mesh", json!({"path": stl.to_string_lossy()}));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    s.world_state().bodies.iter().filter(|b| b.body.is_mesh()).map(|b| b.name.clone()).collect()
+}
+
+/// #3249: mesh bodies are not measured, and used to vanish from the answer (`bodies: 0`, nothing
+/// unchecked). They are listed in `unchecked` with a reason, and naming one in `bodies` or
+/// `against` is not "no solid body".
+#[test]
+fn mesh_bodies_are_listed_as_unchecked_and_can_be_named() {
+    let mut s = Session::default();
+    let meshes = insert_two_mesh_cubes(&mut s, "clearance");
+    assert_eq!(meshes.len(), 2, "{meshes:?}");
+    let r = run(&mut s, "inspect.clearance", json!({"clearance": 1}));
+    assert_eq!((r["bodies"].as_u64(), r["pairs_checked"].as_u64()), (Some(0), Some(0)), "{r}");
+    let unchecked = r["unchecked"].as_array().cloned().unwrap_or_default();
+    assert_eq!(unchecked.len(), 2, "{r}");
+    for (u, name) in unchecked.iter().zip(&meshes) {
+        assert_eq!(u["a"].as_str(), Some(name.as_str()), "{r}");
+        assert!(u["b"].is_null(), "{r}");
+        assert_eq!(u["reason"], "mesh body: not checked", "{r}");
+    }
+    // Beside solid bodies: those are measured, the meshes are still listed.
+    cube(&mut s, "A", 10.0, [100.0, 0.0, 0.0]);
+    cube(&mut s, "B", 10.0, [105.0, 0.0, 0.0]);
+    let r = run(&mut s, "inspect.clearance", json!({}));
+    assert_eq!(r["bodies"], 2, "{r}");
+    assert_eq!(r["overlaps"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(r["unchecked"].as_array().map(Vec::len), Some(2), "{r}");
+    // A mesh body named in `bodies` or `against` is listed, not refused; an unknown name still is.
+    for params in [json!({"bodies": ["A", meshes[0]]}), json!({"bodies": ["A"], "against": [meshes[0]]})] {
+        let r = run(&mut s, "inspect.clearance", params.clone());
+        let unchecked = r["unchecked"].as_array().cloned().unwrap_or_default();
+        assert_eq!(unchecked.len(), 1, "{params}: {r}");
+        assert_eq!(unchecked[0]["a"].as_str(), Some(meshes[0].as_str()), "{params}: {r}");
+    }
+    let e = s.execute("inspect.clearance", &json!({"bodies": ["Nope"]})).unwrap_err().to_string();
+    assert!(e.contains("`Nope`"), "{e}");
+}
+
 /// A pin turned from a profile (its wall in three faces) in the bore of a tube of its own size
 /// (in two faces), its end inside the bore, a hair off the axis, and a slit tube with the pin
 /// through it: touching, not overlapping. Their facets cross where one body's faces end on the

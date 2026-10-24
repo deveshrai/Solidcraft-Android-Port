@@ -1967,6 +1967,18 @@ fn loft_reversed(sections: &[(Plane, Loop2)]) -> Result<bool> {
     // loft touches the body along an edge: an internal panic, or "shell not oriented and
     // closed").
     let centre = |(p, l): &(Plane, Loop2)| p.to_world(l.centroid());
+    // Two consecutive sections in one plane span no volume between them: a loft through them
+    // used to build a flat, zero-volume body and report success.
+    for (i, w) in sections.windows(2).enumerate() {
+        let (a, b) = (&w[0], &w[1]);
+        let n = a.0.normal();
+        let size = (centre(a) - a.0.origin).len().max((centre(b) - b.0.origin).len()).max(1.0);
+        let parallel = n.cross(b.0.normal()).len() < 1e-9;
+        let in_plane = (centre(b) - centre(a)).dot(n).abs() < 1e-9 * size;
+        if parallel && in_plane {
+            return Err(KernelError::Invalid(format!("loft sections {} and {} lie in the same plane (no volume between them)", i + 1, i + 2)));
+        }
+    }
     let (Some(first), Some(last)) = (sections.first(), sections.last()) else { return Err(KernelError::Invalid("no sections".into())) };
     let step = centre(last) - centre(first);
     let big = [step.x, step.y, step.z].into_iter().max_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap_or(0.0);
@@ -1974,6 +1986,19 @@ fn loft_reversed(sections: &[(Plane, Loop2)]) -> Result<bool> {
 }
 
 fn loft_numbered_wires(sections: &[(Plane, NumberedLoop)], reversed: bool) -> Result<(Vec<mt::Wire>, Vec<Vec<Vec<usize>>>)> {
+    let mut wires: Vec<mt::Wire> = Vec::new();
+    // Per section, the profile segments under each of its wire's edges.
+    let mut edge_sources: Vec<Vec<Vec<usize>>> = Vec::new();
+    for (p, r) in loft_section_loops(sections, reversed)? {
+        wires.push(uniform_wire(&p, &r.lp)?);
+        edge_sources.push(r.from);
+    }
+    Ok((wires, edge_sources))
+}
+
+/// The sections of a loft as the wires are built from them: in loft order, oriented alike,
+/// re-split to the same number of segments and started where they line up best.
+pub(crate) fn loft_section_loops(sections: &[(Plane, NumberedLoop)], reversed: bool) -> Result<Vec<(Plane, NumberedLoop)>> {
     let n = sections.iter().map(|(_, l)| l.lp.segs.len()).max().unwrap_or(0);
     if n == 0 || n > MAX_SEGS {
         return Err(KernelError::Invalid("empty section".into()));
@@ -1988,28 +2013,51 @@ fn loft_numbered_wires(sections: &[(Plane, NumberedLoop)], reversed: bool) -> Re
     // with the most segments.
     let n0 = ordered.first().map(|(p, _)| p.normal()).unwrap_or(Vec3::Z);
     let parallel = ordered.iter().all(|(p, _)| p.normal().dot(n0).abs() > 1.0 - 1e-9);
+    // Whether a section faces the first one's way is followed neighbour to neighbour, not by its
+    // normal against the first's: planes turning about an axis pass 90 degrees and would be
+    // flipped, folding the loft (#2847).
+    let mut facing = true;
+    let mut before = n0;
     let oriented: Vec<(Plane, NumberedLoop)> = ordered
         .iter()
         .map(|(p, l)| {
-            let ccw = p.normal().dot(n0) >= 0.0;
-            (*p, l.oriented(!ccw))
+            let n = p.normal();
+            if n.dot(before) < 0.0 {
+                facing = !facing;
+            }
+            before = n;
+            (*p, l.oriented(!facing))
         })
         .collect();
     let lead = oriented.iter().max_by_key(|(_, l)| l.lp.segs.len()).ok_or_else(|| KernelError::Invalid("no sections".into()))?;
     let lead_c = lead.0.to_world(lead.1.lp.centroid());
     let lead_dirs: Vec<Vec3> = lead.1.lp.segs.iter().map(|s| lead.0.to_world(s.start()) - lead_c).collect();
-    let mut wires: Vec<mt::Wire> = Vec::new();
-    // Per section, the profile segments under each of its wire's edges.
-    let mut edge_sources: Vec<Vec<Vec<usize>>> = Vec::new();
+    // The share of the lead's perimeter before each of its vertices: where a circle section
+    // breaks when the lead's vertex directions do not go round in order.
+    let lead_len: f64 = lead.1.lp.segs.iter().map(Seg2::length).sum();
+    let fractions: Vec<f64> = lead
+        .1
+        .lp
+        .segs
+        .iter()
+        .scan(0.0, |before, s| {
+            let f = *before / lead_len;
+            *before += s.length();
+            Some(f)
+        })
+        .collect();
+    let mut out: Vec<(Plane, NumberedLoop)> = Vec::new();
     for (p, l) in &oriented {
         let c = l.lp.centroid();
         // Break angles: the lead section's vertex directions seen in this plane.
         let angles: Vec<f64> = lead_dirs.iter().map(|d| Vec2::new(d.dot(p.x), d.dot(p.y)).angle()).collect();
-        let mut r = l.resample(n, &angles);
         // Circle resampling creates increasing local angles. An antiparallel sketch
-        // plane must run clockwise locally to keep the same winding in world space.
-        // Curving a run through a right angle does not reverse a section's winding.
-        if parallel && p.normal().dot(n0) < 0.0 {
+        // plane must run clockwise locally to keep the same winding in world space (the lead's
+        // directions go round clockwise there). Curving a run through a right angle does not
+        // reverse a section's winding.
+        let flip = parallel && p.normal().dot(n0) < 0.0;
+        let mut r = l.resample(n, &angles, &fractions, flip);
+        if flip {
             r = r.oriented(true);
         }
         // Start where every vertex lines up best with the lead's vertex of the same number (the
@@ -2024,10 +2072,9 @@ fn loft_numbered_wires(sections: &[(Plane, NumberedLoop)], reversed: bool) -> Re
         if let Some(k) = (0..m).min_by(|a, b| fit(*b).total_cmp(&fit(*a))) {
             r.rotate_left(k);
         }
-        wires.push(uniform_wire(p, &r.lp)?);
-        edge_sources.push(r.from);
+        out.push((*p, r));
     }
-    Ok((wires, edge_sources))
+    Ok(out)
 }
 
 /// Ruled faces between each two neighbouring section wires; each comes from the section edges

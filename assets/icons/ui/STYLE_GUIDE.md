@@ -207,3 +207,9 @@ All artwork must be original SolidCraft work or an explicitly licensed resource
 with provenance. Commercial CAD artwork, screenshots and extracted assets are
 forbidden even as hidden references. This guide and the local finished set provide
 all required visual context for future agents.
+
+Runtime discovery is also checked by `crates/ui-egui/tests/icon_audit.rs`. New menu
+surfaces must extend that Harness traversal. Regenerate the committed
+`design/requested_icons.txt` with `UPDATE_ICON_MANIFEST=1 cargo test -p
+solidcraft-ui-egui --test icon_audit`; review the sorted id/placeholder diff. The
+review tool reads this fixture in addition to source scans, masters and aliases.

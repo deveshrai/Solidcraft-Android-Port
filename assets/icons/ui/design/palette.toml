@@ -10,7 +10,7 @@
 [roles.ink]        # outlines and details drawn over a face
 source = "#34465b"
 light = "#34465b"
-dark  = "#d8dfeb"
+dark  = "#1f2021"
 [roles.line]       # line art that sits directly on the UI background (SVG: currentColor)
 source = "#34465b"
 light = "#34465b"
@@ -66,13 +66,13 @@ parameters = 4.2
 
 [accents.surface.active-1]
 light = "#f1d2af"
-dark  = "#ba8f6a"
+dark  = "#cc9362"
 [accents.surface.active-2]
 light = "#c06f00"
-dark  = "#b86f04"
+dark  = "#bd750d"
 [accents.surface.active-3]
 light = "#a45000"
-dark  = "#95682d"
+dark  = "#955a0e"
 
 [accents.form.active-1]
 light = "#decff8"
@@ -85,41 +85,41 @@ light = "#7349cd"
 dark  = "#7b63a6"
 
 [accents.mesh.active-1]
-light = "#e5d99b"
-dark  = "#a9985f"
+light = "#ffec8e"
+dark  = "#ffe282"
 [accents.mesh.active-2]
-light = "#a28200"
-dark  = "#9a8100"
+light = "#bb9600"
+dark  = "#ab8f00"
 [accents.mesh.active-3]
-light = "#826700"
-dark  = "#857100"
+light = "#e0b200"
+dark  = "#c6a800"
 
 [accents.sketch.active-1]
 light = "#bfe2cc"
-dark  = "#81a28e"
+dark  = "#7ab792"
 [accents.sketch.active-2]
 light = "#439a65"
-dark  = "#459665"
+dark  = "#3a965e"
 [accents.sketch.active-3]
 light = "#057f45"
-dark  = "#27864e"
+dark  = "#128d45"
 
 [accents.constraint.active-1]
 light = "#f0cfca"
 dark  = "#b98c88"
 [accents.constraint.active-2]
 light = "#c1685f"
-dark  = "#b66b61"
+dark  = "#c27267"
 [accents.constraint.active-3]
-light = "#af4038"
-dark  = "#a05c54"
+light = "#ca473d"
+dark  = "#c16358"
 
 [accents.construction.active-1]
 light = "#ecd3b6"
-dark  = "#b19373"
+dark  = "#b99a78"
 [accents.construction.active-2]
 light = "#b8741f"
-dark  = "#b4711c"
+dark  = "#ad7023"
 [accents.construction.active-3]
 light = "#9c5600"
 dark  = "#a75d00"
@@ -134,12 +134,16 @@ dark  = "#1d7f89"
 [variants.red-green.construction.active-3]
 light = "#b97300"
 dark  = "#a75d00"
+# The constraint red stays darker than the sketch green for a weak red sense.
+[variants.red-green.constraint.active-3]
+light = "#af4038"
+dark  = "#c16358"
 [variants.blue-yellow.construction.active-3]
 light = "#b97300"
 dark  = "#c37d00"
 [variants.blue-yellow.constraint.active-3]
 light = "#af4038"
-dark  = "#986255"
+dark  = "#85554a"
 
 # Default accent by requested icon id. Explicit alias accents in aliases.toml win.
 # Deliberately not inherited from a master: ground reuses c_fix but is not a constraint.
@@ -153,9 +157,9 @@ sketch = [
   "arc3", "arc_center", "arc_slot", "arc_slot_center", "arc_tangent",
   "blend", "circle", "circle2", "circle3", "circle_tt",
   "circle_ttt", "conic", "constrainer", "dimension", "ellipse",
-  "extend", "finish", "fit_section", "include", "infinite",
+  "extend", "finish", "fit_section", "include",
   "intersect", "intersection_curve", "iso_curve", "line", "line_mid",
-  "offset", "point", "polygon", "polygon_circumscribed", "polygon_edge",
+  "offset", "offset_two_sides", "offset_symmetric", "point", "polygon", "polygon_circumscribed", "polygon_edge",
   "project", "project_surface", "rect", "rect3", "rect_center",
   "rect_rounded", "sketch", "sketch_chamfer", "sketch_chamfer_angle", "sketch_chamfer_two_distances",
   "sketch_fillet", "sketch_mirror", "slot", "slot_center", "slot_overall",
@@ -168,5 +172,5 @@ constraint = [
   "c_polygon", "c_smooth", "c_symmetry", "c_tangent",
 ]
 construction = [
-  "centerline", "construction",
+  "centerline", "construction", "infinite",
 ]

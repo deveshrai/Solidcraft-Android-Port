@@ -41,7 +41,7 @@ pub(crate) fn reveal(app: &mut SolveApp, id: u64, body: &str) {
 pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, component: u64, path: &[u64], depth: usize, acts: &mut Actions) {
     let has_features = match app.tree.model.as_ref().filter(|m| m.matches(&app.session)) {
         Some(model) => model.features.get(&component).is_some_and(|features| !features.is_empty()),
-        None => app.session.doc.features.iter().any(|feature| feature.component == component),
+        None => app.session.doc.features.iter().any(|feature| feature.component == component && !matches!(feature.kind, FeatureKind::Sketch { .. })),
     };
     if !has_features {
         return;
@@ -58,7 +58,14 @@ pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, component: u64, path: 
     }
     let indices = match app.tree.model.as_ref().filter(|m| m.matches(&app.session)) {
         Some(model) => model.features.get(&component).cloned().unwrap_or_default(),
-        None => app.session.doc.features.iter().enumerate().filter_map(|(i, f)| (f.component == component).then_some(i)).collect(),
+        None => app
+            .session
+            .doc
+            .features
+            .iter()
+            .enumerate()
+            .filter_map(|(i, f)| (f.component == component && !matches!(f.kind, FeatureKind::Sketch { .. })).then_some(i))
+            .collect(),
     };
     for index in indices {
         let Some(feature) = app.session.doc.features.get(index) else { continue };
@@ -92,6 +99,95 @@ pub(super) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, component: u64, path: 
 mod tests {
     use super::*;
     use crate::scenario::Harness;
+
+    fn feature_rows(h: &mut Harness, cache: &str) -> Vec<String> {
+        h.app.tree.model = match cache {
+            "current" => Some(model::Model::new(&h.app.session)),
+            "stale" => Some(model::Model::new(&solidcraft_engine::Session::default())),
+            _ => None,
+        };
+        h.app.tree.expanded.insert("c0/features".into());
+        DRAWN.with(|d| d.borrow_mut().clear());
+        let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))), ..Default::default() };
+        let _ = h.ctx.run_ui(raw, |ui| rows(&mut h.app, ui, 0, &[], 0, &mut Actions::default()));
+        drawn_rows().into_iter().map(|(label, ..)| label).collect()
+    }
+
+    #[test]
+    fn browser_feature_sketch_only_has_one_sketch_row_and_no_features_folder() {
+        let mut h = Harness::new();
+        h.app.run("sketch.create", json!({"plane":"XY","name":"Sketch1"})).unwrap();
+        h.app.run("sketch.finish", json!({})).unwrap();
+        h.app.tree.expanded.insert("c0/features".into());
+        let saved = h.app.session.doc.to_json();
+        let undo = h.app.session.undo.len();
+        h.frames(2);
+        let labels: Vec<_> = drawn_rows().into_iter().map(|(label, ..)| label).collect();
+        assert_eq!(labels.iter().filter(|label| *label == "Sketch1").count(), 1, "{labels:?}");
+        assert!(!labels.iter().any(|label| label == "Features"), "{labels:?}");
+        for cache in ["current", "missing", "stale"] {
+            assert!(feature_rows(&mut h, cache).is_empty(), "{cache}: sketch-only document has no Features folder");
+        }
+        assert_eq!(h.app.session.doc.to_json(), saved);
+        assert_eq!(h.app.session.undo.len(), undo);
+    }
+
+    #[test]
+    fn browser_feature_mixed_history_filters_sketches_with_current_missing_and_stale_cache() {
+        let mut h = Harness::new();
+        h.app.run("sketch.create", json!({"plane":"XY","name":"Profile"})).unwrap();
+        h.app.run("sketch.rectangle.two_point", json!({"p0":[0,0],"p1":[20,15]})).unwrap();
+        h.app.run("sketch.finish", json!({})).unwrap();
+        let extrude = h.app.run("solid.extrude", json!({"distance":10,"body_name":"Plate"})).unwrap()["feature"].as_u64().unwrap();
+        let name = h.app.session.doc.feature(extrude).unwrap().name.clone();
+        let saved = h.app.session.doc.to_json();
+        let undo = h.app.session.undo.len();
+        for cache in ["current", "missing", "stale"] {
+            assert_eq!(feature_rows(&mut h, cache), ["Features".to_owned(), name.clone()], "{cache}");
+        }
+        h.frames(2);
+        let labels: Vec<_> = drawn_rows().into_iter().map(|(label, ..)| label).collect();
+        assert_eq!(labels.iter().filter(|label| *label == "Profile").count(), 1, "{labels:?}");
+        assert!(labels.contains(&name), "{labels:?}");
+        find(&mut h.app, extrude, "Plate");
+        h.frames(2);
+        assert!(h.app.tree.reveal_feature.is_none(), "the creator row was drawn and scrolled to");
+        let at = h.call("ui.at", json!({"handle":format!("row:browser-feature:c0:{extrude}")}));
+        assert_eq!(at["ok"], true, "{at}");
+        assert_eq!(h.app.session.doc.to_json(), saved);
+        assert_eq!(h.app.session.undo.len(), undo);
+    }
+
+    #[test]
+    fn browser_feature_shift_click_selects_the_range_up_and_down() {
+        let mut h = Harness::new();
+        let ids: Vec<u64> = (0..5)
+            .map(|i| {
+                h.app.run("solid.box", json!({"length":10,"width":10,"height":10,"body_name":format!("B{i}")})).unwrap()["feature"].as_u64().unwrap()
+            })
+            .collect();
+        h.app.tree.expanded.insert("c0/features".into());
+        h.frames(2);
+        let row = |id: u64| json!({"handle": format!("row:browser-feature:c0:{id}")});
+        let all: Vec<Sel> = ids.iter().map(|&id| Sel::Feature { id }).collect();
+        let sorted = |s: &[Sel]| {
+            let mut v = s.to_vec();
+            v.sort_by_key(|x| format!("{x:?}"));
+            v
+        };
+        // Up: anchor on the last row, Shift+click the first.
+        h.step(&json!({"click": row(ids[4])})).unwrap();
+        h.frames(2);
+        h.step(&json!({"click": row(ids[0]), "shift": true})).unwrap();
+        h.frames(2);
+        assert_eq!(sorted(&h.app.session.selection), sorted(&all), "Shift+click above the anchor");
+        // Down: anchor on the first row, Shift+click the last.
+        h.step(&json!({"click": row(ids[0])})).unwrap();
+        h.frames(2);
+        h.step(&json!({"click": row(ids[4]), "shift": true})).unwrap();
+        h.frames(2);
+        assert_eq!(sorted(&h.app.session.selection), sorted(&all), "Shift+click below the anchor");
+    }
 
     fn find(app: &mut SolveApp, feature: u64, body: &str) {
         let state = app.session.world_state();

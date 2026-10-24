@@ -86,6 +86,61 @@ where
     Some(PolylineCurve(vec))
 }
 
+/// SolidCraft: whether a loop's polygon in the parameter plane has no area to speak of: two
+/// points (a closed loop of two edges divided at their ends only), or an area that is rounding
+/// beside the polygon's extent. Its sign then tells nothing.
+fn flat_polygon(poly: &PolylineCurve<Point2>) -> bool {
+    let (mut lo, mut hi) = (Point2::new(f64::INFINITY, f64::INFINITY), Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+    for p in poly.iter() {
+        lo = Point2::new(lo.x.min(p.x), lo.y.min(p.y));
+        hi = Point2::new(hi.x.max(p.x), hi.y.max(p.y));
+    }
+    let diag2 = (hi.x - lo.x).powi(2) + (hi.y - lo.y).powi(2);
+    poly.len() < 4 || !(poly.area().abs() > 1e-9 * diag2)
+}
+
+/// SolidCraft: a loop whose polygon is flat ([`flat_polygon`]) divided again, finer, to the
+/// loop's own size. A small hole's wire is two half circles; divided at a tolerance that
+/// follows a much larger body (a few millimetres for a part over a metre long) each half is a
+/// single chord, the polygon has no area, and its sign, which tells a hole from a face piece,
+/// comes out at random: the hole became a face of its own, inside out, and the face it was cut
+/// in was left whole. The polygon only places the loop; the edges are not changed.
+fn finer_if_flat<C, S>(face: &Face<Point3, C, S>, wire: &Wire<Point3, C>, poly: PolylineCurve<Point2>, tol: f64) -> PolylineCurve<Point2>
+where
+    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3>,
+    S: Clone + ParametricSurface3D + SearchParameter<D2, Point = Point3> + SearchNearestParameter<D2, Point = Point3>,
+{
+    if !flat_polygon(&poly) {
+        return poly;
+    }
+    // The loop's extent: the diagonal of the box round its edges' ends and middles.
+    let mut pts = Vec::new();
+    for edge in wire.edge_iter() {
+        let curve = edge.curve();
+        let (t0, t1) = curve.range_tuple();
+        pts.extend([curve.subs(t0), curve.subs((t0 + t1) / 2.0), curve.subs(t1)]);
+    }
+    let (mut lo, mut hi) = (Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY));
+    for p in &pts {
+        lo = Point3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
+        hi = Point3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+    }
+    let size = if pts.is_empty() { 0.0 } else { hi.distance(lo) };
+    let mut fine = tol;
+    for _ in 0..3 {
+        fine = (fine / 8.0).min(size * 0.01);
+        if !(fine > 0.0 && fine.is_finite()) {
+            break;
+        }
+        let mut map = HashMap::default();
+        let again = create_parameter_boundary(face, wire, &mut map, fine, false).or_else(|| create_parameter_boundary(face, wire, &mut map, fine, true));
+        if let Some(again) = again.filter(|p| !flat_polygon(p)) {
+            return again;
+        }
+    }
+    poly
+}
+
 #[derive(Clone, Debug)]
 struct WireChunk<'a, C> {
     poly: PolylineCurve<Point2>,
@@ -109,6 +164,7 @@ where
             create_parameter_boundary(face, wire, &mut map, tol, false).or_else(|| create_parameter_boundary(face, wire, &mut map, tol, true)),
             "parameter boundary"
         );
+        let poly = finer_if_flat(face, wire, poly, tol);
         match poly.area() > 0.0 {
             true => pre_faces.push(vec![WireChunk { poly, wire }]),
             false => negative_wires.push(WireChunk { poly, wire }),

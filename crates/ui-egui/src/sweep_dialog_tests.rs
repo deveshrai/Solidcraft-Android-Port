@@ -25,6 +25,7 @@ fn a_new_sweep_takes_its_options_from_the_dialog() {
     let sketch = setup(&mut h);
     h.step(&json!({"call":"ui.start","params":{"command":"solid.sweep"}})).unwrap();
     h.frames(3);
+    h.step(&json!({"click":{"handle":"dialog:section:Advanced"}})).unwrap();
     assert!(h.widget("Twist").is_some() && h.widget("End Scale").is_some() && h.widget("Orientation").is_some());
     let d = h.app.dialog.as_mut().unwrap();
     d.inputs[0].items = vec![Sel::Profile { sketch, index: 0 }];
@@ -112,6 +113,7 @@ fn a_rail_picked_in_the_dialog_is_kept_through_an_edit() {
     let rail_sketch = h.app.session.doc.find_feature("R").unwrap().id;
     h.step(&json!({"call":"ui.start","params":{"command":"solid.sweep"}})).unwrap();
     h.frames(3);
+    h.step(&json!({"click":{"handle":"dialog:section:Advanced"}})).unwrap();
     assert!(h.widget("Rail Fit").is_some());
     let d = h.app.dialog.as_mut().unwrap();
     d.inputs[0].items = vec![Sel::Profile { sketch, index: 0 }];

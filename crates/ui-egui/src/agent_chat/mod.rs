@@ -45,6 +45,7 @@ use crate::i18n::{format as trf, tr};
 use crate::{ControlRequest, SolveApp};
 use backend::{ChatBackend, Event, PermissionOption, PromptPart, ToolStatus};
 
+pub(crate) use panel::{left_inset, tool_space};
 pub use panel::{show, tip as panel_tip, toggle};
 
 /// Most entries kept in the conversation; older ones are dropped.
@@ -331,6 +332,8 @@ pub struct AgentChat {
     pub confirm_new: bool,
     /// Where the panel was drawn last (for its shortcuts).
     pub panel_rect: Option<egui::Rect>,
+    /// Unreserved sheet space, shared by the actual dock and its drag preview.
+    pub(crate) dock_space: Option<egui::Rect>,
     /// The last message sent, kept to send again after a sign-in (its files too).
     last: Option<(String, bool, Option<usize>, Vec<attach::Attachment>)>,
     /// Files for the next message (pictures, text files, imported parts), shown as chips.
@@ -638,9 +641,65 @@ pub fn shown(app: &SolveApp) -> bool {
     app.preferences.ai_features && cfg!(not(target_arch = "wasm32"))
 }
 
-/// The AI button at the toolbar row's right end is shown.
-pub fn toolbar_button_shown(app: &SolveApp) -> bool {
+/// The Assistant button in the application bar is shown (honours the existing preference).
+pub fn app_bar_button_shown(app: &SolveApp) -> bool {
     shown(app) && app.preferences.ai_toolbar_button
+}
+
+/// The application bar's status mark, independent of panel layout and painting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AssistantMark {
+    Quiet,
+    Ready,
+    Busy,
+    NeedsAuth,
+    Stopped,
+    Waiting(usize),
+}
+
+fn assistant_mark_for(state: State, login: &str, configured: bool, waiting: usize, stopped: bool, failed: bool) -> AssistantMark {
+    if waiting > 0 {
+        return AssistantMark::Waiting(waiting);
+    }
+    if state == State::NeedsAuth {
+        return AssistantMark::NeedsAuth;
+    }
+    if state == State::Exited || stopped || failed {
+        return AssistantMark::Stopped;
+    }
+    match state {
+        State::Busy | State::Starting => AssistantMark::Busy,
+        // A live session is stronger evidence than an older discovery login probe.
+        State::Ready => AssistantMark::Ready,
+        State::Off if configured && matches!(login, "signed_in" | "key") => AssistantMark::Ready,
+        State::Off if configured && login == "signed_out" => AssistantMark::NeedsAuth,
+        _ => AssistantMark::Quiet,
+    }
+}
+
+pub(crate) fn assistant_mark(app: &SolveApp) -> AssistantMark {
+    let chat = &app.agent_chat;
+    let current = agents::current(app);
+    assistant_mark_for(
+        chat.state(),
+        current.as_ref().map_or("", |e| e.login),
+        current.is_some(),
+        chat.waiting(),
+        chat.stopped,
+        chat.ended.as_deref() == Some("error"),
+    )
+}
+
+pub(crate) fn assistant_tip(mark: AssistantMark) -> String {
+    let state = match mark {
+        AssistantMark::Quiet => tr("ui.agent_chat_state_off").to_string(),
+        AssistantMark::Ready => tr("ui.agent_chat_state_ready").to_string(),
+        AssistantMark::Busy => tr("ui.agent_chat_state_busy").to_string(),
+        AssistantMark::NeedsAuth => tr("ui.agent_chat_state_auth").to_string(),
+        AssistantMark::Stopped => tr("ui.agent_chat_state_exited").to_string(),
+        AssistantMark::Waiting(count) => trf("ui.assistant_waiting", &[("count", &count.to_string())]),
+    };
+    format!("{} (Ctrl+Shift+A) — {state}", tr("ui.assistant"))
 }
 
 /// Whether a permission question is about one of SolidCraft's own tools (which SolidCraft's own
@@ -683,7 +742,7 @@ pub fn connect(app: &mut SolveApp, ctx: &egui::Context) {
         return;
     };
     // An API agent's key comes from the keychain for this connection only.
-    let key = if entry.kind == agents::Kind::Api && entry.key {
+    let key = if entry.kind.is_api() && entry.key {
         match app.services.secrets.as_ref().map(|s| s.get(&entry.id)) {
             Some(Ok(k)) => k,
             Some(Err(e)) => {
@@ -719,12 +778,22 @@ pub fn connect(app: &mut SolveApp, ctx: &egui::Context) {
     let started: Result<Box<dyn ChatBackend>, String> = match entry.kind {
         agents::Kind::Acp if entry.argv.is_empty() => Err(tr("ui.agent_chat_none_found").to_string()),
         agents::Kind::Acp => acp_client::AcpBackend::start(&entry.argv, start).map(|b| Box::new(b) as Box<dyn ChatBackend>),
-        agents::Kind::Api => match http {
-            Some(http) => api_client::ApiBackend::start(
-                api_client::ApiConfig { name: entry.name.clone(), base_url: entry.base_url.clone(), model: entry.model.clone(), key, http },
-                start,
-            )
-            .map(|b| Box::new(b) as Box<dyn ChatBackend>),
+        kind @ (agents::Kind::Api | agents::Kind::Anthropic) => match http {
+            Some(http) => {
+                let protocol = if kind == agents::Kind::Anthropic { agents::Protocol::Anthropic } else { agents::Protocol::OpenAi };
+                api_client::ApiBackend::start(
+                    api_client::ApiConfig {
+                        name: entry.name.clone(),
+                        protocol,
+                        base_url: entry.base_url.clone(),
+                        model: entry.model.clone(),
+                        key,
+                        http,
+                    },
+                    start,
+                )
+                .map(|b| Box::new(b) as Box<dyn ChatBackend>)
+            }
             None => Err(tr("ui.ai_no_http").to_string()),
         },
     };
@@ -737,7 +806,7 @@ pub fn connect(app: &mut SolveApp, ctx: &egui::Context) {
             chat.mode.clear();
             chat.models.clear();
             chat.model.clear();
-            chat.running_endpoint = if entry.kind == agents::Kind::Api { entry.base_url.clone() } else { String::new() };
+            chat.running_endpoint = if entry.kind.is_api() { entry.base_url.clone() } else { String::new() };
             // An endpoint's models from the last time, until the new list arrives.
             if let Some(list) = chat.models_cache.get(&chat.running_endpoint) {
                 chat.models = list.clone();
@@ -1436,7 +1505,7 @@ pub fn set_model(app: &mut SolveApp, model: &str) {
     }
     app.agent_chat.model = model.to_string();
     let agent = app.agent_chat.running_id.clone();
-    if let Some(a) = app.preferences.agents.iter_mut().find(|a| a.id == agent && a.kind == agents::Kind::Api) {
+    if let Some(a) = app.preferences.agents.iter_mut().find(|a| a.id == agent && a.kind.is_api()) {
         a.model = model.to_string();
     }
     app.preferences.agent_models.insert(agent, model.to_string());
@@ -1486,7 +1555,7 @@ pub fn control(app: &mut SolveApp, ctx: &egui::Context, p: &Value) -> Result<Val
     if let Some(a) = p.get("add_agent") {
         let mut c: agents::AgentConfig = serde_json::from_value(a.clone()).map_err(|e| format!("add_agent: {e}"))?;
         if c.id.is_empty() {
-            c.id = agents::new_id(&app.preferences, if c.kind == agents::Kind::Api { "api" } else { "custom" });
+            c.id = agents::new_id(&app.preferences, if c.kind.is_api() { c.kind.id() } else { "custom" });
         }
         c.key = false;
         app.preferences.agents.retain(|x| x.id != c.id);
@@ -1501,21 +1570,26 @@ pub fn control(app: &mut SolveApp, ctx: &egui::Context, p: &Value) -> Result<Val
             app.agent_chat.agent_id = Some(id.to_string());
         }
     }
-    // The Add agent dialog: open on a kind (`installed`, `custom`, `api`), or `false` to close.
+    // The Add agent dialog: open on a kind (`installed`, `custom`, `api`, `anthropic`), or `false`
+    // to close. `anthropic` is an API endpoint on the Anthropic-compatible protocol.
     if let Some(d) = p.get("add_dialog") {
         match d.as_str() {
             Some(k) => {
-                let kind = match k {
-                    "installed" => settings::AddKind::Installed,
-                    "custom" => settings::AddKind::Custom,
-                    "api" => settings::AddKind::Api,
-                    _ => return Err("add_dialog must be installed, custom, api or false".into()),
+                let (kind, protocol) = match k {
+                    "installed" => (settings::AddKind::Installed, None),
+                    "custom" => (settings::AddKind::Custom, None),
+                    "api" => (settings::AddKind::Api, Some(agents::Protocol::OpenAi)),
+                    "anthropic" => (settings::AddKind::Api, Some(agents::Protocol::Anthropic)),
+                    _ => return Err("add_dialog must be installed, custom, api, anthropic or false".into()),
                 };
                 settings::open_add(app);
                 if let Some(a) = app.agent_chat.settings.add.as_mut() {
                     a.kind = kind;
                     if kind != settings::AddKind::Api {
                         a.name.clear();
+                    }
+                    if let Some(protocol) = protocol {
+                        settings::choose_preset(a, protocol, 0);
                     }
                 }
             }
@@ -1649,7 +1723,7 @@ pub fn status(app: &SolveApp) -> Value {
         "features": app.preferences.ai_features,
         "toolbarButton": app.preferences.ai_toolbar_button,
         "permissions": app.preferences.ai_permissions.id(),
-        "agents": agents::entries(app).iter().map(|e| json!({"id": e.id, "name": e.name, "kind": if e.kind == agents::Kind::Api { "api" } else { "acp" }, "found": e.found, "version": e.version, "login": e.login})).collect::<Vec<_>>(),
+        "agents": agents::entries(app).iter().map(|e| json!({"id": e.id, "name": e.name, "kind": e.kind.id(), "found": e.found, "version": e.version, "login": e.login})).collect::<Vec<_>>(),
         "currentAgent": agents::current(app).map(|e| e.id),
         "models": c.models.iter().map(|m| json!({"id": m.id, "name": m.name, "description": m.description})).collect::<Vec<_>>(),
         "model": c.model,

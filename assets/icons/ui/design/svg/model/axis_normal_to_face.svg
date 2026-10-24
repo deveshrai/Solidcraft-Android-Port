@@ -6,5 +6,5 @@
   <path d="M32 6L32 33" fill="none" stroke="#ffffff" stroke-width="6.45" stroke-linejoin="round" stroke-linecap="round"/>
   <path d="M32 6L32 33" fill="none" stroke="#236ead" stroke-width="4.25" stroke-linejoin="round" stroke-linecap="round"/>
   <path d="M32 27.6L36.68 30.3L36.68 35.7" fill="none" stroke="#ffffff" stroke-width="4.05" stroke-linejoin="round" stroke-linecap="round"/>
-  <path d="M32 27.6L36.68 30.3L36.68 35.7" fill="none" stroke="#34465b" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M32 27.6L36.68 30.3L36.68 35.7" fill="none" stroke="currentColor" stroke-width="2.55" stroke-linejoin="round" stroke-linecap="round"/>
 </svg>

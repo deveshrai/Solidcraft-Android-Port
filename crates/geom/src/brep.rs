@@ -8,6 +8,9 @@ pub mod envelope;
 pub const VERSION: u32 = 3;
 pub const MAX_ITEMS: usize = 1_000_000;
 const MAX_DEPTH: usize = 16;
+/// Most control points along one direction of a spline (a helical thread flank written as one
+/// spline has thousands along the helix); the item budget bounds a surface's grid as a whole.
+pub const MAX_SPLINE_CONTROLS: usize = 8192;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -195,7 +198,7 @@ fn knots(values: &[f64], count: usize, budget: &mut Budget) -> Result<()> {
     budget.add(values.len())?;
     numbers(values.iter().copied())?;
     let degree = values.len().checked_sub(count.saturating_add(1)).ok_or(Invalid("spline degree"))?;
-    require((2..=4096).contains(&count) && (1..=16).contains(&degree) && degree < count, "spline degree or size")?;
+    require((2..=MAX_SPLINE_CONTROLS).contains(&count) && (1..=16).contains(&degree) && degree < count, "spline degree or size")?;
     require(values.windows(2).all(|w| w.first() <= w.get(1)), "unordered knots")?;
     require(values.get(degree) < values.get(count), "empty spline domain")?;
     // No knot may have multiplicity greater than degree + 1.
@@ -482,6 +485,15 @@ mod tests {
         assert!(surface(&p, 0, &mut Budget(0)).is_err());
         assert!(curve(&Curve::Line { start: [0.; 3], end: [1.; 3] }, MAX_DEPTH + 1, &mut Budget(0)).is_err());
         assert!(Budget(MAX_ITEMS).add(1).is_err());
+        // Control points along one direction: up to the cap, not one more (a clamped cubic).
+        let clamped = |count: usize| {
+            let mut k = vec![0.0; 4];
+            k.extend((1..count - 3).map(|i| i as f64));
+            k.extend([(count - 3) as f64; 4]);
+            k
+        };
+        assert!(knots(&clamped(MAX_SPLINE_CONTROLS), MAX_SPLINE_CONTROLS, &mut Budget(0)).is_ok());
+        assert!(knots(&clamped(MAX_SPLINE_CONTROLS + 1), MAX_SPLINE_CONTROLS + 1, &mut Budget(0)).is_err());
     }
 
     #[test]

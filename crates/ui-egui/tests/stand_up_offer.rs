@@ -6,14 +6,25 @@ use solidcraft_ui_egui::scenario::Harness;
 
 /// A harness with a 10 × 40 × 5 mm box (Y up) just opened from STEP: the offer is up.
 fn opened() -> Harness {
+    let h = opened_from("'Example CAD','Example CAD'", |_| {});
+    assert_eq!(h.app.stand_up.as_ref().map(Vec::len), Some(1), "the file's body is offered");
+    h
+}
+
+/// The same box, its FILE_NAME naming `programs` (preprocessor, originating system), opened
+/// after `prepare` has set the app up.
+fn opened_from(programs: &str, prepare: impl FnOnce(&mut Harness)) -> Harness {
     let mut src = Harness::new();
     let path = src.dir.join("tall_in_y.step").to_string_lossy().into_owned();
     src.app.run("solid.box", json!({"length": 10, "width": 40, "height": 5})).unwrap();
     src.app.run("file.export", json!({"path": path})).unwrap();
+    // Another program's file: SolidCraft's own exports already have Z up (#5150).
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("'SolidCraft','SolidCraft'", programs)).unwrap();
     let mut h = Harness::new();
+    prepare(&mut h);
     h.app.open_path(&path);
     h.frames(3);
-    assert_eq!(h.app.stand_up.as_ref().map(Vec::len), Some(1), "the file's body is offered");
     h
 }
 
@@ -67,4 +78,130 @@ fn prefs_stand_up_false_leaves_the_offer() {
     assert_eq!(r["result"]["stand_up_offer"], json!(null), "{r}");
     assert_eq!(r["result"]["offer_stand_up"], json!(true), "{r}");
     assert!((height(&h) - 5.0).abs() < 1e-6);
+}
+
+#[test]
+fn a_solidworks_header_shows_the_offer_and_does_not_turn_the_file() {
+    let h = opened_from("'SolidWorks 2021','SolidWorks 2021'", |_| {});
+    assert_eq!(h.app.stand_up.as_ref().map(Vec::len), Some(1), "offered");
+    assert!(h.app.stand_up_reason, "with the reason line");
+    assert!(!h.app.status_undo, "nothing was turned");
+    assert!((height(&h) - 5.0).abs() < 1e-6, "not turned: {}", height(&h));
+    // An unknown exporter gets the offer without the reason.
+    assert!(!opened().app.stand_up_reason);
+}
+
+#[test]
+fn stand_it_up_from_a_solidworks_offer_turns_once_and_undo_restores() {
+    let mut h = opened_from("'SolidWorks 2021','SolidWorks 2021'", |_| {});
+    h.run(&json!([{"click": {"handle": "stand_up:stand"}}])).unwrap();
+    h.frames(3);
+    assert!((height(&h) - 40.0).abs() < 1e-6, "stood up: {}", height(&h));
+    assert!(!h.app.stand_up_reason);
+    h.app.run("edit.undo", json!({})).unwrap();
+    assert!((height(&h) - 5.0).abs() < 1e-6, "undone: {}", height(&h));
+}
+
+#[test]
+fn a_solidcraft_header_is_left_alone() {
+    let h = opened_from("'SolidCraft','SolidCraft'", |_| {});
+    assert!(h.app.stand_up.is_none(), "no offer");
+    assert!(!h.app.status_undo);
+    assert!((height(&h) - 5.0).abs() < 1e-6, "not turned: {}", height(&h));
+}
+
+#[test]
+fn the_offer_preference_off_stops_every_offer() {
+    let off = |h: &mut Harness| h.app.preferences.offer_stand_up = false;
+    assert!(opened_from("'Example CAD','Example CAD'", off).app.stand_up.is_none());
+    let h = opened_from("'SolidWorks 2021','SolidWorks 2021'", off);
+    assert!(h.app.stand_up.is_none());
+    assert!((height(&h) - 5.0).abs() < 1e-6, "not turned: {}", height(&h));
+}
+
+#[test]
+fn turn_up_axis_in_the_component_menu_turns_and_undo_restores() {
+    // Leave the offer, then fix the orientation from the right-click menu.
+    let mut h = opened();
+    h.run(&json!([{"click": {"handle": "stand_up:leave"}}])).unwrap();
+    h.frames(3);
+    let occurrence = h.app.session.doc.occurrences.iter().map(|o| o.id).max().expect("the import's occurrence");
+    let items = solidcraft_ui_egui::context_menu::items(&h.app, &solidcraft_ui_egui::context_menu::Target::Occurrence { path: vec![occurrence] });
+    let turn = items.iter().find(|i| i.id == "ui.turnUpAxis").expect("Turn Up Axis is in the menu");
+    let labels: Vec<_> = turn.children.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, ["Y up \u{2192} Z up", "Z up \u{2192} Y up"]);
+    let at = egui::pos2(10.0, 10.0);
+    solidcraft_ui_egui::context_menu::run_item(&mut h.app, &turn.children[0], at);
+    assert!((height(&h) - 40.0).abs() < 1e-6, "Y up to Z up: {}", height(&h));
+    h.app.run("edit.undo", json!({})).unwrap();
+    assert!((height(&h) - 5.0).abs() < 1e-6, "undone: {}", height(&h));
+    solidcraft_ui_egui::context_menu::run_item(&mut h.app, &turn.children[1], at);
+    assert!((height(&h) - 40.0).abs() < 1e-6, "Z up to Y up: {}", height(&h));
+}
+
+#[test]
+fn old_preferences_files_still_load() {
+    // A file saved while "Stand up automatically" existed: the retired key is ignored.
+    let old: solidcraft_ui_egui::prefs::Prefs = serde_json::from_str(r#"{"offer_stand_up": false, "auto_stand_up": true, "up_axis": "z"}"#).unwrap();
+    assert!(!old.offer_stand_up, "the saved choice is kept");
+    let empty: solidcraft_ui_egui::prefs::Prefs = serde_json::from_str("{}").unwrap();
+    assert!(empty.offer_stand_up);
+}
+
+type V3 = solidcraft_engine::geom::Vec3;
+
+/// A stood-up SolidWorks file (its component still the active one), a sketch started by
+/// `start`, a rectangle far from the part at x 200..220, y 0..10 on it, extruded 15 mm: the
+/// sketch's world normal, the direction the view turned to look from, and the new body's bounds.
+fn sketched_and_extruded(start: impl FnOnce(&mut Harness)) -> (V3, V3, solidcraft_engine::geom::Aabb3) {
+    let mut h = opened_from("'SolidWorks 2021','SolidWorks 2021'", |h| h.app.preferences.look_at_anim = false);
+    // Stand it up through the offer when one is waiting (a SolidWorks file is offered, not turned silently).
+    if h.app.stand_up.is_some() {
+        solidcraft_ui_egui::stand_up::stand_up(&mut h.app).unwrap();
+        h.frames(2);
+    }
+    assert!((height(&h) - 40.0).abs() < 1e-6, "stood up: {}", height(&h));
+    assert_ne!(h.app.session.active_component, 0, "the import's component is the one worked in");
+    let before: Vec<String> = h.app.session.world_state().bodies.iter().map(|b| b.name.clone()).collect();
+    start(&mut h);
+    h.frames(2);
+    let sketch = h.app.session.active_sketch.expect("a sketch is open");
+    let normal = h.app.session.world_state().sketch(sketch).unwrap().plane.normal();
+    let back = h.app.cam.back();
+    h.app.run("sketch.rectangle.two_point", json!({"p0": [200, 0], "p1": [220, 10]})).unwrap();
+    h.app.run("solid.extrude", json!({"distance": 15})).unwrap();
+    let world = h.app.session.world_state();
+    let made: Vec<_> = world.bodies.iter().filter(|b| !before.contains(&b.name)).collect();
+    assert_eq!(made.len(), 1);
+    (normal, back, made[0].mesh().bounds())
+}
+
+fn near(a: V3, b: [f64; 3]) -> bool {
+    a.dist(V3::new(b[0], b[1], b[2])) < 1e-6
+}
+
+#[test]
+fn a_sketch_on_the_xy_plane_shown_after_standing_up_extrudes_up() {
+    // The origin planes the viewport and browser show are the design's: the XY picked there
+    // stays flat, the view looks down on it and the extrude goes up, though the stood-up
+    // component's own XY is now upright.
+    let (normal, back, b) = sketched_and_extruded(|h| {
+        solidcraft_ui_egui::dialogs::start_sketch(&mut h.app, &solidcraft_engine::Sel::Plane { name: "XY".into() }).unwrap();
+    });
+    assert!(near(normal, [0.0, 0.0, 1.0]), "faces up: {normal:?}");
+    assert!((back.z - 1.0).abs() < 1e-3, "looks down on it: {back:?}");
+    assert!(near(b.min, [200.0, 0.0, 0.0]) && near(b.max, [220.0, 10.0, 15.0]), "{b:?}");
+}
+
+#[test]
+fn a_sketch_on_the_stood_up_components_own_xy_is_turned_once() {
+    // By name, a command's XY is the active component's own: upright now, facing -Y. The
+    // sketch, the view and the extrude all follow it, the stand-up applied once.
+    let (normal, back, b) = sketched_and_extruded(|h| {
+        h.app.run("sketch.create", json!({"plane": "XY"})).unwrap();
+        solidcraft_ui_egui::dialogs::look_at_sketch(&mut h.app);
+    });
+    assert!(near(normal, [0.0, -1.0, 0.0]), "faces -Y: {normal:?}");
+    assert!((back.y + 1.0).abs() < 1e-3, "looks at it from -Y: {back:?}");
+    assert!(near(b.min, [200.0, -15.0, 0.0]) && near(b.max, [220.0, 0.0, 10.0]), "{b:?}");
 }

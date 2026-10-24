@@ -26,12 +26,33 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use solidcraft_ui_egui::titlebar;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, GWL_STYLE, GWLP_WNDPROC, GetClientRect, GetWindowLongPtrW, GetWindowRect, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTLEFT,
     HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IsIconic, IsZoomed, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SetWindowLongPtrW, WM_GETDPISCALEDSIZE,
     WM_NCDESTROY, WM_NCHITTEST, WNDPROC, WS_THICKFRAME,
 };
+
+/// The work area (the monitor without the taskbar) of the monitor nearest the window, in physical
+/// pixels: left, top, width, height.
+pub fn work_area(window: &impl HasWindowHandle) -> Option<(i32, i32, i32, i32)> {
+    let handle = window.window_handle().ok()?;
+    let RawWindowHandle::Win32(w) = handle.as_raw() else { return None };
+    let hwnd = w.hwnd.get() as HWND;
+    // SAFETY: `hwnd` is the live main window; `info` is a MONITORINFO with its size set, as
+    // GetMonitorInfoW requires, and the monitor handle comes from the call before it.
+    let rc = unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if monitor.is_null() || GetMonitorInfoW(monitor, &mut info) == 0 {
+            return None;
+        }
+        info.rcWork
+    };
+    Some((rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top))
+}
 
 /// The window procedure ours replaced (winit's), as an address; 0 before [`install`].
 static PREVIOUS: AtomicIsize = AtomicIsize::new(0);

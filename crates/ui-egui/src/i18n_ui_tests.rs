@@ -41,11 +41,8 @@ fn italian_dialog_keeps_english_scenario_handles() {
 
 #[test]
 fn sketch_palette_profile_and_points_rows_show_their_own_translation() {
-    // ui.palette_profile / ui.palette_points are reached by id, not by the usual English-text
-    // lookup (see the comment on sketch_palette::TOGGLES, and
-    // i18n::tests::id_labels_resolve_to_their_own_translation_not_an_english_fallback for the
-    // lookup itself). A broken id falls back to English silently rather than failing loudly, so
-    // check the word actually on screen in each locale, not just that something renders.
+    // The palette uses the shared profile/points IDs. Check the text actually on screen:
+    // a broken ID could silently fall back to English.
     for (lang, profile, points) in [("de", "Profil", "Punkte"), ("ja", "プロファイル", "点"), ("ko", "프로파일", "점"), ("uk", "Профіль", "Точки")]
     {
         let mut h = Harness::new();
@@ -53,6 +50,8 @@ fn sketch_palette_profile_and_points_rows_show_their_own_translation() {
         h.app.home.open = false;
         h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
         h.frames(3);
+        let at = scenario::handle_at("sketch_palette:options_fold").unwrap();
+        h.call("ui.click", json!({"x":at.x,"y":at.y}));
         assert!(h.widget(profile).is_some(), "{lang}: the Profile row must show {profile:?}");
         assert!(h.widget(points).is_some(), "{lang}: the Points row must show {points:?}");
         assert!(h.widget("Profile").is_none(), "{lang}: must not silently fall back to English");
@@ -81,12 +80,12 @@ fn window_chrome_renders_in_the_active_language() {
     for (lang, browser, filter, faces) in [
         ("zh", "浏览器", "选择筛选", "面"),
         ("ja", "ブラウザ", "選択フィルター", "面"),
-        ("de", "BROWSER", "Auswahlfilter", "Flächen"),
+        ("de", "Browser", "Auswahlfilter", "Flächen"),
         ("ko", "브라우저", "선택 필터", "면"),
-        ("ru", "БРАУЗЕР", "Фильтр выделения", "Грани"),
-        ("fr", "NAVIGATEUR", "Filtre de sélection", "Faces"),
-        ("it", "STRUTTURA", "Filtro di selezione", "Facce"),
-        ("uk", "БРАУЗЕР", "Фільтр виділення", "Грані"),
+        ("ru", "Браузер", "Фильтр выделения", "Грани"),
+        ("fr", "Navigateur", "Filtre de sélection", "Faces"),
+        ("it", "Struttura", "Filtro di selezione", "Facce"),
+        ("uk", "Браузер", "Фільтр виділення", "Грані"),
     ] {
         let mut h = Harness::new();
         h.app.preferences.language = lang.into();
@@ -95,7 +94,8 @@ fn window_chrome_renders_in_the_active_language() {
         // The browser heading is on screen from the start; the selection filter lives in the
         // SELECT panel, which is not the one shown by default.
         assert!(h.widget(browser).is_some(), "{lang}: the browser heading must show {browser:?}");
-        let select = scenario::handle_at("panel:SOLID:SELECT").expect("the SELECT panel is on the SOLID tab");
+        h.step(&json!({"click":{"handle":"tab:VIEW"}})).unwrap();
+        let select = scenario::handle_at("panel:VIEW:SELECT").expect("the selection filter is on VIEW");
         h.step(&json!({"click": [select.x, select.y]})).unwrap();
         h.frames(2);
         assert!(h.widget(filter).is_some(), "{lang}: the selection filter must show {filter:?}");
@@ -103,7 +103,7 @@ fn window_chrome_renders_in_the_active_language() {
     }
 }
 
-/// The start page's two big buttons had a fixed width, so a translation longer than the English
+/// File-view action tiles must keep translated labels inside their bounds. A translation longer than the English
 /// label ran past the edge ("Nouvelle conception"). Every registered language's label must stay
 /// inside its button.
 #[test]
@@ -123,17 +123,16 @@ fn home_page_buttons_fit_their_translated_labels() {
         h.app.home.show(rev);
         h.frames(2);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0));
-        let mut out = h.ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| h.app.ui(ui));
-        out.textures_delta.clear();
+        let out = crate::test_support::frame(&h.ctx, egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| h.app.ui(ui));
         let (mut rects, mut texts) = (Vec::new(), Vec::new());
         out.shapes.iter().for_each(|shape| collect(&shape.shape, &mut rects, &mut texts));
         let locale = crate::i18n::Locale::for_language(catalog.id);
-        for id in ["ui.new_design", "home.open"] {
+        for id in ["home.new_mm", "home.new_inches", "home.open", "home.import"] {
             let label = locale.text(id);
             let (_, text) = texts.iter().find(|(t, _)| t == label).unwrap_or_else(|| panic!("{}: {label:?} is not painted", catalog.id));
             let button = rects
                 .iter()
-                .filter(|r| (r.height() - 64.0).abs() < 1.0 && r.contains(text.left_center()))
+                .filter(|r| (r.height() - crate::theme::Tokens::get().file_tile_height).abs() < 1.0 && r.contains(text.left_center()))
                 .min_by(|a, b| a.area().total_cmp(&b.area()))
                 .unwrap_or_else(|| panic!("{}: no button around {label:?}", catalog.id));
             assert!(text.right() <= button.right(), "{}: {label:?} ends at {} past its button's edge {}", catalog.id, text.right(), button.right());
@@ -156,37 +155,15 @@ fn home_page_renders_in_the_active_language() {
     let cases = [
         (
             "it",
-            [
-                "Nuovo progetto",
-                "Apri…",
-                "Documentazione",
-                "Segnala un problema",
-                "Novità",
-                "Scorciatoie da tastiera",
-                "Preferenze",
-                "Recenti",
-                "Esempi",
-                "Piastra di esempio",
-            ],
-            "non presente\nAperto 2 h fa",
+            ["Nuovo progetto", "Apri…", "Scorciatoie da tastiera", "Impostazioni", "Recenti", "Esempi", "Piastra di esempio"],
+            "non presente\n2 h fa",
         ),
         (
             "ja",
-            [
-                "新規デザイン",
-                "開く…",
-                "ドキュメント",
-                "問題を報告",
-                "新機能",
-                "キーボードショートカット",
-                "環境設定",
-                "最近使用した項目",
-                "サンプル",
-                "サンプル プレート",
-            ],
-            "見つかりません\n2 時間前に開きました",
+            ["新しいデザイン", "開く…", "キーボードショートカット", "設定", "最近使用した項目", "サンプル", "サンプル プレート"],
+            "見つかりません\n2 時間前",
         ),
-        ("zh", ["新建设计", "打开…", "文档", "报告问题", "新功能", "键盘快捷键", "首选项", "最近使用", "示例", "示例板"], "文件不存在\n2 小时前打开"),
+        ("zh", ["新建设计", "打开…", "键盘快捷键", "设置", "最近使用", "示例", "示例板"], "文件不存在\n2 小时前"),
     ];
     for (lang, words, missing_recent) in cases {
         let mut h = Harness::new();
@@ -198,31 +175,22 @@ fn home_page_renders_in_the_active_language() {
         let rev = h.app.session.revision;
         h.app.home.show(rev);
         h.frames(2);
+        // The recent file counts as there until the background check says it is not.
+        h.app.home.wait_for_existence_checks();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0));
-        let mut out = h.ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| h.app.ui(ui));
-        out.textures_delta.clear();
+        let out = crate::test_support::frame(&h.ctx, egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| h.app.ui(ui));
         let mut texts = Vec::new();
         out.shapes.iter().for_each(|shape| painted(&shape.shape, &mut texts));
-        for word in words.into_iter().chain([missing_recent]) {
+        for word in words {
             assert!(texts.iter().any(|t| t == word), "{lang}: {word:?} must be painted, got {texts:?}");
         }
+        let (missing, opened) = missing_recent.split_once('\n').unwrap();
+        assert!(texts.iter().any(|text| text.starts_with(&format!("{missing} · "))), "{lang}: missing-file status must remain visible");
+        assert!(texts.iter().any(|text| text == opened), "{lang}: the recent timestamp must remain visible");
         for english in ["New Design", "Open…", "Documentation", "Report an Issue", "What's new", "Recent", "Samples", "Sample Plate"] {
             assert!(!texts.iter().any(|t| t == english), "{lang}: {english:?} is still painted in English");
         }
     }
-}
-
-/// The command palette's hint embeds a JSON example, so its braces must not be mistaken for a
-/// placeholder name by the catalog's parser, and the example must survive interpolation whole.
-#[test]
-fn command_palette_hint_keeps_its_json_example_intact() {
-    let mut h = Harness::new();
-    h.app.preferences.language = "zh".into();
-    h.app.home.open = false;
-    h.frames(2);
-    let hint = crate::i18n::format("ui.command_palette_hint", &[("example", "Extrude {\"distance\": 20}")]);
-    assert!(hint.contains("Extrude {\"distance\": 20}"), "the example is inserted literally: {hint:?}");
-    assert!(!hint.contains("{example}"), "the placeholder is substituted: {hint:?}");
 }
 
 #[test]
@@ -239,19 +207,23 @@ fn translated_dialog_buttons_do_not_wrap() {
     h.app.preferences.language = "ja".into();
     h.app.home.open = false;
     h.call("ui.start", json!({"command":"solid.extrude"}));
-    let mut out = h.ctx.run_ui(
-        egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), ..Default::default() },
-        |ui| h.app.ui(ui),
-    );
+    // A few frames: the card sizes itself from its content over the first passes.
+    let mut out = egui::FullOutput::default();
+    for _ in 0..5 {
+        out = h.ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), ..Default::default() },
+            |ui| h.app.ui(ui),
+        );
+    }
     assert_eq!(out.shapes.iter().find_map(|shape| cancel_rows(&shape.shape)), Some(1));
     out.textures_delta.clear();
 }
 
 #[test]
-fn long_panel_label_wraps_centred_and_its_button_is_centred() {
+fn finish_exit_label_and_its_button_are_centred() {
     fn label_rows(shape: &egui::Shape) -> Option<Vec<egui::Rect>> {
         match shape {
-            egui::Shape::Text(text) if text.galley.job.text == "SKIZZE BEENDEN" => {
+            egui::Shape::Text(text) if text.galley.job.text == "Beenden" => {
                 Some(text.galley.rows.iter().map(|row| row.rect().translate(text.pos.to_vec2())).collect())
             }
             egui::Shape::Vec(shapes) => shapes.iter().find_map(label_rows),
@@ -282,12 +254,11 @@ fn long_panel_label_wraps_centred_and_its_button_is_centred() {
     out.textures_delta.clear();
     let mut out = h.ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| h.app.ui(ui));
     let rows = out.shapes.iter().find_map(|shape| label_rows(&shape.shape)).expect("the Finish Sketch panel label is drawn");
-    assert_eq!(rows.len(), 2, "the label wider than its one-button panel wraps: {rows:?}");
-    assert!(rows[0].width() != rows[1].width(), "the lines differ in width: {rows:?}");
-    assert!((rows[0].center().x - rows[1].center().x).abs() < 1.0, "each line is centred: {rows:?}");
+    assert_eq!(rows.len(), 1, "the translated Exit section label fits one row: {rows:?}");
+    assert!((rows[0].center().x - label.x).abs() < 1.0, "the label is centred: {rows:?}");
     let hover = crate::theme::Tokens::get().hover;
     let lr = out.shapes.iter().find_map(|shape| hover_rect(&shape.shape, hover, label)).expect("the hovered label is highlighted");
-    assert!(rows.iter().all(|row| lr.contains_rect(*row)), "the highlight holds both lines: {lr:?} {rows:?}");
+    assert!(rows.iter().all(|row| lr.contains_rect(*row)), "the highlight holds the label: {lr:?} {rows:?}");
     out.textures_delta.clear();
 }
 
@@ -320,4 +291,18 @@ fn continuity_gap_and_sheet_metal_gap_are_separate_messages() {
         assert_eq!(locale.text("ui.continuity_gap"), legend, "{lang}");
         assert_eq!(locale.text("ui.sheet_gap"), sheet, "{lang}");
     }
+}
+
+/// The reference labels of the cataloguing fix: a label passed as text (`Cylindrical face`) and an
+/// id (`thread.iso_metric`).
+#[test]
+fn newly_catalogued_dialog_labels_show_in_german() {
+    let mut h = Harness::new();
+    h.app.preferences.language = "de".into();
+    h.app.home.open = false;
+    h.call("ui.start", json!({"command":"solid.thread"}));
+    h.frames(3);
+    assert!(h.widget("Zylindrische Fläche").is_some(), "the Cylindrical face row must be translated");
+    assert!(h.widget("ISO metrisch").is_some(), "the thread.iso_metric label must be translated");
+    assert!(h.widget("ISO metric").is_none(), "the label must not fall back to English");
 }

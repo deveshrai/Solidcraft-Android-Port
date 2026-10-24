@@ -86,9 +86,10 @@ geometry, used for measurements, or used to seed evaluated model state. The orig
 design remains intact until the complete rebuilt session is ready. Cancellation or
 any change of active document/revision discards both preview and completion.
 
-Normal design reading, CLI and browser opening still rebuild authoritatively.
-The model cache can supply provisional display as described below. The saved
-picture is not an interactive viewport.
+Desktop Open takes the evaluation from the model cache when the file keeps one for
+this document and build (see below); otherwise it evaluates the timeline, as
+design reading in the CLI and browser does. The saved picture is not an
+interactive viewport.
 
 ## Seekable reader (phase 2, first increment)
 
@@ -118,8 +119,20 @@ Engine Save/Save As write the evaluated model with the design by default
 carry it. Saving never forces placement, evaluation or tessellation: the model is
 the session's own evaluation, and only when it is the evaluation of the document
 being saved (`Model::is_current`). An active sketch, uncaptured moves, feature
-errors, mesh bodies or exceeded budgets leave the cache out; the design saves as
-before.
+errors or mesh bodies leave the cache out; the design saves as before. A cache
+over its budgets keeps fewer states (below) and is left out only when not even
+the final state fits.
+
+The model is the whole evaluation: every feature's result (warning, boolean
+diagnostics, whether it was skipped, its fingerprint) and the state after it
+(bodies, solved sketches, construction geometry, sheet metal bodies, threads and
+the blend records later features read). States share what they share: a body that
+later features pass through unchanged, its face names and a solved sketch are each
+recorded once. Face names are kept as worked out (saving works out any not asked
+for yet), so a body taken from the file is named exactly as when it was saved.
+A design whose stored names predate format 14 (marked `?`) finds them through
+names worked out from geometry on demand, which the cache does not keep: it saves
+without a model.
 
 Both entries are Deflate-compressed (level one) under either compression policy: the
 encoded bodies shrink about fourfold (an imported assembly) to tenfold (modelled parts),
@@ -134,27 +147,71 @@ SHA-256 of their encoding), and a placed copy of a repeated part (an instance fr
 a STEP assembly) records the part and its matrix, so it shows that part's display
 again instead of being meshed on its own.
 
-`cache/model.json` records `solidcraft-model-cache/1`, the producer revision
+`cache/model.json` records `solidcraft-model-cache/3`, the producer revision
 `solidcraft-truck-adapter/3`, the application version, the build (source commit,
 CPU architecture and OS), the SHA-256 of the exact `document.json` (whose blob
 references pin every STEP, mesh and image payload) and of `cache/bodies.bin`, the
-slices, and the bodies' records: name, feature, component, placement source,
-imported look and display share. A cache is read back only when every one of these
-matches: the same source compiled for the same platform computes the same numbers,
-so another build's cache is a miss. A build of unknown source (a tarball without
-git) never reads a cache.
+slices, each kernel body's slice and display share, and the model's records. A
+cache is read back only when every one of these matches: the same source compiled
+for the same platform computes the same numbers, so another build's cache is a
+miss. A build of unknown source (a tarball without git) never reads a cache.
 
 The fixed budgets of earlier caches (4,096 bodies, 100,000 faces, 64 MiB) scale
 with the design now: up to 200,000 body records, 100,000 distinct bodies, a 32 MiB
 manifest and a payload within the container's part budget (256 MiB), leaving room
 for the document. Individual bodies keep the codec's own limits. The archive-wide
-budgets (256 MiB per part, 512 MiB expanded, 10,000 entries) are unchanged, and the
-cache is left out when it would push the container near them. Decoding runs under
-`kernel::guard` and is linear in the payload's bytes.
+budgets (256 MiB per part, 512 MiB expanded, 10,000 entries) are unchanged.
+Decoding runs under `kernel::guard` and is linear in the payload's bytes.
 
-Opening still rebuilds the design from its timeline; the cache supplies the
-provisional picture (a bounded mesh of the placed bodies) before that finishes.
-Any failure in it is a miss, never a failed open. Earlier `cache/key.json` and
+A model whose cache would push the container past them keeps fewer states
+(`SavedModel::thinned`, #3220): the final state (what the design shows), then the
+other states, the slowest feature's first (the evaluations opening would otherwise
+repeat for longest), each while what it adds still fits: the bodies no state kept
+so far holds (a body is stored once however many states hold it) and the records
+of the state, those bodies, their names and sketches. When the rest of the
+manifest (the bodies' table, the slices) then leaves too little room, the choice
+is made again within that much less, and the final state alone is always tried.
+A feature whose state is left out records none. The cache is left out (and the
+save logs it) only when not even the final state fits; a thinned cache logs how
+many features kept their state.
+
+### Opening from the model
+
+Open takes the model as the design's evaluation (`Model::adopt`) when the key
+matches and every feature's fingerprint (its definition, the parameters and
+imported files it reads, the features before it, the timeline marker) is the one
+the opened document gives it now. Nothing is evaluated: the imported STEP text is
+resolved and hashed, never parsed. Every feature is up to date, so an edit
+evaluates from the first feature it changes, as after any evaluation: a feature
+appended or edited at the end evaluates from the saved final state, an edit to
+feature k from the saved state before k. Moving the timeline marker, undo and redo
+reuse the saved results whose fingerprints come back. `SOLIDCRAFT_NO_MODEL_CACHE`
+set evaluates anyway.
+
+A thinned cache is taken the same way, and the features whose state it left out
+are evaluated while opening, each from the state before it (kept or just
+evaluated); the states it kept after them stand. Opening then costs the
+evaluations of those features only, and the model is whole afterwards: nothing
+else in the application sees a missing state. Should one of them fail now, the
+features after it are evaluated too, as a full evaluation would.
+
+Any failure (a key or fingerprint mismatch, a malformed record, a body that does
+not decode) is a miss: the design is evaluated from its timeline as before, and
+only that.
+
+This replaces the earlier rule that a cache never supplies evaluated session
+state. It is safe because the cache is the result of evaluating exactly this
+document with exactly this build: the hashes tie it to the document (and through
+it to every source blob) and to its own payload, the build key to the code that
+computed it, the fingerprints to every feature's inputs, and the exact encoding
+gives back the bodies number for number. Hashes are not trust: a crafted file can
+carry a cache whose geometry disagrees with its timeline, as a crafted STEP file
+can carry any geometry. Every decoded body passes the same structural and resource
+checks, under `kernel::guard`, and Compute All (`timeline.compute_all`) evaluates
+the whole timeline again.
+
+Before the session is ready the cache still supplies the picture (a bounded mesh
+of the placed bodies) shown while opening. Earlier `cache/key.json` and
 `cache/brep.bin` entries are ignored.
 
 ## Review increments and kernel independence

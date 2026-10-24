@@ -13,6 +13,10 @@ use truck_modeling as mt;
 
 use super::geom::{Frame, R, conic_arc};
 
+/// How far a band's ring edge may lie off its surface, as a fraction of the body, for a body that
+/// declares no accuracy of its own.
+const RING_OFF_SURFACE: f64 = 1e-3;
+
 /// Samples per edge when looking for the split crossing.
 const SAMPLES: usize = 48;
 
@@ -31,6 +35,14 @@ fn coord(d: Dir, uv: (f64, f64)) -> f64 {
     match d {
         Dir::U => uv.0,
         Dir::V => uv.1,
+    }
+}
+
+/// The direction the split line runs along (the one that does not wrap).
+fn along(d: Dir) -> Dir {
+    match d {
+        Dir::U => Dir::V,
+        Dir::V => Dir::U,
     }
 }
 
@@ -140,8 +152,11 @@ fn crossing(s: &mt::Surface, d: Dir, chain: &[mt::Edge], mid: f64, period: f64) 
     Err("no crossing with the split line".into())
 }
 
-/// Iso-parameter edge curve `w = mid` from `q1` to `q2`.
-fn iso_curve(s: &mt::Surface, d: Dir, mid: f64, q1: mt::Point3, q2: mt::Point3, seam: &[mt::Point3]) -> R<mt::Curve> {
+/// Iso-parameter edge curve `w = mid` from `q1` to `q2`. `tol` is how far a ring edge may lie off
+/// the surface the split line lies on: a STEP file writes the surface and the curves bounding it
+/// to the file's own declared uncertainty only, so the line is matched to the surface points
+/// below `q1` and `q2`, not to them.
+fn iso_curve(s: &mt::Surface, d: Dir, mid: f64, q1: mt::Point3, q2: mt::Point3, seam: &[mt::Point3], tol: f64) -> R<mt::Curve> {
     match s {
         // Across the turn of a cylinder or cone: a straight line along it.
         mt::Surface::RevolutedCurve(_) if turn_dir(s).is_some_and(|t| t.0 == d) => {
@@ -181,7 +196,7 @@ fn iso_curve(s: &mt::Surface, d: Dir, mid: f64, q1: mt::Point3, q2: mt::Point3, 
             }
             let f = if sweep > 0.0 { f } else { Frame { o: c, x, y: -a.cross(x), z: -a } };
             let arc = conic_arc(&f, r, r, 0.0, sweep.abs());
-            if arc.back().distance(q2) > 1e-6 * (1.0 + r) {
+            if arc.back().distance(q2) > (1e-6 * (1.0 + r)).max(tol) {
                 return Err("split line does not reach the other ring".into());
             }
             Ok(mt::Curve::NurbsCurve(arc))
@@ -196,20 +211,27 @@ fn iso_curve(s: &mt::Surface, d: Dir, mid: f64, q1: mt::Point3, q2: mt::Point3, 
                 _ => return Err("unsupported surface".into()),
             };
             let iso = mt::Curve::NurbsCurve(iso_bsp(&hom, mid, d == Dir::V)?);
+            let (t0, t1) = iso.range_tuple();
+            // Where the split line comes nearest `p`: the point on the surface below `p` (the
+            // line runs on the surface, `p` only within the file's tolerance of it), looked for
+            // from its own surface parameter and from a scan of the whole line.
             let near = |p: mt::Point3| {
-                let (t0, t1) = iso.range_tuple();
+                let foot = uv_of(s, p).filter(|uv| s.subs(uv.0, uv.1).distance(p) <= tol);
+                let target = foot.map_or(p, |uv| s.subs(uv.0, uv.1));
                 let mut best = (t0, f64::INFINITY);
                 for i in 0..=256 {
                     let t = t0 + (t1 - t0) * i as f64 / 256.0;
-                    let dd = iso.subs(t).distance(p);
+                    let dd = iso.subs(t).distance(target);
                     if dd < best.1 {
                         best = (t, dd);
                     }
                 }
-                if let Some(t) = iso.search_nearest_parameter(p, best.0, 64) {
+                let seeds = foot.map(|uv| coord(along(d), uv)).into_iter().chain(iso.search_nearest_parameter(target, best.0, 64));
+                for t in seeds {
                     let t = t.clamp(t0, t1);
-                    if iso.subs(t).distance(p) <= best.1 {
-                        best = (t, iso.subs(t).distance(p));
+                    let dd = iso.subs(t).distance(target);
+                    if dd <= best.1 {
+                        best = (t, dd);
                     }
                 }
                 best
@@ -220,7 +242,6 @@ fn iso_curve(s: &mt::Surface, d: Dir, mid: f64, q1: mt::Point3, q2: mt::Point3, 
                 return Err("split line does not reach the rings".into());
             }
             let (lo, hi) = if ta < tb { (ta, tb) } else { (tb, ta) };
-            let (t0, t1) = iso.range_tuple();
             let mut c = iso;
             let eps = (t1 - t0) * 1e-9;
             if lo > t0 + eps {
@@ -292,7 +313,10 @@ struct Plan {
     faces: (mt::Face, mt::Face),
 }
 
-fn plan(face: &mt::Face, periodic: bool) -> R<Option<Plan>> {
+/// How to cut `face` in two along the line opposite its seam. `periodic` also cuts a face that
+/// runs round the turn of a revolved surface (see [`closed_dirs`]). `tol` is how far a ring edge
+/// of the face may lie off the surface it bounds (see [`iso_curve`]).
+fn plan(face: &mt::Face, periodic: bool, tol: f64) -> R<Option<Plan>> {
     let s = face.surface();
     let wires = face.absolute_boundaries().clone();
     let mut uses: HashMap<mt::EdgeID, usize> = HashMap::new();
@@ -333,7 +357,7 @@ fn plan(face: &mt::Face, periodic: bool) -> R<Option<Plan>> {
     }
     // A cone's tip: the seam runs from the ring to the apex and straight back.
     if let [(true, sm), (false, ring)] = chains.as_slice() {
-        return apex_plan(face, &s, (d, mid, period), sm, ring, &wires, outer_idx).map(Some);
+        return apex_plan(face, &s, (d, mid, period), sm, ring, &wires, outer_idx, tol).map(Some);
     }
     let [(true, s1), (false, r1), (true, s2), (false, r2)] = chains.as_slice() else {
         return Err(format!("unsupported seam loop layout ({} runs)", chains.len()));
@@ -345,7 +369,7 @@ fn plan(face: &mt::Face, periodic: bool) -> R<Option<Plan>> {
     let (k1, t1, q1) = crossing(&s, d, r1, mid, period)?;
     let (k2, t2, q2) = crossing(&s, d, r2, mid, period)?;
     let seam_line: Vec<mt::Point3> = s1.iter().flat_map(|e| samples(&e.oriented_curve(), 16).into_iter().map(|x| x.1)).collect();
-    let iso = iso_curve(&s, d, mid, q1, q2, &seam_line)?;
+    let iso = iso_curve(&s, d, mid, q1, q2, &seam_line, tol)?;
     let (r1a, r1b, c1, v1) = split_chain(r1, k1, t1, q1)?;
     let (r2a, r2b, c2, v2) = split_chain(r2, k2, t2, q2)?;
     let e_split = mt::Edge::new_unchecked(&v1, &v2, iso);
@@ -404,6 +428,7 @@ fn apex_plan(
     ring: &[mt::Edge],
     wires: &[mt::Wire],
     outer_idx: usize,
+    tol: f64,
 ) -> R<Plan> {
     let h = sm.len() / 2;
     if !sm.len().is_multiple_of(2) || h == 0 {
@@ -416,7 +441,7 @@ fn apex_plan(
     let apex = out.last().ok_or("seam")?.back().clone();
     let (k, t, q) = crossing(s, d, ring, mid, period)?;
     let seam_line: Vec<mt::Point3> = out.iter().flat_map(|e| samples(&e.oriented_curve(), 16).into_iter().map(|x| x.1)).collect();
-    let iso = iso_curve(s, d, mid, q, apex.point(), &seam_line)?;
+    let iso = iso_curve(s, d, mid, q, apex.point(), &seam_line, tol)?;
     let (ra, rb, c, vq) = split_chain(ring, k, t, q)?;
     let e = mt::Edge::new_unchecked(&vq, &apex, iso);
     // Face A: out to the apex, down the split line, the ring's second part; face B the rest.
@@ -500,6 +525,9 @@ pub(crate) fn split_seams(body: &crate::Body) -> Option<crate::Body> {
     if !body.solid.face_iter().any(seamed) {
         return None;
     }
+    // How far a ring edge of such a face may lie off the surface it bounds (see `iso_curve`):
+    // the file's own declared uncertainty for a body read from one, else a thousandth of the body.
+    let tol = body.boundary_tol.unwrap_or(body.size() * RING_OFF_SURFACE).max(1e-6);
     let mut shells: Vec<mt::Shell> = Vec::new();
     for sh in body.solid.boundaries() {
         let mut faces: Vec<mt::Face> = sh.face_iter().cloned().collect();
@@ -509,7 +537,7 @@ pub(crate) fn split_seams(body: &crate::Body) -> Option<crate::Body> {
             if !seamed(&face) {
                 continue;
             }
-            let p = crate::guard("seam split", || plan(&face, true).map_err(crate::KernelError::Failed)).ok()??;
+            let p = crate::guard("seam split", || plan(&face, true, tol).map_err(crate::KernelError::Failed)).ok()??;
             faces = faces.iter().map(|f| recut(f, &p.cuts)).collect();
             if let Some(slot) = faces.get_mut(i) {
                 *slot = p.faces.0;
@@ -525,11 +553,16 @@ pub(crate) fn split_seams(body: &crate::Body) -> Option<crate::Body> {
 
 /// Split every band face of a shell (see the module docs). Faces that cannot be split stay as
 /// they are and are reported.
-pub(crate) fn split_bands(mut faces: Vec<mt::Face>, origin: &mut Vec<u64>, warnings: &mut Vec<String>) -> Vec<mt::Face> {
+///
+/// `tol` is the file's point-on-surface tolerance (`step_in::mod::Units::tol`): 10x the file's
+/// declared uncertainty, floored at 1 µm and clamped to [1e-4, 1] mm. A ring edge is written to
+/// within this distance of the surface it bounds, so it is how far `iso_curve` may accept a
+/// crossing point as lying on the surface.
+pub(crate) fn split_bands(mut faces: Vec<mt::Face>, origin: &mut Vec<u64>, warnings: &mut Vec<String>, tol: f64) -> Vec<mt::Face> {
     let n = faces.len();
     for i in 0..n {
         let Some(face) = faces.get(i).cloned() else { continue };
-        match crate::guard("step band split", || plan(&face, false).map_err(crate::KernelError::Failed)) {
+        match crate::guard("step band split", || plan(&face, false, tol).map_err(crate::KernelError::Failed)) {
             Ok(Some(p)) => {
                 faces = faces.iter().map(|f| recut(f, &p.cuts)).collect();
                 if let Some(slot) = faces.get_mut(i) {

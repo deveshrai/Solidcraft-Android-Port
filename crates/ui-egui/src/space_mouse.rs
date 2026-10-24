@@ -51,6 +51,18 @@ pub struct Input {
     pub raw: Axes,
     /// The guided calibration while its window is open, and the device it is for.
     pub calibrating: Option<(String, solidcraft_space_mouse::Wizard)>,
+    /// The driver mapping navigation used last frame, which says what each axis does to the view.
+    pub mapping: Option<DriverMapping>,
+    /// Which of the Linux readers exist, as the app's reader last saw them; none where there is
+    /// only one way to read the device.
+    pub drivers: Option<DriversPresent>,
+}
+
+/// What the Linux reader found: the spacenavd socket and a direct (hidraw) 3D mouse.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DriversPresent {
+    pub spacenavd: bool,
+    pub direct: bool,
 }
 
 /// Seconds after the cap last moved that wheel events are still taken for 3DxWare's: one can be
@@ -173,6 +185,69 @@ pub fn calibrated(axes: Axes, calibration: Option<Calibration>) -> Axes {
     calibration.map_or(axes, |calibration| calibration.apply(axes.into()).into())
 }
 
+/// The device's six calibrated motions, in the order of a reading: what each axis can be driven
+/// by. They name no kind of device, since calibration defined them: Translation X is whatever the
+/// user did for "slide right".
+pub const MOTIONS: [&str; 6] = [
+    "ui.space_mouse_motion_translation_x",
+    "ui.space_mouse_motion_translation_y",
+    "ui.space_mouse_motion_translation_z",
+    "ui.space_mouse_motion_rotation_x",
+    "ui.space_mouse_motion_rotation_y",
+    "ui.space_mouse_motion_rotation_z",
+];
+
+/// What each logical axis does to the view, as `navigation::device_camera` applies it.
+const VIEW_AXES: [&str; 6] = [
+    "ui.space_mouse_view_pan_sideways",
+    "ui.space_mouse_view_zoom",
+    "ui.space_mouse_view_pan_up_down",
+    "ui.space_mouse_view_orbit_up_down",
+    "ui.space_mouse_view_orbit_sideways",
+    "ui.space_mouse_view_roll",
+];
+
+/// The label of axis row `row`: what it does to the view through `mapping`, the mapping
+/// navigation really uses, or "off" when that mapping leaves it out. Without a mapping (a build
+/// with no 3D mouse reader, since the apps run navigation every frame before drawing), a plain
+/// "Axis {n}": neither a guess at the view nor a motion name, which the dropdown already uses.
+/// Two rows a driver profile sends to the same output both get its label; that's what they do.
+pub fn row_label(mapping: Option<DriverMapping>, row: usize) -> &'static str {
+    match mapping.and_then(|mapping| mapping.axes.get(row).copied()) {
+        Some(rule) if rule.enabled => VIEW_AXES.get(rule.output).copied().unwrap_or("ui.space_mouse_view_off"),
+        Some(_) => "ui.space_mouse_view_off",
+        None => "ui.space_mouse_view_unmapped",
+    }
+}
+
+/// Which of the cap's motions drives each of its axes (`Prefs::space_mouse_axis_source`): row
+/// `r` reads motion `source[r]`. Each motion drives exactly one row.
+pub const SAME_AXES: [usize; 6] = [0, 1, 2, 3, 4, 5];
+
+/// The reading with its rows reassigned: row `r` takes motion `source[r]`. A `source` that
+/// isn't one motion per row reads as [`SAME_AXES`].
+pub fn reassigned(axes: Axes, source: [usize; 6]) -> Axes {
+    let source = if drives_each_once(source) { source } else { SAME_AXES };
+    let raw: [i16; 6] = axes.into();
+    source.map(|from| raw.get(from).copied().unwrap_or(0)).into()
+}
+
+/// Makes `row` read motion `from`. The row that read `from` before takes this row's old motion,
+/// so each motion still drives exactly one row.
+pub fn reassign(source: &mut [usize; 6], row: usize, from: usize) {
+    if let Some(other) = source.iter().position(|&s| s == from)
+        && row < source.len()
+    {
+        source.swap(row, other);
+    }
+}
+
+/// Whether each of the six motions drives exactly one row.
+pub fn drives_each_once(source: [usize; 6]) -> bool {
+    let mut seen = [false; 6];
+    source.iter().all(|&from| seen.get_mut(from).is_some_and(|seen| !std::mem::replace(seen, true)))
+}
+
 /// Hands one frame of 3D mouse input, `seconds` after the previous frame, to the page showing
 /// the camera. Nothing happens with navigation switched off, on the start page or while a file
 /// picker is open, or while the reading is inside the dead zone (after calibration, which takes
@@ -182,6 +257,7 @@ pub fn calibrated(axes: Axes, calibration: Option<Calibration>) -> Axes {
 /// calibration window is open, the reading goes to it instead and the view stays put.
 pub fn navigate_frame(app: &mut SolveApp, ctx: &egui::Context, mapping: DriverMapping, axes: Axes, seconds: f64) -> bool {
     app.space_mouse.raw = axes;
+    app.space_mouse.mapping = Some(mapping);
     if let Some((device, wizard)) = &mut app.space_mouse.calibrating {
         if app.space_mouse.device.as_ref() == Some(device) {
             wizard.feed(axes.into(), seconds);
@@ -191,7 +267,9 @@ pub fn navigate_frame(app: &mut SolveApp, ctx: &egui::Context, mapping: DriverMa
         // Another device is being read now, or none: what was recorded isn't its.
         app.space_mouse.calibrating = None;
     }
-    let axes = calibrated(axes, calibration(app));
+    // Calibrated first, so the calibration puts the device's axes in order, then the user's choice
+    // of which motion drives which axis. Invert and speed then go with the axis, not the motion.
+    let axes = reassigned(calibrated(axes, calibration(app)), app.preferences.space_mouse_axis_source);
     // Only the window with focus: with two windows open, the cap moves the one being used, not both.
     if !app.preferences.space_mouse_enabled || app.home.open || app.file_picker_busy() || !axes.moving() || !ctx.input(|i| i.focused) {
         return false;
@@ -228,13 +306,13 @@ mod tests {
     /// The camera math the page applies the motion with (`navigation::device`): `sketch` keeps
     /// the orientation, as editing a sketch does.
     fn navigate(cam: &mut Camera, motion: Motion, seconds: f64, height: f64, sketch: bool, reverse_zoom: bool) {
-        crate::navigation::device_camera(cam, motion, seconds, height, !sketch, reverse_zoom);
+        crate::navigation::device_camera(cam, motion, seconds, height, !sketch, reverse_zoom, false);
     }
 
     /// A window that has run a frame, with or without focus. A context that has never run one
     /// reads as unfocused, so the tests run one first, as the app always has.
     fn window(focused: bool) -> egui::Context {
-        let ctx = egui::Context::default();
+        let ctx = crate::fonts::test_context();
         let mut output = ctx.run_ui(egui::RawInput { focused, ..Default::default() }, |_| {});
         output.textures_delta.clear();
         ctx
@@ -272,6 +350,41 @@ mod tests {
         assert_eq!(mapping.apply(Axes::default()), still);
         let off = DriverMapping::default().with_user_axes([false; 6], [0.0; 6]);
         assert_eq!(off.apply(PUSH), still);
+    }
+
+    #[test]
+    fn solidworks_free_orbit_respects_per_axis_settings_through_both_poles() {
+        let ctx = window(true);
+        let initial = Camera { yaw: 0.0, pitch: 1.4, roll: 0.0, ..Default::default() };
+        let axes = Axes { translation: [0; 3], rotation: [350, 0, 0] };
+        let step = std::f64::consts::TAU / 128.0;
+        for mapping in [DriverMapping::default(), DriverMapping::object_mode()] {
+            for reversed in [false, true] {
+                for speed in [0.5, 2.0] {
+                    let mut app = app();
+                    app.preferences.nav = "solidworks".into();
+                    app.preferences.free_orbit = true;
+                    app.preferences.space_mouse_reverse[3] = reversed;
+                    app.preferences.space_mouse_axis_speed[3] = speed;
+                    app.cam = initial;
+                    for i in 0..128 {
+                        let before = app.cam;
+                        assert!(frame(&mut app, &ctx, mapping, axes, step / (2.0 * f64::from(speed))));
+                        assert!((before.back().dot(app.cam.back()) - step.cos()).abs() < 1e-10);
+                        if i == 0 {
+                            let direction = if reversed { -1.0 } else { 1.0 };
+                            assert!((app.cam.back().dot(initial.basis().1) - direction * step.sin()).abs() < 1e-10);
+                        }
+                    }
+                    assert!(app.cam.back().dist(initial.back()) < 1e-9 && app.cam.basis().0.dist(initial.basis().0) < 1e-9);
+                    assert_eq!((app.cam.target, app.cam.distance, app.cam.fov), (initial.target, initial.distance, initial.fov));
+                    app.preferences.space_mouse_axis_speed[3] = 0.0;
+                    let before = app.cam;
+                    frame(&mut app, &ctx, mapping, axes, 0.04);
+                    assert_eq!(app.cam, before);
+                }
+            }
+        }
     }
 
     const PUSH: Axes = Axes { translation: [0, 350, 0], rotation: [0; 3] };
@@ -372,6 +485,26 @@ mod tests {
         // Translations and the forward tilt are the raw axes.
         let all = Axes { translation: [100, -200, 300], rotation: [-150, 0, 0] };
         assert_eq!(DriverMapping::object_mode().apply(all), DriverMapping::default().apply(all));
+    }
+
+    #[test]
+    fn the_driver_choice_is_saved_and_an_older_file_reads_automatic() {
+        use crate::prefs::SpaceMouseDriver;
+        let mut saved = serde_json::to_value(crate::prefs::Prefs::default()).unwrap();
+        assert_eq!(saved["space_mouse_driver"], "automatic");
+        for driver in SpaceMouseDriver::ALL {
+            saved["space_mouse_driver"] = serde_json::to_value(driver).unwrap();
+            assert_eq!(crate::prefs::lenient(&saved).space_mouse_driver, driver);
+            assert_eq!(SpaceMouseDriver::from_u8(driver.to_u8()), driver);
+        }
+        saved["space_mouse_driver"] = "direct".into();
+        assert_eq!(crate::prefs::lenient(&saved).space_mouse_driver, SpaceMouseDriver::Direct);
+        // One saved before the setting existed, or with a driver this version doesn't know.
+        saved.as_object_mut().unwrap().remove("space_mouse_driver");
+        assert_eq!(crate::prefs::lenient(&saved).space_mouse_driver, SpaceMouseDriver::Automatic);
+        saved["space_mouse_driver"] = "evdev".into();
+        assert_eq!(crate::prefs::lenient(&saved).space_mouse_driver, SpaceMouseDriver::Automatic);
+        assert_eq!(SpaceMouseDriver::from_u8(200), SpaceMouseDriver::Automatic);
     }
 
     #[test]
@@ -627,5 +760,192 @@ mod tests {
         older.as_object_mut().unwrap().remove("dead_zone_share");
         saved["space_mouse_calibrations"]["hid 1234:5678"] = older;
         assert_eq!(crate::prefs::lenient(&saved), prefs);
+    }
+
+    #[test]
+    fn picking_a_motion_another_axis_uses_swaps_the_two() {
+        let mut source = SAME_AXES;
+        reassign(&mut source, 1, 2);
+        assert_eq!(source, [0, 2, 1, 3, 4, 5], "Y and Z swapped");
+        reassign(&mut source, 4, 5);
+        assert_eq!(source, [0, 2, 1, 3, 5, 4], "then roll and twist");
+        reassign(&mut source, 1, 1);
+        assert_eq!(source, [0, 1, 2, 3, 5, 4], "back again");
+        assert!(drives_each_once(source));
+        // A row or a motion that doesn't exist changes nothing.
+        reassign(&mut source, 9, 0);
+        reassign(&mut source, 0, 9);
+        assert_eq!(source, [0, 1, 2, 3, 5, 4]);
+        assert!(!drives_each_once([0, 0, 2, 3, 4, 5]) && !drives_each_once([0, 1, 2, 3, 4, 9]));
+        // A value that doesn't drive each axis once is read as the default.
+        let reading = Axes { translation: [1, 2, 3], rotation: [4, 5, 6] };
+        assert_eq!(reassigned(reading, [0, 2, 1, 3, 5, 4]), Axes { translation: [1, 3, 2], rotation: [4, 6, 5] });
+        assert_eq!(reassigned(reading, [0, 0, 2, 3, 4, 5]), reading);
+    }
+
+    #[test]
+    fn a_reassigned_motion_drives_its_new_axis_and_invert_stays_with_the_axis() {
+        let ctx = window(true);
+        let press = Axes { translation: [0, 0, 350], rotation: [0; 3] };
+        // With Y and Z swapped, pressing the cap does what pushing it back would.
+        let mut reference = app();
+        frame(&mut reference, &ctx, DriverMapping::default(), PUSH, 0.02);
+        let mut swapped = app();
+        swapped.preferences.space_mouse_axis_source = [0, 2, 1, 3, 4, 5];
+        assert!(frame(&mut swapped, &ctx, DriverMapping::default(), press, 0.02));
+        assert_eq!(swapped.cam, reference.cam);
+        // Inverting the Y axis inverts whatever motion drives it now, not the Y motion.
+        let mut inverted = app();
+        inverted.preferences.space_mouse_reverse[1] = true;
+        frame(&mut inverted, &ctx, DriverMapping::default(), PUSH, 0.02);
+        let mut swapped_inverted = app();
+        swapped_inverted.preferences.space_mouse_axis_source = [0, 2, 1, 3, 4, 5];
+        swapped_inverted.preferences.space_mouse_reverse[1] = true;
+        frame(&mut swapped_inverted, &ctx, DriverMapping::default(), press, 0.02);
+        assert_eq!(swapped_inverted.cam, inverted.cam);
+        assert_ne!(swapped_inverted.cam, reference.cam);
+        // The same for the axis's speed.
+        let mut slowed = app();
+        slowed.preferences.space_mouse_axis_speed[1] = 0.5;
+        frame(&mut slowed, &ctx, DriverMapping::default(), PUSH, 0.02);
+        let mut swapped_slowed = app();
+        swapped_slowed.preferences.space_mouse_axis_source = [0, 2, 1, 3, 4, 5];
+        swapped_slowed.preferences.space_mouse_axis_speed[1] = 0.5;
+        frame(&mut swapped_slowed, &ctx, DriverMapping::default(), press, 0.02);
+        assert_eq!(swapped_slowed.cam, slowed.cam);
+        assert_ne!(swapped_slowed.cam, reference.cam);
+    }
+
+    #[test]
+    fn a_motion_swapped_into_a_row_the_driver_turns_off_moves_nothing_until_swapped_back() {
+        let ctx = window(true);
+        let mut pan_up_down_off = DriverMapping::default();
+        pan_up_down_off.axes[2].enabled = false;
+        let mut slowed = app();
+        slowed.preferences.space_mouse_axis_speed[1] = 0.5;
+        frame(&mut slowed, &ctx, pan_up_down_off, PUSH, 0.02);
+        // Picking the push motion in the off row swaps the off row's motion into row 1.
+        let mut app = app();
+        app.preferences.space_mouse_axis_speed[1] = 0.5;
+        reassign(&mut app.preferences.space_mouse_axis_source, 2, 1);
+        assert_eq!(app.preferences.space_mouse_axis_source, [0, 2, 1, 3, 4, 5]);
+        let still = app.cam;
+        assert_ne!(slowed.cam, still);
+        frame(&mut app, &ctx, pan_up_down_off, PUSH, 0.02);
+        assert_eq!(app.cam, still);
+        // Picking it back in row 1 recovers it, at the speed row 1 kept.
+        reassign(&mut app.preferences.space_mouse_axis_source, 1, 1);
+        assert_eq!(app.preferences.space_mouse_axis_source, SAME_AXES);
+        frame(&mut app, &ctx, pan_up_down_off, PUSH, 0.02);
+        assert_eq!(app.cam, slowed.cam);
+    }
+
+    #[test]
+    fn the_choice_is_between_calibrated_motions_on_a_device_whose_calibration_shuffles_its_channels() {
+        // `homemade()` reads Y from raw channel 4, reversed, and Ry from raw 1. With Y and Z
+        // swapped, the choices are calibrated motions: pressing the cap (calibrated Z, raw 2)
+        // drives Y, and pushing it back (calibrated Y, raw 4 the other way) drives Z.
+        let ctx = window(true);
+        let device = "hid 1234:5678";
+        let setup = |source: [usize; 6]| {
+            let mut app = app();
+            app.space_mouse.device = Some(device.into());
+            app.preferences.space_mouse_calibrations.insert(device.into(), homemade());
+            app.preferences.space_mouse_axis_source = source;
+            app
+        };
+        // Mixed motion: a press and a push back together, on the device's own channels.
+        let mixed = Axes { translation: [0, 0, 1750], rotation: [0, -3500, 0] };
+        let expected = Axes { translation: [0, 175, 350], rotation: [0; 3] };
+        let mut reference = app();
+        frame(&mut reference, &ctx, DriverMapping::default(), expected, 0.02);
+        let mut swapped = setup([0, 2, 1, 3, 4, 5]);
+        assert!(frame(&mut swapped, &ctx, DriverMapping::default(), mixed, 0.02));
+        assert_eq!(swapped.cam, reference.cam, "calibrated first, then the motions swapped, once");
+        // Saved and loaded, it's the same choice; reset, the device reads as calibrated.
+        let saved = serde_json::to_value(&swapped.preferences).unwrap();
+        assert_eq!(crate::prefs::lenient(&saved).space_mouse_axis_source, [0, 2, 1, 3, 4, 5]);
+        let mut unswapped_reference = app();
+        frame(&mut unswapped_reference, &ctx, DriverMapping::default(), Axes { translation: [0, 350, 175], rotation: [0; 3] }, 0.02);
+        let mut reset = setup(SAME_AXES);
+        frame(&mut reset, &ctx, DriverMapping::default(), mixed, 0.02);
+        assert_eq!(reset.cam, unswapped_reference.cam);
+    }
+
+    #[test]
+    fn rows_say_what_they_do_to_the_view_through_the_mapping_navigation_uses() {
+        let labels = |mapping| (0..6).map(|row| row_label(mapping, row)).collect::<Vec<_>>();
+        assert_eq!(labels(Some(DriverMapping::default())), VIEW_AXES);
+        // Linux, and Windows without a 3DxWare profile: object mode swaps the last two rows'
+        // effect, so their labels swap with it.
+        let object = labels(Some(DriverMapping::object_mode()));
+        assert_eq!((object[4], object[5]), (VIEW_AXES[5], VIEW_AXES[4]));
+        // An axis the mapping switches off says so.
+        let mut off = DriverMapping::default();
+        off.axes[2].enabled = false;
+        assert_eq!(row_label(Some(off), 2), "ui.space_mouse_view_off");
+        // Without a mapping, rows claim no view effect and name none of the dropdown's motions.
+        assert_eq!(labels(None), ["ui.space_mouse_view_unmapped"; 6]);
+    }
+
+    #[test]
+    fn each_frame_records_the_mapping_it_navigated_with() {
+        let ctx = window(true);
+        let mut app = app();
+        assert!(app.space_mouse.mapping.is_none());
+        frame(&mut app, &ctx, DriverMapping::object_mode(), Axes::default(), 0.02);
+        assert_eq!(app.space_mouse.mapping, Some(DriverMapping::object_mode()));
+        // A changed profile shows on the next frame, calibrating or not; a reassignment changes
+        // which motion drives a row, never the row's label.
+        app.space_mouse.device = Some("hid 1234:5678".into());
+        app.preferences.space_mouse_axis_source = [0, 2, 1, 3, 4, 5];
+        crate::space_mouse_calibration::start(&mut app);
+        frame(&mut app, &ctx, DriverMapping::default(), Axes::default(), 0.02);
+        assert_eq!(app.space_mouse.mapping, Some(DriverMapping::default()));
+        assert_eq!(row_label(app.space_mouse.mapping, 1), VIEW_AXES[1]);
+    }
+
+    #[test]
+    fn calibrating_records_the_device_before_the_axis_choice() {
+        // With Y and Z swapped, a new calibration still learns the device's own channels.
+        // Recorded after the swap, it would bake the swap in, and the swap would then apply twice.
+        let ctx = window(true);
+        let mut app = app();
+        app.space_mouse.device = Some("hid 1234:5678".into());
+        app.preferences.space_mouse_axis_source = [0, 2, 1, 3, 4, 5];
+        crate::space_mouse_calibration::start(&mut app);
+        let feed = |app: &mut SolveApp, axes: Axes, seconds: f64| {
+            for _ in 0..(seconds / 0.02).round() as usize {
+                frame(app, &ctx, DriverMapping::default(), axes, 0.02);
+            }
+        };
+        feed(&mut app, Axes::default(), 1.6);
+        for step in solidcraft_space_mouse::STEPS {
+            let mut raw = [0_i16; 6];
+            raw[step.axis] = if step.positive { 300 } else { -300 };
+            feed(&mut app, raw.into(), 0.5);
+            feed(&mut app, Axes::default(), 0.1);
+        }
+        let (_, wizard) = app.space_mouse.calibrating.as_ref().unwrap();
+        let calibration = wizard.result().unwrap().unwrap();
+        assert!(calibration.axes.iter().enumerate().all(|(c, axis)| axis.source == c && !axis.reversed), "{calibration:?}");
+    }
+
+    #[test]
+    fn a_saved_axis_assignment_that_doesnt_drive_each_axis_once_loads_as_the_default() {
+        let mut saved = serde_json::to_value(crate::prefs::Prefs::default()).unwrap();
+        saved["space_mouse_axis_source"] = serde_json::json!([0, 2, 1, 3, 4, 5]);
+        assert_eq!(crate::prefs::lenient(&saved).space_mouse_axis_source, [0, 2, 1, 3, 4, 5]);
+        saved["space_mouse_axis_source"] = serde_json::json!([1, 1, 2, 3, 4, 5]);
+        assert_eq!(crate::prefs::lenient(&saved).space_mouse_axis_source, SAME_AXES);
+        // An older file without it, or one with the wrong length, loads with the default and
+        // keeps every other setting.
+        saved["space_mouse_speed"] = serde_json::json!(2.0);
+        saved.as_object_mut().unwrap().remove("space_mouse_axis_source");
+        let older = crate::prefs::lenient(&saved);
+        assert_eq!((older.space_mouse_axis_source, older.space_mouse_speed), (SAME_AXES, 2.0));
+        saved["space_mouse_axis_source"] = serde_json::json!([0, 1, 2, 3, 4]);
+        let short = crate::prefs::lenient(&saved);
+        assert_eq!((short.space_mouse_axis_source, short.space_mouse_speed), (SAME_AXES, 2.0));
     }
 }

@@ -16,6 +16,8 @@ struct U {
     ana_c: array<vec4<f32>, 8>,
     ana_f: vec4<f32>,  // x = 1: stripe the negative draft and blocked faces
     depth: vec4<f32>,  // x = 1: reversed depth (1 near, 0 far); y, z: the faces' push (`FACE_BIAS`)
+    tint: vec4<f32>,   // xyz added to a whole hovered body's colour before lighting
+    sel: vec4<f32>,    // xyz a whole selected body's colour before lighting
 };
 
 fn reversed() -> bool {
@@ -29,7 +31,7 @@ fn near_z(c: vec4<f32>) -> f32 {
 }
 
 @group(1) @binding(2) var acc_t: texture_2d<f32>;
-@group(2) @binding(0) var ao_depth: texture_depth_2d;
+@group(2) @binding(0) var ao_depth: texture_2d<u32>;
 
 fn clipped(p: vec3<f32>) -> bool {
     return length(u.clip.xyz) > 0.5 && dot(u.clip.xyz, p) > u.clip.w;
@@ -64,7 +66,138 @@ fn vs_tri(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) c: 
     return o;
 }
 
-/// Opaque model surfaces: cut by the section plane, the inside shows as a flat cap colour.
+/// Shared triangles (in their part's own frame) drawn at one placement: the rows of its rigid
+/// move (`r0`..`r2`, a point's coordinates are their dot products with (p, 1)) and its colour.
+/// The vertex colour (location 2) is not read.
+@vertex
+fn vs_tri_inst(
+    @location(0) p: vec3<f32>,
+    @location(1) n: vec3<f32>,
+    @location(3) r0: vec4<f32>,
+    @location(4) r1: vec4<f32>,
+    @location(5) r2: vec4<f32>,
+    @location(6) c: vec4<f32>,
+) -> TOut {
+    let q = vec4<f32>(p, 1.0);
+    let wp = vec3<f32>(dot(r0, q), dot(r1, q), dot(r2, q));
+    var o: TOut;
+    o.pos = u.vp * vec4<f32>(wp, 1.0);
+    o.n = vec3<f32>(dot(r0.xyz, n), dot(r1.xyz, n), dot(r2.xyz, n));
+    o.c = c;
+    o.wp = wp;
+    return o;
+}
+
+/// A flat-shaded placement (`vs_tri_inst_flat`): its vertices are shared between triangles, so
+/// the face's normal is the triangle's own plane, worked out per fragment. The fragment gets its
+/// position from the eye (`rp`): small near what is looked at, so the plane comes out exact at
+/// any zoom however far from the origin the part stands, and few values per vertex (a tiled GPU
+/// stores every vertex's outputs: more of them cost more than the triangles' shared vertices
+/// save).
+struct FOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) rp: vec3<f32>,
+    @location(1) c: vec4<f32>,
+};
+
+@vertex
+fn vs_tri_inst_flat(
+    @location(0) p: vec3<f32>,
+    @location(3) r0: vec4<f32>,
+    @location(4) r1: vec4<f32>,
+    @location(5) r2: vec4<f32>,
+    @location(6) c: vec4<f32>,
+) -> FOut {
+    let q = vec4<f32>(p, 1.0);
+    let wp = vec3<f32>(dot(r0, q), dot(r1, q), dot(r2, q));
+    var o: FOut;
+    o.pos = u.vp * vec4<f32>(wp, 1.0);
+    o.rp = wp - u.eye.xyz;
+    o.c = c;
+    return o;
+}
+
+/// The fragment of a flat-shaded placement as the other triangles' fragments are: its normal
+/// the outward normal of its triangle (toward the eye on a front face, away on a back face, as
+/// the triangles are wound outward).
+fn flat_fragment(i: FOut, front: bool) -> TOut {
+    var n = cross(dpdx(i.rp), dpdy(i.rp));
+    let toward = select(u.back.xyz, -i.rp, u.eye.w > 0.5);
+    n = n * inverseSqrt(max(dot(n, n), 1e-30));
+    if ((dot(n, toward) < 0.0) == front) { n = -n; }
+    var o: TOut;
+    o.pos = i.pos;
+    o.n = n;
+    o.c = i.c;
+    o.wp = i.rp + u.eye.xyz;
+    return o;
+}
+
+@fragment
+fn fs_solid_flat(i: FOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let t = flat_fragment(i, front);
+    let c = solid(t, front);
+    return c;
+}
+
+@fragment
+fn fs_solid_cut_flat(i: FOut, @builtin(front_facing) front: bool) -> CutOut {
+    let t = flat_fragment(i, front);
+    var o: CutOut;
+    o.depth = pushed(cap_depth(t.wp, t.pos.z));
+    o.c = solid(t, front);
+    return o;
+}
+
+/// Weighted blended order-independent transparency (`view/oit.rs`): a see-through fragment's
+/// colour, premultiplied and weighted by its alpha and nearness, into the accumulation target,
+/// and its alpha into the revealage target (which keeps what is behind it by 1 - alpha).
+struct Oit {
+    @location(0) accum: vec4<f32>,
+    @location(1) reveal: vec4<f32>,
+};
+
+fn oit(c: vec4<f32>, z: f32) -> Oit {
+    let a = clamp(c.a, 0.0, 1.0);
+    // Depth 0 near and 1 far, whichever way the buffer runs.
+    let d = select(z, 1.0 - z, reversed());
+    let w = clamp(a * max(1e-2, 3e3 * pow(1.0 - d, 3.0)), 1e-2, 3e3);
+    var o: Oit;
+    o.accum = vec4<f32>(c.rgb * a, a) * w;
+    o.reveal = vec4<f32>(a);
+    return o;
+}
+
+@fragment
+fn fs_oit(i: TOut) -> Oit {
+    if (clipped(i.wp)) { discard; }
+    return oit(shade(i), i.pos.z);
+}
+
+@fragment
+fn fs_oit_flat(i: FOut, @builtin(front_facing) front: bool) -> Oit {
+    let t = flat_fragment(i, front);
+    let o = oit(shade(t), t.pos.z);
+    if (clipped(t.wp)) { discard; }
+    return o;
+}
+
+/// A see-through flat-shaded placement (faded or glass), shaded like `fs_tri`.
+@fragment
+fn fs_tri_flat(i: FOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let t = flat_fragment(i, front);
+    let c = shade(t);
+    if (clipped(t.wp)) { discard; }
+    return c;
+}
+
+@fragment
+fn fs_ao_depth_flat(i: FOut, @builtin(front_facing) front: bool) -> AoDepth {
+    let t = flat_fragment(i, front);
+    return opaque_depth(t, front);
+}
+
+/// Opaque model surfaces: cut by the section plane/// Opaque model surfaces: cut by the section plane, the inside shows as a flat cap colour.
 @fragment
 fn fs_solid(i: TOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let c = solid(i, front);
@@ -122,7 +255,9 @@ fn solid(i: TOut, front: bool) -> vec4<f32> {
     if (clipped(i.wp)) { discard; }
     if (!front && length(u.clip.xyz) > 0.5) {
         // The cut face in its body's colour ("from component" colouring), tinted toward the
-        // cap colour so it reads as a cut, hatched at 45 degrees on screen.
+        // cap colour so it reads as a cut, hatched at 45 degrees on screen; with the hatch off
+        // (`u.cap.a` 0), plain in the body's own colour.
+        if (u.cap.a < 0.5) { return out_color(vec4<f32>(i.c.rgb, 1.0)); }
         let base = mix(i.c.rgb, u.cap.rgb, 0.35);
         let h = fract((i.pos.x + i.pos.y) / 9.0);
         return out_color(vec4<f32>(select(base, base * 0.6, h < 0.22), 1.0));
@@ -141,11 +276,24 @@ fn solid(i: TOut, front: bool) -> vec4<f32> {
 }
 
 // A single-sample opaque depth map, independent of the window's MSAA and its UI offsets.
+// Preserve the depth's bits in R32Uint: GLSL cannot textureLoad a depth texture,
+// and float colour attachments are not available on every GL adapter.
+struct AoDepth {
+    @builtin(frag_depth) depth: f32,
+    @location(0) value: u32,
+};
+
 @fragment
-fn fs_ao_depth(i: TOut, @builtin(front_facing) front: bool) -> @builtin(frag_depth) f32 {
+fn fs_ao_depth(i: TOut, @builtin(front_facing) front: bool) -> AoDepth {
+    return opaque_depth(i, front);
+}
+
+/// The AO prepass's depth of an opaque surface's fragment.
+fn opaque_depth(i: TOut, front: bool) -> AoDepth {
     if (clipped(i.wp) || length(i.n) < 0.5) { discard; }
-    if (!front && length(u.clip.xyz) > 0.5) { return cap_depth(i.wp, i.pos.z); }
-    return i.pos.z;
+    var depth = i.pos.z;
+    if (!front && length(u.clip.xyz) > 0.5) { depth = cap_depth(i.wp, i.pos.z); }
+    return AoDepth(depth, bitcast<u32>(depth));
 }
 
 // Deterministic cosine-weighted hemisphere samples. Projecting the sample and a point one
@@ -180,7 +328,7 @@ fn occlusion(i: TOut) -> f32 {
         let ndc = q.xyz / q.w;
         let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
         if (any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0)) || ndc.z < 0.0 || ndc.z > 1.0) { continue; }
-        let d0 = textureLoad(ao_depth, vec2<i32>(uv * vec2<f32>(size)), 0);
+        let d0 = bitcast<f32>(textureLoad(ao_depth, vec2<i32>(uv * vec2<f32>(size)), 0).x);
         let zs = select(ndc.z, 1.0 - ndc.z, flip);
         let zn = select(near.z / near.w, 1.0 - near.z / near.w, flip);
         let d = select(d0, 1.0 - d0, flip);
@@ -278,6 +426,20 @@ fn fs_tri(i: TOut) -> @location(0) vec4<f32> {
     return shade(i);
 }
 
+/// A whole hovered body, lit over the model from its own plan triangles in a lifted colour.
+@fragment
+fn fs_hl_hover(i: TOut) -> @location(0) vec4<f32> {
+    if (clipped(i.wp)) { discard; }
+    return lit_color(i, 1.0, vec4<f32>(i.c.rgb + u.tint.rgb, i.c.a));
+}
+
+/// A whole selected body, lit over the model from its own plan triangles in the selection colour.
+@fragment
+fn fs_hl_selected(i: TOut) -> @location(0) vec4<f32> {
+    if (clipped(i.wp)) { discard; }
+    return lit_color(i, 1.0, vec4<f32>(u.sel.rgb, i.c.a));
+}
+
 /// Reference planes: shaded like `fs_tri`, but never cut by the section plane.
 @fragment
 fn fs_tri_all(i: TOut) -> @location(0) vec4<f32> {
@@ -289,9 +451,15 @@ fn shade(i: TOut) -> vec4<f32> {
 }
 
 fn lit(i: TOut, visibility: f32) -> vec4<f32> {
+    return lit_color(i, visibility, i.c);
+}
+
+/// [`lit`] in a colour of its own: a whole highlighted body is lit in its colour lifted by the
+/// hover amount, or in the selection colour, from the model's own plan triangles.
+fn lit_color(i: TOut, visibility: f32, base: vec4<f32>) -> vec4<f32> {
     // A zero normal marks flat colour (selection fills, translucent planes).
     if (length(i.n) < 0.5) {
-        return out_color(i.c);
+        return out_color(base);
     }
     let v = normalize(u.back.xyz);
     var n = normalize(i.n);
@@ -302,7 +470,7 @@ fn lit(i: TOut, visibility: f32) -> vec4<f32> {
     let h = normalize(key + v);
     let spec = pow(max(dot(n, h), 0.0), 40.0) * 0.25;
     let k = 0.42 + 0.38 * diff + 0.25 * fill - (0.42 + 0.25 * fill) * (1.0 - visibility);
-    return out_color(vec4<f32>(min(i.c.rgb * k + vec3<f32>(spec), vec3<f32>(1.0)), i.c.a));
+    return out_color(vec4<f32>(min(base.rgb * k + vec3<f32>(spec), vec3<f32>(1.0)), base.a));
 }
 
 // Lines, decals and ghosts are drawn at their own depth: opaque faces are pushed back by their

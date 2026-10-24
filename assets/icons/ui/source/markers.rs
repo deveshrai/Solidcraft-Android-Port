@@ -49,7 +49,7 @@ pub(crate) fn snap(painter: &egui::Painter, c: Pos2, tip: Option<Pos2>, kind: Sn
     // What it snaps to (hovered), or which component it is (picked): a small label.
     if let Some(tag) = tag {
         let t = Tokens::get();
-        let font = egui::FontId::proportional(11.5);
+        let font = egui::FontId::proportional(crate::theme::Tokens::get().font_caption);
         let g = painter.layout_no_wrap(tag.to_string(), font, t.text);
         let at = c + vec2(12.0, 10.0);
         let r = egui::Rect::from_min_size(at, g.size()).expand2(vec2(5.0, 2.0));

@@ -141,9 +141,9 @@ pub fn page(app: &mut SolveApp, ui: &mut egui::Ui) {
         return;
     };
     let path = dir.display().to_string();
-    ui.add(egui::Label::new(RichText::new(crate::i18n::format("ui.plugins_note", &[("path", &path)])).size(11.0).color(t.text_dim)).wrap());
+    ui.add(egui::Label::new(RichText::new(crate::i18n::format("ui.plugins_note", &[("path", &path)])).size(t.font_small).color(t.text_dim)).wrap());
     ui.add_space(8.0);
-    if ui.button(crate::i18n::tr_label("Show in folder")).clicked() {
+    if crate::ui_kit::button(ui, crate::i18n::tr_label("Show in folder"), crate::ui_kit::Button::Normal).clicked() {
         // `show_in_folder` opens the parent of the path it is given, so the argument is a name
         // inside the plugins directory (it need not exist).
         if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -160,7 +160,7 @@ pub fn page(app: &mut SolveApp, ui: &mut egui::Ui) {
     for plugin in &plugins {
         let mut on = enabled(app, &plugin.id);
         ui.horizontal(|ui| {
-            let check = ui.checkbox(&mut on, "");
+            let check = crate::ui_kit::checkbox(ui, "", &mut on);
             crate::scenario::publish_handle(&format!("prefs:plugin:{}", plugin.id), check.rect.center());
             if check.changed() {
                 if on {
@@ -171,9 +171,11 @@ pub fn page(app: &mut SolveApp, ui: &mut egui::Ui) {
             }
             ui.vertical(|ui| {
                 ui.label(RichText::new(&plugin.name).strong());
-                ui.label(RichText::new(crate::i18n::format("ui.plugins_version", &[("version", &plugin.version)])).size(11.0).color(t.text_dim));
+                ui.label(
+                    RichText::new(crate::i18n::format("ui.plugins_version", &[("version", &plugin.version)])).size(t.font_small).color(t.text_dim),
+                );
                 if !plugin.description.is_empty() {
-                    ui.label(RichText::new(&plugin.description).size(11.0).color(t.text_dim));
+                    ui.label(RichText::new(&plugin.description).size(t.font_small).color(t.text_dim));
                 }
             });
         });
@@ -181,10 +183,12 @@ pub fn page(app: &mut SolveApp, ui: &mut egui::Ui) {
     }
     if !skipped.is_empty() {
         ui.add_space(6.0);
-        ui.label(RichText::new(crate::i18n::format("ui.plugins_skipped", &[("count", &skipped.len().to_string())])).size(11.0).color(t.text_dim));
+        ui.label(
+            RichText::new(crate::i18n::format("ui.plugins_skipped", &[("count", &skipped.len().to_string())])).size(t.font_small).color(t.text_dim),
+        );
         for skip in skipped.iter().take(8) {
             let who = if skip.folder.is_empty() { "folder" } else { skip.folder.as_str() };
-            ui.label(RichText::new(format!("{who}: {}", skip.reason)).size(11.0).color(t.text_dim));
+            ui.label(RichText::new(format!("{who}: {}", skip.reason)).size(t.font_small).color(t.text_dim));
         }
     }
 }

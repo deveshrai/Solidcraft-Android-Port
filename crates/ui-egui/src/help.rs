@@ -3,10 +3,9 @@
 //! (read only), Messages (every status message of the run, #2763), and Report an Issue, which
 //! opens a local editable report draft.
 
-use egui::{RichText, vec2};
-
 use crate::SolveApp;
-use crate::theme::Tokens;
+use crate::ui_kit;
+use crate::ui_kit::{Container, Surface};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const COMMIT: &str = env!("SOLIDCRAFT_COMMIT");
@@ -15,11 +14,6 @@ pub const BUILD_DATE: &str = env!("SOLIDCRAFT_BUILD_DATE");
 pub const DOCS_URL: &str = "https://docs.solidcraft.io/";
 const ATTRIBUTION: &str = include_str!("../../../ATTRIBUTION.md");
 use solidcraft_engine::licences::{LICENSE_APACHE, LICENSE_MIT, NOTICE, THIRD_PARTY};
-/// Fonts: what this build carries.
-pub const FONTS: &str = "The interface uses egui's built-in fonts (Ubuntu Light and Hack, under the Ubuntu Font Licence and \
-the MIT/Bitstream Vera licence; Noto Emoji and the emoji icon font, under the OFL and MIT). Sketch text uses Liberation Sans \
-(SIL OFL 1.1). The Crafting Apps' optional font pack, craft-fonts (BIZ UDPGothic, Shippori Mincho, BIZ UDMincho, Noto Sans \
-CJK SC, Noto Sans Arabic; SIL OFL 1.1), is not bundled in SolidCraft builds.";
 
 #[derive(Default)]
 pub struct HelpState {
@@ -69,18 +63,22 @@ pub fn run(app: &mut SolveApp, ctx: &egui::Context, item: &str) {
 pub fn show(app: &mut SolveApp, ctx: &egui::Context, anchor: egui::Pos2) {
     if app.help.menu {
         let mut pick: Option<&str> = None;
-        let resp =
-            crate::frame::area(egui::Id::new("sc_help_menu")).fixed_pos(anchor).constrain(true).order(egui::Order::Foreground).show(ctx, |ui| {
+        let resp = Container::new(ctx, Surface::Popup)
+            .area(egui::Id::new("sc_help_menu"))
+            .fixed_pos(anchor)
+            .constrain(true)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
                 crate::context_menu::menu_frame(ui, |ui| {
-                    for (id, label) in [
-                        ("docs", "Documentation"),
-                        ("about", "About SolidCraft"),
-                        ("shortcuts", "Keyboard Shortcuts"),
-                        ("messages", "Messages…"),
-                        ("report", "Report an Issue…"),
-                        ("crashes", "Crash Reports…"),
+                    for (id, label, icon) in [
+                        ("docs", "Documentation", "library"),
+                        ("about", "About SolidCraft", "help"),
+                        ("shortcuts", "Keyboard Shortcuts", "list"),
+                        ("messages", "Messages…", "list"),
+                        ("report", "Report an Issue…", "bug_report"),
+                        ("crashes", "Crash Reports…", "status_error"),
                     ] {
-                        if crate::context_menu::list_row(ui, &crate::context_menu::Item::action(id, label, "")).is_some() {
+                        if crate::context_menu::list_row(ui, &crate::context_menu::Item::action(id, label, icon)).is_some() {
                             pick = Some(id);
                         }
                     }
@@ -105,65 +103,52 @@ fn about(app: &mut SolveApp, ctx: &egui::Context) {
     if !app.help.about {
         return;
     }
-    let t = Tokens::get();
-    let mut open = true;
-    crate::frame::window(ctx, crate::i18n::tr_label("About SolidCraft"), crate::frame::Width::Normal)
-        .id(egui::Id::new("sc_about"))
-        .open(&mut open)
-        .default_size(vec2(440.0, 560.0))
-        .show(ctx, |ui| {
-            ui.label(RichText::new("SolidCraft").size(22.0).strong());
-            ui.label(format!("Version {VERSION} · commit {COMMIT} · built {BUILD_DATE}"));
-            ui.label(RichText::new(crate::i18n::tr_label("Open-source parametric 3D CAD in Rust. Licensed MIT OR Apache-2.0.")).color(t.text_dim));
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if ui.button(crate::i18n::tr_label("Copy diagnostic information")).clicked() {
-                    ctx.copy_text(diagnostics(app));
-                }
-            });
-            ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                egui::CollapsingHeader::new("Attributions (ATTRIBUTION.md)").show(ui, |ui| {
-                    ui.label(RichText::new(ATTRIBUTION).monospace().size(11.0));
+    let (closed, action) = ui_kit::Window::new(egui::Id::new("sc_about"), "help", crate::i18n::tr_label("About SolidCraft"))
+        .cards(2.0)
+        .actions("", "Close", None)
+        .show(ctx, true, |ui| {
+            ui_kit::text(
+                ui,
+                &crate::i18n::format("help.build", &[("version", VERSION), ("commit", COMMIT), ("date", BUILD_DATE)]),
+                ui_kit::Text::Report("version", false),
+            );
+            ui_kit::text(
+                ui,
+                crate::i18n::tr_label("Open-source parametric 3D CAD in Rust. Licensed MIT OR Apache-2.0."),
+                ui_kit::Text::Note("description"),
+            );
+            let copy = ui_kit::button(ui, crate::i18n::tr_label("Copy diagnostic information"), ui_kit::Button::Normal);
+            crate::scenario::publish_target("about:copy_diagnostics", copy.rect);
+            if copy.clicked() {
+                ctx.copy_text(diagnostics(app));
+            }
+            egui::ScrollArea::vertical().max_height(crate::theme::Tokens::get().control_height * 15.0).show(ui, |ui| {
+                ui_kit::section(ui, "attributions", crate::i18n::tr("help.attributions"), false, |ui| {
+                    ui_kit::text(ui, ATTRIBUTION, ui_kit::Text::Report("attributions", false));
                 });
-                egui::CollapsingHeader::new("Fonts").show(ui, |ui| {
-                    ui.label(FONTS);
+                ui_kit::section(ui, "fonts", crate::i18n::tr("help.fonts"), false, |ui| {
+                    ui_kit::text(ui, crate::i18n::tr("help.font_details"), ui_kit::Text::Report("fonts", false));
                 });
-                egui::CollapsingHeader::new("Licences").show(ui, |ui| {
-                    egui::CollapsingHeader::new("NOTICE").show(ui, |ui| {
-                        ui.label(RichText::new(NOTICE).monospace().size(11.0));
-                    });
-                    egui::CollapsingHeader::new("MIT licence").show(ui, |ui| {
-                        ui.label(RichText::new(LICENSE_MIT).monospace().size(11.0));
-                    });
-                    egui::CollapsingHeader::new("Apache licence 2.0").show(ui, |ui| {
-                        ui.label(RichText::new(LICENSE_APACHE).monospace().size(11.0));
-                    });
-                    egui::CollapsingHeader::new("Third-party licences").show(ui, |ui| {
-                        if ui.button(crate::i18n::tr_label("Copy all licences")).clicked() {
+                ui_kit::section(ui, "licences", crate::i18n::tr("help.licences"), false, |ui| {
+                    for (id, title, text) in
+                        [("notice", "help.notice", NOTICE), ("mit", "help.mit", LICENSE_MIT), ("apache", "help.apache", LICENSE_APACHE)]
+                    {
+                        ui_kit::section(ui, id, crate::i18n::tr(title), false, |ui| {
+                            ui_kit::text(ui, text, ui_kit::Text::Report(id, false));
+                        });
+                    }
+                    ui_kit::section(ui, "third_party", crate::i18n::tr("help.third_party"), false, |ui| {
+                        if ui_kit::button(ui, crate::i18n::tr_label("Copy all licences"), ui_kit::Button::Normal).clicked() {
                             ctx.copy_text(solidcraft_engine::licences::all());
                         }
-                        third_party(ui);
+                        ui_kit::text_lines(ui, "sc_third_party", THIRD_PARTY);
                     });
                 });
             });
         });
-    if !open {
+    if closed || action == ui_kit::Action::Cancel {
         app.help.about = false;
     }
-}
-
-/// THIRD-PARTY-LICENSES.txt (over 10 000 lines): only the lines in view are laid out.
-fn third_party(ui: &mut egui::Ui) {
-    let lines: Vec<&str> = THIRD_PARTY.lines().collect();
-    let font = egui::FontId::monospace(11.0);
-    let row_h = ui.fonts_mut(|f| f.row_height(&font));
-    egui::ScrollArea::both().id_salt("sc_third_party").max_height(360.0).show_rows(ui, row_h, lines.len(), |ui, rows| {
-        for line in lines.get(rows).unwrap_or_default() {
-            // One row per line (show_rows needs equal rows): long lines scroll sideways.
-            ui.add(egui::Label::new(RichText::new(*line).font(font.clone())).extend());
-        }
-    });
 }
 
 #[cfg(test)]

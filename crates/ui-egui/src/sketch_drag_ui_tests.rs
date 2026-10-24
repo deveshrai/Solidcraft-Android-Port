@@ -6,6 +6,7 @@ use solidcraft_engine::Sel;
 use solidcraft_engine::geom::Vec2;
 
 use crate::scenario::Harness;
+use crate::test_support::play;
 
 #[test]
 fn text_move_drag_is_one_editable_unit_and_escape_restores_the_gesture() {
@@ -85,16 +86,75 @@ fn release(h: &mut Harness, at: egui::Pos2) {
     play(h);
 }
 
-fn play(h: &mut Harness) {
-    while !h.app.synthetic.is_empty() {
-        h.frame();
-    }
-    h.frames(2);
-}
-
 /// Points from `a` to `b` in `n` equal moves (without `a`).
 fn steps(a: egui::Pos2, b: egui::Pos2, n: usize) -> Vec<egui::Pos2> {
     (1..=n).map(|k| a + (b - a) * (k as f32 / n as f32)).collect()
+}
+
+fn four_bar() -> Harness {
+    let mut h = Harness::new();
+    h.app.home.open = false;
+    run(&mut h, "sketch.create", json!({"plane":"XZ"}));
+    let x = -10.0 + (1600.0 - 400.0 + 52.0 * 52.0) / 104.0;
+    let y = -(1600.0_f64 - (x + 10.0) * (x + 10.0)).sqrt();
+    run(&mut h, "sketch.line", json!({"points":[[0,0],[-10,0],[x,y],[42,0]],"ids":["crank","coupler","rocker"],"infer":false}));
+    run(&mut h, "sketch.line", json!({"points":["crank.start","rocker.end"],"ids":["ground"],"infer":false}));
+    for (line, length) in [("crank", 10), ("coupler", 40), ("rocker", 20), ("ground", 42)] {
+        run(&mut h, "sketch.dimension", json!({"entities":[line],"value":length}));
+    }
+    run(&mut h, "sketch.constraint.horizontal_vertical", json!({"line":"ground"}));
+    run(&mut h, "sketch.options", json!({"snap":false,"show_dimensions":false,"show_constraints":false}));
+    h.settle();
+    h
+}
+
+#[test]
+fn a_four_bar_edge_follows_a_stationary_pointer_and_keeps_the_grab() {
+    let mut h = four_bar();
+    let a = screen(&mut h, -7.0, 0.0);
+    let b = screen(&mut h, -7.0, 11.2);
+    let undo = h.app.session.undo.len();
+    press_and_move(&mut h, &[a, b]);
+    assert_eq!(h.app.viewport.point_drag.as_ref().map(|(id, _, _)| id.as_str()), Some("crank"), "grabbed the edge, not an endpoint");
+    h.frames(8);
+    let nearest = Vec2::new(-10.0, 16.0).normalized().unwrap() * 10.0;
+    assert!(point(&h, "crank.end").dist(nearest) < 0.05, "{:?}", point(&h, "crank.end"));
+    release(&mut h, b);
+    assert!(point(&h, "crank.end").dist(nearest) < 0.05);
+    assert_eq!(h.app.session.undo.len(), undo + 1);
+    run(&mut h, "edit.undo", json!({}));
+    assert!(point(&h, "crank.end").dist(Vec2::new(-10.0, 0.0)) < 1e-7);
+}
+
+#[test]
+fn a_four_bar_release_uses_the_final_pointer_position() {
+    let mut h = four_bar();
+    let a = screen(&mut h, -10.0, 0.0);
+    let b = screen(&mut h, -10.0, 3.0);
+    let end = screen(&mut h, -10.0, 16.0);
+    press_and_move(&mut h, &[a, b]);
+    h.frames(8);
+    assert_eq!(h.app.viewport.point_drag.as_ref().map(|(id, _, _)| id.as_str()), Some("crank.end"));
+    release(&mut h, end);
+    let nearest = Vec2::new(-10.0, 16.0).normalized().unwrap() * 10.0;
+    assert!(point(&h, "crank.end").dist(nearest) < 0.05, "release left {:?}", point(&h, "crank.end"));
+    assert!(!h.app.session.model.is_stale());
+}
+
+#[test]
+fn a_four_bar_edge_grab_keeps_its_pick_offset_when_rotating() {
+    let mut h = four_bar();
+    let a = screen(&mut h, -7.0, 0.25);
+    let b = screen(&mut h, -7.0, 11.2);
+    press_and_move(&mut h, &[a, b]);
+    assert_eq!(h.app.viewport.point_drag.as_ref().map(|(id, _, _)| id.as_str()), Some("crank"));
+    h.frames(8);
+    release(&mut h, b);
+    let local = Vec2::new(0.7, -0.025);
+    let target = Vec2::new(-7.0, 11.2);
+    let closest = target * (10.0 * local.len() / target.len());
+    let end = (closest * local.x - Vec2::new(-closest.y, closest.x) * local.y) * (1.0 / local.dot(local));
+    assert!(point(&h, "crank.end").dist(end) < 0.05, "{:?}, expected {end:?}", point(&h, "crank.end"));
 }
 
 #[test]
@@ -139,9 +199,15 @@ fn a_dragged_line_that_stops_short_stays_under_the_cursor_when_it_can_follow_aga
         run(&mut h, "sketch.dimension", json!({"entities": [l], "value": 10}));
     }
     run(&mut h, "sketch.constraint.horizontal_vertical", json!({"line": "l3"}));
-    let grab = screen(&mut h, x + 5.0, y);
-    let far = screen(&mut h, x + 11.0, y);
-    let back = screen(&mut h, x + 7.0, y);
+    // Dimension text uses the bundled font's actual bounds. Grab an exposed interior point
+    // of the curve so this tests a curve drag rather than dragging an overlapping value label.
+    let grab_offset = [5.0, 6.0, 4.0, 7.0, 3.0]
+        .into_iter()
+        .find(|offset| crate::dim_view::hit_text(screen(&mut h, x + offset, y)).is_none())
+        .expect("an exposed interior point of the line");
+    let grab = screen(&mut h, x + grab_offset, y);
+    let far = screen(&mut h, x + grab_offset + 6.0, y);
+    let back = screen(&mut h, x + grab_offset + 2.0, y);
     let mut path = vec![grab];
     path.extend(steps(grab, far, 8));
     path.extend(steps(far, back, 4));

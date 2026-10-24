@@ -47,17 +47,6 @@ fn joint(app: &SolveApp, name: &str) -> u64 {
     app.session.doc.assembly.joints.iter().find(|j| j.name == name).map(|j| j.id).unwrap_or(0)
 }
 
-/// The text of every text shape in a frame's output.
-fn texts(out: &egui::FullOutput) -> Vec<String> {
-    out.shapes
-        .iter()
-        .filter_map(|c| match &c.shape {
-            egui::Shape::Text(t) => Some(t.galley.text().to_string()),
-            _ => None,
-        })
-        .collect()
-}
-
 /// Picking a gear's round face chooses the joint it turns on and takes its radius; the ratio
 /// row says what the pair does, and OK makes the coupling.
 #[test]
@@ -72,18 +61,15 @@ fn picked_gear_faces_choose_their_joints_and_radii() {
         d.pick(&app.session, pick);
     }
     app.dialog = Some(d);
-    let ctx = egui::Context::default();
+    let ctx = crate::fonts::test_context();
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0));
     let frame = |app: &mut SolveApp| {
         let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
-        let mut out = ctx.run_ui(input, |ui| crate::dialogs::show(app, ui.ctx()));
-        // Nothing is painted: drop the texture changes (an unapplied delta panics on drop).
-        out.textures_delta.clear();
-        out
+        crate::test_support::frame(&ctx, input, |ui| crate::dialogs::show(app, ui.ctx()))
     };
     frame(&mut app);
     let out = frame(&mut app);
-    let shown = texts(&out);
+    let shown: Vec<_> = crate::test_support::text_shapes(&out).map(|t| t.galley.text().to_string()).collect();
     assert!(shown.iter().any(|t| t == "-2 deg / deg"), "{shown:?}");
     assert!(shown.iter().any(|t| t.starts_with("20 mm")), "{shown:?}");
     let d = app.dialog.as_ref().expect("the dialog stays open");
@@ -134,7 +120,7 @@ fn instances_of_one_gear_are_coupled_as_two() {
         d.pick(&app.session, pick);
     }
     app.dialog = Some(d);
-    let ctx = egui::Context::default();
+    let ctx = crate::fonts::test_context();
     for _ in 0..2 {
         let input =
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), ..Default::default() };

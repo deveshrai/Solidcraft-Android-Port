@@ -206,6 +206,9 @@ fn flange(s: &mut Session, p: &Value) -> Result<Value> {
             if !matches!(position.as_str(), "inside" | "outside" | "middle") {
                 return Err(bad(cmd, "`position` must be inside, outside or middle"));
             }
+            if s.model.state().sheets.is_empty() {
+                return Err(no_sheet_body(cmd));
+            }
             let body = str_(p, "body").map(str::to_string);
             // The corner relief these flanges make, in place of the rule's; null is not given.
             let corner_relief_shape = match p.get("corner_relief_shape").filter(|v| !v.is_null()) {
@@ -451,11 +454,18 @@ fn list_rules(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(json!({"rules": rules, "active": active}))
 }
 
+fn no_sheet_body(cmd: &str) -> EngineError {
+    bad(
+        cmd,
+        "there is no sheet metal body: start one with Flange > Base, or turn a plate into sheet metal with Convert to Sheet Metal (pick its large flat face)",
+    )
+}
+
 fn sheet_of(s: &Session, p: &Value, cmd: &str) -> Result<SheetBody> {
     let st = s.model.state();
     match str_(p, "body") {
         Some(b) => st.sheets.iter().find(|x| x.body == b).cloned().ok_or_else(|| bad(cmd, format!("`{b}` is not a sheet metal body"))),
-        None => st.sheets.last().cloned().ok_or_else(|| bad(cmd, "there is no sheet metal body")),
+        None => st.sheets.last().cloned().ok_or_else(|| no_sheet_body(cmd)),
     }
 }
 
@@ -558,6 +568,7 @@ fn flat_json(sh: &SheetBody) -> Result<Value> {
 
 fn flat_pattern(s: &mut Session, p: &Value) -> Result<Value> {
     let sh = sheet_of(s, p, "sheet.flat_pattern")?;
+    sh.flat_matches_body()?;
     flat_json(&sh)
 }
 
@@ -815,10 +826,16 @@ fn export_dxf(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let sheets = &s.model.state().sheets;
         if sheets.is_empty() {
-            return Err(bad(cmd, "there is no sheet metal body"));
+            return Err(no_sheet_body(cmd));
         }
         // Every file is made before the first is written.
-        let texts = sheets.iter().map(|sh| flat_dxf(sh, &options)).collect::<Result<Vec<_>>>()?;
+        let texts = sheets
+            .iter()
+            .map(|sh| {
+                sh.flat_matches_body()?;
+                flat_dxf(sh, &options)
+            })
+            .collect::<Result<Vec<_>>>()?;
         let paths = path.map(|path| body_paths(path, &sheets.iter().map(|sh| sh.body.clone()).collect::<Vec<_>>()));
         let mut files = Vec::new();
         for (i, (sh, text)) in sheets.iter().zip(&texts).enumerate() {
@@ -833,6 +850,7 @@ fn export_dxf(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"files": files}));
     }
     let sh = sheet_of(s, p, cmd)?;
+    sh.flat_matches_body()?;
     let text = flat_dxf(&sh, &options)?;
     if let Some(path) = path {
         solidcraft_io::vfs::write(path, text.as_bytes()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
@@ -848,6 +866,7 @@ fn export_bend_table(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "`format` must be csv or json"));
     }
     let sh = sheet_of(s, p, cmd)?;
+    sh.flat_matches_body()?;
     let table = flat_json(&sh)?;
     let text = if format == "json" {
         serde_json::to_string_pretty(&table).map_err(|e| EngineError::Other(e.to_string()))?

@@ -35,4 +35,12 @@ sketch_scale = { master = "scale", accent = "sketch" }
 sketch_text = { master = "text", accent = "sketch" }
 surface_fair = { master = "spline_cv", accent = "surface" }
 mesh_export = { master = "export", accent = "mesh" }
+
+# Legacy feature-history id for the same Split Body operation.
+split = "split_body"
+
+# Sketch dialog choices share the corresponding finished tool artwork.
+sketch_chamfer_equal = { master = "sketch_chamfer", accent = "sketch" }
+sketch_chamfer_two = { master = "sketch_chamfer_two_distances", accent = "sketch" }
+offset_one_side = { master = "offset", accent = "sketch" }
 bom = "list"

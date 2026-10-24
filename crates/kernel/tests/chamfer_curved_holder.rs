@@ -88,3 +88,35 @@ fn a_chamfer_that_uses_up_the_holder_top_is_refused() {
     let body = holder();
     assert!(chamfer(&body, &[Vec3::new(10.0, 10.0, 60.0)], 30.0).is_err());
 }
+
+/// A plate of side `plate` with a 50 x 10 mm stadium boss, 10 mm tall, joined on top.
+fn plate_with_stadium(plate: f64) -> Body {
+    let base = solidcraft_kernel::box_solid(Vec3::new(-plate / 2.0, -plate / 2.0, 0.0), Vec3::new(plate / 2.0, plate / 2.0, 10.0)).unwrap();
+    let segs = vec![
+        Seg2::Line { a: Vec2::new(-20.0, -5.0), b: Vec2::new(20.0, -5.0) },
+        Seg2::Arc { center: Vec2::new(20.0, 0.0), radius: 5.0, start: -PI / 2.0, sweep: PI },
+        Seg2::Line { a: Vec2::new(20.0, 5.0), b: Vec2::new(-20.0, 5.0) },
+        Seg2::Arc { center: Vec2::new(-20.0, 0.0), radius: 5.0, start: PI / 2.0, sweep: PI },
+    ];
+    let plane = Plane::XY.offset(10.0);
+    let boss = extrude(&plane, &[Region2 { outer: Loop2 { segs }, holes: vec![] }], 0.0, 10.0).unwrap().pop().unwrap();
+    boolean(&base, &boss, BoolOp::Union).unwrap().unwrap()
+}
+
+/// #2672: one pick on a straight edge that runs on into an arc chamfers the whole tangent
+/// chain, whatever the size of the part (it used to stop at the straight edge once the
+/// bounding-box diagonal passed about 200 mm).
+#[test]
+fn one_chamfer_pick_follows_the_tangent_chain_at_any_part_size() {
+    for plate in [140.0, 145.0, 250.0] {
+        let body = plate_with_stadium(plate);
+        let made = chamfer(&body, &[Vec3::new(0.0, 5.0, 20.0)], 1.0).unwrap();
+        assert!(made.validity().is_empty(), "{:?}", made.validity());
+        // Two straight edges (c^2/2 * 40 each) and both end arcs (Pappus, c^2/2 * 2 pi (R - c/3)).
+        let expected = 40.0 + 0.5 * 2.0 * PI * (5.0 - 1.0 / 3.0);
+        let volume = |b: &Body| b.tessellate(1e-4).unwrap().measure().volume;
+        let removed = volume(&body) - volume(&made);
+        assert!((removed - expected).abs() < 0.3, "plate {plate}: removed {removed}, expected {expected}");
+        assert_eq!(made.face_count(), body.face_count() + 4, "plate {plate}: one chamfer face per rim edge");
+    }
+}

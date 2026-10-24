@@ -122,14 +122,42 @@ pub struct Exchange {
     pub schemas: Vec<String>,
     /// FILE_NAME originating system.
     pub originating_system: String,
+    /// FILE_NAME preprocessor version.
+    pub preprocessor: String,
+    /// FILE_DESCRIPTION text, its lines joined by a space.
+    pub description: String,
     pub entities: HashMap<u64, Entity>,
     /// Ids defined more than once (the first definition is kept).
     pub duplicates: Vec<u64>,
+    /// [`Exchange::vertex_extent`], worked out on first use.
+    extent: std::sync::OnceLock<f64>,
 }
 
 impl Exchange {
     pub fn get(&self, id: u64) -> Option<&Entity> {
         self.entities.get(&id)
+    }
+
+    /// The size of the model in the file's own coordinates: the diagonal of the box around every
+    /// VERTEX_POINT (0 for a file without one). Non-finite coordinates are skipped.
+    pub fn vertex_extent(&self) -> f64 {
+        *self.extent.get_or_init(|| {
+            let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+            for e in self.entities.values().filter(|e| e.name() == "VERTEX_POINT") {
+                let Some(p) = e.params().get(1).and_then(Param::as_ref_id).and_then(|id| self.get(id)) else { continue };
+                let Some(xyz) = p.params().get(1).and_then(Param::as_list) else { continue };
+                let c: Vec<f64> = xyz.iter().take(3).filter_map(Param::as_f64).collect();
+                if c.len() != 3 || !c.iter().all(|x| x.is_finite()) {
+                    continue;
+                }
+                for ((l, h), x) in lo.iter_mut().zip(hi.iter_mut()).zip(c) {
+                    *l = l.min(x);
+                    *h = h.max(x);
+                }
+            }
+            let d = lo.iter().zip(&hi).map(|(l, h)| (h - l).powi(2)).sum::<f64>().sqrt();
+            if d.is_finite() { d } else { 0.0 }
+        })
     }
 }
 
@@ -428,7 +456,13 @@ pub fn parse(text: &str) -> Result<Exchange, String> {
                                 ex.schemas = v.iter().filter_map(|p| p.as_str().map(str::to_string)).collect();
                             }
                         }
+                        "FILE_DESCRIPTION" => {
+                            if let Some(Param::List(v)) = params.first() {
+                                ex.description = v.iter().filter_map(|p| p.as_str()).collect::<Vec<_>>().join(" ");
+                            }
+                        }
                         "FILE_NAME" => {
+                            ex.preprocessor = params.get(4).and_then(Param::as_str).unwrap_or("").to_string();
                             ex.originating_system = params.get(5).and_then(Param::as_str).unwrap_or("").to_string();
                         }
                         _ => {}

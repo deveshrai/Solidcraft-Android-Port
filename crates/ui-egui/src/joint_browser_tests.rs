@@ -8,19 +8,14 @@ use serde_json::json;
 
 use crate::context_menu::{self, Target};
 use crate::scenario::Harness;
+use crate::test_support::click;
 
 /// Components A (grounded) and B joined by a revolute "Hinge", and C held by a rigid "Glue".
 fn harness() -> Harness {
     let mut h = Harness::new();
     h.app.home.open = false;
     h.app.ui.show_browser = true;
-    for (name, x) in [("A", 0), ("B", 30), ("C", 60)] {
-        h.app.run("component.activate", json!({"component": "root"})).unwrap();
-        h.app.run("component.create", json!({ "name": name })).unwrap();
-        h.app.run("solid.box", json!({"length": 20, "width": 20, "height": 10, "corner": [x, 0, 0]})).unwrap();
-    }
-    h.app.run("component.activate", json!({"component": "root"})).unwrap();
-    h.app.run("occurrence.ground", json!({"occurrence": "A:1", "grounded": true})).unwrap();
+    crate::test_support::grounded_boxes(&[("A", 0), ("B", 30), ("C", 60)], |id, p| h.app.run(id, p).unwrap());
     h.app
         .run("joint.create", json!({"type": "revolute", "name": "Hinge", "a": {"occurrence": "A:1", "face": [10, 10, 10]}, "b": {"occurrence": "B:1", "face": [40, 10, 0]}}))
         .unwrap();
@@ -33,12 +28,6 @@ fn harness() -> Harness {
 
 fn id(h: &Harness, name: &str) -> u64 {
     h.app.session.doc.assembly.joints.iter().find(|j| j.name == name).unwrap().id
-}
-
-fn click(h: &mut Harness, handle: &str) {
-    assert!(crate::scenario::handle_at(handle).is_some(), "{handle} is not drawn: {:?}", crate::scenario::handles(""));
-    h.step(&json!({"click": {"handle": handle}})).unwrap();
-    h.frames(3);
 }
 
 fn drawn(h: &Harness) -> Vec<(u64, bool)> {
@@ -118,4 +107,237 @@ fn the_menu_and_the_v_key_hide_and_show_picked_joints() {
     assert!(!h.app.session.joint_visible(hinge) && !h.app.session.joint_visible(glue));
     context_menu::toggle_visibility(&mut h.app);
     assert!(h.app.session.joint_visible(hinge) && h.app.session.joint_visible(glue));
+}
+
+mod delete {
+    //! Joint history and Browser selection must be the target of the Delete key.
+    use serde_json::{Value, json};
+
+    use crate::scenario::Harness;
+
+    fn assembly() -> Harness {
+        let mut h = Harness::new();
+        h.app.home.open = false;
+        for (name, x) in [("A", 0), ("B", 30), ("C", 60)] {
+            h.app.run("component.activate", json!({"component": "root"})).unwrap();
+            h.app.run("component.create", json!({"name": name})).unwrap();
+            h.app.run("solid.box", json!({"length": 20, "width": 20, "height": 10, "corner": [x, 0, 0]})).unwrap();
+        }
+        h.app.run("component.activate", json!({"component": "root"})).unwrap();
+        h.app.run("occurrence.ground", json!({"occurrence": "A:1", "grounded": true})).unwrap();
+        for (name, kind, other, face) in [("Hinge", "revolute", "B:1", [40, 10, 0]), ("Glue", "rigid", "C:1", [70, 10, 0])] {
+            h.app
+                .run(
+                    "joint.create",
+                    json!({"type": kind, "name": name,
+                "a": {"occurrence": "A:1", "face": [10, 10, 10]}, "b": {"occurrence": other, "face": face}}),
+                )
+                .unwrap();
+        }
+        h.frames(3);
+        h
+    }
+
+    fn joint(h: &Harness, name: &str) -> u64 {
+        h.app.session.doc.assembly.joints.iter().find(|j| j.name == name).unwrap().id
+    }
+
+    fn click(h: &mut Harness, handle: &str) {
+        h.step(&json!({"click": {"handle": handle}})).unwrap();
+        h.frames(3);
+    }
+
+    fn features(h: &Harness) -> Value {
+        serde_json::to_value(&h.app.session.doc.features).unwrap()
+    }
+
+    #[test]
+    fn a_joint_history_click_replaces_the_stale_feature_before_delete_in_both_layouts() {
+        for left in [false, true] {
+            let mut h = assembly();
+            h.app.ui.show_browser = false;
+            h.app.preferences.timeline_left = left;
+            h.frames(3);
+            let hinge = joint(&h, "Hinge");
+            let before = features(&h);
+            let feature = h.app.session.doc.features.last().unwrap();
+            let (id, name) = (feature.id, feature.name.clone());
+            click(&mut h, &format!("timeline:{name}"));
+            assert!(h.app.session.selection.iter().any(|s| matches!(s, solidcraft_engine::Sel::Feature { id: f } if *f == id)));
+            click(&mut h, "timeline-joint:Hinge");
+            assert_eq!(h.app.tree.picked_joints, [hinge], "the clicked joint is the selection; left={left}");
+            assert!(h.app.session.selection.is_empty(), "the old feature must not remain a Delete target");
+            h.step(&json!({"key": "Delete"})).unwrap();
+            assert_eq!(features(&h), before, "Delete must leave every feature intact");
+            assert!(h.app.session.doc.assembly.joints.iter().all(|j| j.id != hinge));
+            assert_eq!(h.app.session.doc.assembly.joints.len(), 1);
+            h.app.run("edit.undo", json!({})).unwrap();
+            assert_eq!(h.app.session.doc.assembly.joints.len(), 2);
+            assert_eq!(features(&h), before);
+            h.app.run("edit.redo", json!({})).unwrap();
+            assert_eq!(h.app.session.doc.assembly.joints.len(), 1);
+            assert_eq!(features(&h), before);
+        }
+    }
+
+    #[test]
+    fn browser_joint_multiselection_deletes_in_one_undo_step() {
+        let mut h = assembly();
+        let before = features(&h);
+        click(&mut h, "row:Hinge");
+        h.step(&json!({"click": {"handle": "row:Glue"}, "ctrl": true})).unwrap();
+        h.frames(3);
+        assert_eq!(h.app.tree.picked_joints.len(), 2);
+        h.step(&json!({"key": "Backspace"})).unwrap();
+        assert!(h.app.session.doc.assembly.joints.is_empty());
+        assert!(h.app.tree.picked_joints.is_empty());
+        assert_eq!(features(&h), before);
+        h.app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.app.session.doc.assembly.joints.len(), 2);
+        assert_eq!(features(&h), before);
+    }
+
+    #[test]
+    fn picking_a_feature_after_a_joint_replaces_the_joint_selection() {
+        for left in [false, true] {
+            let mut h = assembly();
+            h.app.ui.show_browser = false;
+            h.app.preferences.timeline_left = left;
+            h.frames(3);
+            click(&mut h, "timeline-joint:Hinge");
+            let name = h.app.session.doc.features.last().unwrap().name.clone();
+            click(&mut h, &format!("timeline:{name}"));
+            assert!(h.app.tree.picked_joints.is_empty(), "joint selection must follow the feature click; left={left}");
+            assert!(!h.app.session.selection.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_joint_menu_delete_uses_its_target_despite_a_stale_feature_selection() {
+        let mut h = assembly();
+        let before = features(&h);
+        let feature = h.app.session.doc.features.last().unwrap().id;
+        h.app.run("select.set", json!({"items": [{"type": "feature", "id": feature}]})).unwrap();
+        let hinge = joint(&h, "Hinge");
+        let items = crate::context_menu::items(&h.app, &crate::context_menu::Target::Joint { id: hinge });
+        let item = items.iter().find(|i| i.label == "Delete").unwrap().clone();
+        crate::context_menu::run_item(&mut h.app, &item, egui::pos2(0., 0.));
+        assert_eq!(h.app.session.doc.assembly.joints.len(), 1);
+        assert_eq!(features(&h), before);
+        h.app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.app.session.doc.assembly.joints.len(), 2);
+    }
+
+    #[test]
+    fn history_joint_ctrl_click_toggles_and_the_context_menu_selects_its_target() {
+        for left in [false, true] {
+            let mut h = assembly();
+            h.app.ui.show_browser = false;
+            h.app.preferences.timeline_left = left;
+            h.frames(3);
+            let (hinge, glue) = (joint(&h, "Hinge"), joint(&h, "Glue"));
+            let before = features(&h);
+            click(&mut h, "timeline-joint:Hinge");
+            h.step(&json!({"click": {"handle": "timeline-joint:Glue"}, "ctrl": true})).unwrap();
+            h.frames(3);
+            assert_eq!(h.app.tree.picked_joints, [hinge, glue]);
+            h.step(&json!({"click": {"handle": "timeline-joint:Hinge"}, "ctrl": true})).unwrap();
+            h.frames(3);
+            assert_eq!(h.app.tree.picked_joints, [glue]);
+            let name = h.app.session.doc.features.last().unwrap().name.clone();
+            click(&mut h, &format!("timeline:{name}"));
+            h.step(&json!({"click": {"handle": "timeline-joint:Hinge"}, "button": "right"})).unwrap();
+            h.frames(3);
+            assert_eq!(h.app.tree.picked_joints, [hinge]);
+            assert!(h.app.session.selection.is_empty());
+            h.step(&json!({"widget": "Delete"})).unwrap();
+            assert!(h.app.session.doc.assembly.joints.iter().all(|j| j.id != hinge));
+            assert!(h.app.session.doc.assembly.joints.iter().any(|j| j.id == glue));
+            assert_eq!(features(&h), before);
+        }
+    }
+
+    #[test]
+    fn joint_delete_does_not_run_while_a_dialog_or_history_command_is_active() {
+        let mut h = assembly();
+        click(&mut h, "row:Hinge");
+        let before = features(&h);
+        h.step(&json!({"start": "solid.box"})).unwrap();
+        let hinge = joint(&h, "Hinge");
+        h.app.tree.picked_joints.clear();
+        crate::dialogs_assembly::pick_joint(&mut h.app, hinge, false);
+        assert!(h.app.dialog.is_some());
+        assert_eq!(h.app.tree.picked_joints, [hinge], "the dialog guard must protect an actual joint selection");
+        click(&mut h, "dialog:length");
+        h.step(&json!({"key": "Delete"})).unwrap();
+        assert_eq!(h.app.session.doc.assembly.joints.len(), 2, "Delete belongs to the focused field");
+        assert_eq!(h.app.tree.picked_joints, [hinge]);
+        crate::delete::delete_selection(&mut h.app);
+        assert_eq!(h.app.session.doc.assembly.joints.len(), 2, "a dialog must not delete a joint behind it");
+        assert!(h.app.status.as_ref().is_some_and(|s| s.2 && s.0.contains("dialog")), "the refusal says why");
+        h.step(&json!({"key": "Escape"})).unwrap();
+        let hinge = joint(&h, "Hinge");
+        h.app.tree.picked_joints.clear();
+        crate::dialogs_assembly::pick_joint(&mut h.app, hinge, false);
+        assert_eq!(h.app.tree.picked_joints, [hinge]);
+        h.app.apply_off_thread = Some(std::time::Duration::ZERO);
+        h.app.run_heavy("timeline.roll_to", json!({"position": 1})).unwrap();
+        assert!(h.app.computing_since().is_some());
+        crate::delete::delete_selection(&mut h.app);
+        assert_eq!(h.app.session.doc.assembly.joints.len(), 2, "Delete must not race the pending history command");
+        assert_eq!(features(&h), before);
+    }
+
+    #[test]
+    fn delete_while_editing_that_joint_closes_edit_joint_and_deletes_it() {
+        let mut h = assembly();
+        let before = features(&h);
+        let hinge = joint(&h, "Hinge");
+        h.step(&json!({"click": {"handle": "row:Hinge"}, "double": true})).unwrap();
+        h.frames(3);
+        let editing = |h: &Harness| match h.app.dialog.as_ref().map(|d| &d.kind) {
+            Some(crate::dialogs::Kind::Assembly(crate::dialogs_assembly::Asm::Joint(f))) => f.editing,
+            _ => None,
+        };
+        assert_eq!(editing(&h), Some(hinge), "the double click opens Edit Joint");
+        h.step(&json!({"key": "Delete"})).unwrap();
+        h.frames(3);
+        assert!(h.app.dialog.is_none(), "Delete closes the Edit Joint it deletes the joint of");
+        assert!(h.app.session.doc.assembly.joints.iter().all(|j| j.id != hinge));
+        assert_eq!(h.app.session.doc.assembly.joints.len(), 1);
+        assert_eq!(features(&h), before);
+        h.app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.app.session.doc.assembly.joints.len(), 2);
+        assert_eq!(features(&h), before);
+        // The Browser menu's Delete on the same joint goes the same way.
+        h.app.dialog = crate::dialogs_assembly::edit_joint(&h.app, hinge);
+        let items = crate::context_menu::items(&h.app, &crate::context_menu::Target::Joint { id: hinge });
+        let item = items.iter().find(|i| i.label == "Delete").unwrap().clone();
+        crate::context_menu::run_item(&mut h.app, &item, egui::pos2(0., 0.));
+        assert!(h.app.dialog.is_none());
+        assert_eq!(h.app.session.doc.assembly.joints.len(), 1);
+    }
+
+    #[test]
+    fn a_ctrl_joint_pick_does_not_leave_a_folder_as_the_delete_target() {
+        let mut h = assembly();
+        h.app.ui.show_browser = false;
+        h.app.preferences.timeline_left = true;
+        let feature = h.app.session.doc.features[0].id;
+        let group = h.app.run("timeline.group", json!({"name": "History", "features": [feature]})).unwrap()["group"].as_u64().unwrap();
+        h.app.tree.picked_timeline_groups.push(group);
+        h.frames(3);
+        let before = features(&h);
+        let hinge = joint(&h, "Hinge");
+        h.step(&json!({"click": {"handle": "timeline-joint:Hinge"}, "ctrl": true})).unwrap();
+        h.frames(3);
+        assert_eq!(h.app.tree.picked_joints, [hinge]);
+        assert!(h.app.tree.picked_timeline_groups.is_empty());
+        h.step(&json!({"key": "Delete"})).unwrap();
+        assert!(h.app.session.doc.assembly.joints.iter().all(|joint| joint.id != hinge));
+        assert!(h.app.session.doc.timeline_groups.iter().any(|folder| folder.id == group), "Delete must preserve the old folder");
+        assert_eq!(features(&h), before);
+        h.app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.app.session.doc.assembly.joints.len(), 2);
+    }
 }

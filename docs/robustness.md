@@ -99,6 +99,11 @@ tolerances and leaves the exact result, so it is recorded but not warned about.
 `timeline.inspect` and `doc.inspect` expose every retry in the feature's
 `boolean_diagnostics`, including the strategy and the applied translation,
 rotation, face offset and tessellation tolerance in millimetres/radians.
+Candidates those retries discarded before measuring them are listed in its
+`rejected`, with the reason: a candidate with an edge further outside the
+operands than 5% of their size cannot be their union, cut or intersection,
+and meshing one (a trim loop running metres along a cone's continuation)
+could take minutes or never finish (#3020).
 
 A common shift of both operands is reversed on the result. Coincident-face
 separation and bore offsets describe temporary working geometry; they are not

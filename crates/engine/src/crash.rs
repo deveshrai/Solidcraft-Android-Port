@@ -76,7 +76,8 @@ pub struct Summary {
     pub id: String,
     /// `command_panic`, `panic`, `kernel_panic_recovered` or `unclean_exit`.
     pub kind: String,
-    /// When it first happened (UTC).
+    /// When the report was first recorded (UTC). Unclean exits are recorded at a later launch,
+    /// which may be days after the session ended, rather than at the exact exit time.
     pub time: String,
     pub message: String,
     /// The command running when it happened, if one was.

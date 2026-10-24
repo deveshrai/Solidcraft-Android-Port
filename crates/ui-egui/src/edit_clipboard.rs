@@ -40,15 +40,6 @@ fn sketch_selection(app: &SolveApp) -> Vec<String> {
         .collect()
 }
 
-/// Is there something Copy would copy?
-pub fn can_copy(app: &SolveApp) -> bool {
-    if app.session.active_sketch.is_some() {
-        !sketch_selection(app).is_empty()
-    } else {
-        app.tree.picked_components == [0] || !crate::timeline::selected_feature_ids(app).is_empty()
-    }
-}
-
 /// Is there something Paste would paste here?
 pub fn can_paste(app: &SolveApp) -> bool {
     if app.session.active_sketch.is_some() {
@@ -126,7 +117,8 @@ pub fn cut(app: &mut SolveApp) -> bool {
 fn sketch_point(app: &SolveApp, at: Option<Pos2>) -> Option<[f64; 2]> {
     let at = at?;
     let rect = app.viewport.rect?;
-    if !rect.contains(at) {
+    // Under a card or panel floating over the viewport is not over the sketch.
+    if !rect.contains(at) || crate::shell::covered(app, at) {
         return None;
     }
     let proj = crate::viewport::projection(app, rect);

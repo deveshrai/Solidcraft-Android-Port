@@ -116,7 +116,11 @@ fn distance_stream_keeps_feature_selection_and_extent_context() {
     assert!(stream_key(&offset(1), 7, colors()).is_some());
     assert_eq!(stream_key(&offset(1), 7, colors()), stream_key(&offset(5), 7, colors()));
     assert!(stream_key(&[], 7, colors()).is_none());
-    assert!(stream_key(&[("solid.fillet".into(), json!({"radius":5}))], 7, colors()).is_none());
+    let fillet = |radius| vec![("solid.fillet".into(), json!({"edges":[[5,0,10]],"radius":radius}))];
+    assert_eq!(stream_key(&fillet(1), 7, colors()), stream_key(&fillet(2), 7, colors()));
+    let other_edge = vec![("solid.fillet".into(), json!({"edges":[[0,5,10]],"radius":1}))];
+    assert_ne!(stream_key(&fillet(1), 7, colors()), stream_key(&other_edge, 7, colors()), "other edges are another setup");
+    assert!(stream_key(&[("solid.shell".into(), json!({"thickness":1}))], 7, colors()).is_none());
     let mut mixed = old;
     mixed.push(("select.clear".into(), json!({})));
     assert!(stream_key(&mixed, 7, colors()).is_none());
@@ -146,4 +150,28 @@ fn distance_results_reject_other_setups_and_obsolete_errors() {
     join[0].1["operation"] = json!("join");
     assert!(as_new_body(&join).is_some());
     assert!(stream_key(&join, s.revision, colors()).is_none(), "tool previews retain their upstream streaming path");
+}
+
+/// A fillet's radius dragged (or typed): each finished preview shows while the next radius
+/// computes, as a distance does; before, every one was dropped until the radius held still.
+#[test]
+fn fillet_preview_keeps_moving_while_its_radius_changes() {
+    let mut s = Session::new(solidcraft_engine::doc::Document::new("Fillet drag"));
+    s.execute("solid.box", &json!({"length":10,"width":10,"height":10})).unwrap();
+    let fillet = |radius: i32| vec![("solid.fillet".into(), json!({"edges":[[5,0,10]],"radius":f64::from(radius) / 4.0}))];
+    let mut pv = PreviewState::default();
+    for (finished, wanted) in [(4, 6), (6, 8), (8, 8)] {
+        let (old, new) = (fillet(finished), fillet(wanted));
+        let old_key = job_key(&old, s.revision, colors());
+        let key = job_key(&new, s.revision, colors());
+        let (tx, rx) = std::sync::mpsc::channel();
+        pv.running = Some((old_key, rx));
+        pv.running_tool = false;
+        pv.running_stream_key = stream_key(&old, s.revision, colors());
+        tx.send(compute(&s, &old, colors())).unwrap();
+        pv.poll(key, stream_key(&new, s.revision, colors()));
+        assert!(pv.active && pv.error.is_none(), "the finished radius shows during the drag: {:?}", pv.error);
+        assert_eq!(pv.shown_key, Some(old_key));
+        assert!(pv.running.is_none());
+    }
 }

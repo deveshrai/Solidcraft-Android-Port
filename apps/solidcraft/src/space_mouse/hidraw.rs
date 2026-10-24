@@ -2,12 +2,22 @@
 //! its report descriptor and ids under `/sys/class/hidraw/hidrawN/device/`. Reading them is plain
 //! file I/O, so no udev or hidapi library is needed.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use solidcraft_space_mouse::{Descriptor, Layout};
 
 const SYSFS: &str = "/sys/class/hidraw";
 const DEV: &str = "/dev";
+
+/// `O_NONBLOCK` on Linux's common architectures (x86, ARM, RISC-V). The device is opened with it so
+/// a read with nothing to read returns at once and the reader can see whether it should stop.
+pub const O_NONBLOCK: i32 = 0o4000;
+
+/// How long the reader waits when the device has nothing to say, which is also the most a report
+/// can be delayed.
+const IDLE_POLL: Duration = Duration::from_millis(5);
 
 pub struct Device {
     pub path: PathBuf,
@@ -21,6 +31,30 @@ pub fn find() -> Option<Device> {
     let mut names: Vec<_> = std::fs::read_dir(SYSFS).ok()?.filter_map(Result::ok).map(|entry| entry.file_name()).collect();
     names.sort();
     names.into_iter().find_map(|name| probe(&Path::new(SYSFS).join(&name), Path::new(DEV).join(&name)))
+}
+
+/// Hands every report to `publish` until the device is gone (end of file or an error) or `stop`
+/// says so. `source` is non-blocking: when it has nothing, `stop` is asked and the reader waits
+/// [`IDLE_POLL`]. Reports are read and handed over exactly as they were with blocking reads.
+pub fn read_reports(mut source: impl Read, mut publish: impl FnMut(&[u8]), mut stop: impl FnMut() -> bool) {
+    let mut report = [0_u8; super::REPORT_BUFFER_BYTES];
+    loop {
+        match source.read(&mut report) {
+            Ok(0) => return,
+            Ok(size) => publish(report.get(..size).unwrap_or_default()),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if stop() {
+                    return;
+                }
+                std::thread::sleep(IDLE_POLL);
+            }
+            Err(error) => {
+                log::info!("3D mouse disconnected: {error}");
+                return;
+            }
+        }
+    }
 }
 
 fn probe(sysfs: &Path, path: PathBuf) -> Option<Device> {
@@ -41,6 +75,35 @@ fn ids(uevent: &str) -> Option<(u16, u16)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reports_come_through_idle_gaps_until_the_device_ends_or_a_stop() {
+        use crate::space_mouse::fake::Script;
+        let mut script = Script::new();
+        script.timeout(std::io::ErrorKind::WouldBlock).data(&[1, 2, 3]).timeout(std::io::ErrorKind::WouldBlock).data(&[4]).end();
+        let (mut seen, mut asked) = (Vec::new(), 0);
+        read_reports(
+            script,
+            |report| seen.push(report.to_vec()),
+            || {
+                asked += 1;
+                false
+            },
+        );
+        assert_eq!(seen, [vec![1, 2, 3], vec![4]]);
+        assert_eq!(asked, 2);
+        let mut script = Script::new();
+        script.data(&[1]).timeout(std::io::ErrorKind::WouldBlock).data(&[2]);
+        let mut seen = Vec::new();
+        read_reports(script, |report| seen.push(report.to_vec()), || true);
+        assert_eq!(seen, [vec![1]], "a stop at an idle moment ends the read");
+        // An unplugged device is an error, which ends the read as before.
+        let mut script = Script::new();
+        script.data(&[1]).fail(std::io::ErrorKind::BrokenPipe).data(&[2]);
+        let mut seen = Vec::new();
+        read_reports(script, |report| seen.push(report.to_vec()), || false);
+        assert_eq!(seen, [vec![1]]);
+    }
 
     #[test]
     fn ids_come_from_the_uevent() {

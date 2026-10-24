@@ -138,6 +138,7 @@ fn second_occurrence_drawn_wire_fit_picks_and_world_triad_drag_stay_aligned() {
     let sketch = h.app.run("sketch.create", json!({"plane":"XY","name":"Wire"})).unwrap()["sketch"].as_u64().unwrap();
     h.app.ui.show_origin = false;
     h.settle();
+    h.step(&json!({"click":{"handle":"sketch_palette:options_fold"}})).unwrap();
     h.step(&json!({"widget":"3D Sketch"})).unwrap();
     assert!(
         crate::sketch3d::active(&h.app),
@@ -151,10 +152,16 @@ fn second_occurrence_drawn_wire_fit_picks_and_world_triad_drag_stay_aligned() {
     h.call("ui.view", json!({"view":"fit"}));
     h.app.start("sketch.line");
     h.frames(2);
+    // The clickable Line instruction toast covers the fitted lower endpoint. This scenario
+    // tests model picks, so dismiss the transient instruction before clicking through that area.
+    h.app.status = None;
+    h.frames(2);
     for world in [Vec3::new(17.0, 32.0, 45.0), Vec3::new(17.0, 32.0, 55.0)] {
         let [x, y] = h.at(&json!({"world":[world.x,world.y,world.z]})).unwrap();
         let proj = crate::viewport::projection(&h.app, h.app.viewport.rect.unwrap());
-        let picked = crate::sketch3d::point_at(&h.app, &proj, egui::pos2(x as f32, y as f32));
+        let screen = egui::pos2(x as f32, y as f32);
+        assert!(!crate::scenario::rect_of("toast").is_some_and(|r| r.contains(screen)), "the drawing click must clear the message action");
+        let picked = crate::sketch3d::point_at(&h.app, &proj, screen);
         assert!(picked.is_some_and(|(p, _)| p.dist(world) < 1e-5), "world={world:?}, picked={picked:?}, status={:?}", h.app.status);
     }
     h.step(&json!({"click":{"world":[17,32,45]}})).unwrap();

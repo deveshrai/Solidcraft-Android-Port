@@ -17,15 +17,7 @@ pub(super) fn write(writer: &mut PackageWriter, png: &[u8], document: &[u8]) -> 
     }
     let key = serde_json::to_vec(&json!({"format": FORMAT, "app": env!("CARGO_PKG_VERSION"), "document": digest(document), "payload": digest(png)}))
         .map_err(invalid)?;
-    if writer.names.len().saturating_add(2) > MAX_ENTRIES
-        || writer
-            .expanded
-            .saturating_add(key.len())
-            .saturating_add(png.len())
-            .saturating_add(writer.names.len().saturating_mul(256))
-            .saturating_add(65_536)
-            > MAX_DESIGN_BYTES
-    {
+    if !writer.room(2, key.len().saturating_add(png.len()), MAX_DESIGN_BYTES) {
         return Ok(());
     }
     writer.part("cache/thumbnail.json", &key, false)?;

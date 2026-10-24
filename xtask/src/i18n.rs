@@ -103,7 +103,8 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
 }
 
 /// Locale ids other than English: every catalog file that sits beside `en.json`, so a newly
-/// added locale is picked up without editing this command.
+/// added locale is picked up without editing this command. A regional English (`en-GB.json`)
+/// holds only the messages it spells differently, so it has no gaps to report.
 fn locales(root: &Path) -> Result<Vec<String>, String> {
     let dir = root.join(DIR);
     let entries = std::fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -112,7 +113,7 @@ fn locales(root: &Path) -> Result<Vec<String>, String> {
         .map(|e| e.path())
         .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("json"))
         .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
-        .filter(|id| id != "en")
+        .filter(|id| id != "en" && !id.starts_with("en-"))
         .collect();
     ids.sort();
     Ok(ids)

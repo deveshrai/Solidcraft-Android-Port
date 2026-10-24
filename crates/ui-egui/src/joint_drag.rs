@@ -105,6 +105,7 @@ mod tests {
     use solidcraft_engine::geom::Vec3;
 
     use crate::scenario::Harness;
+    use crate::test_support::play;
 
     fn run(h: &mut Harness, id: &str, p: Value) -> Value {
         h.app.run(id, p.clone()).unwrap_or_else(|e| panic!("{id} {p}: {e}"))
@@ -144,13 +145,6 @@ mod tests {
         let end = Vec3::new(55.0, 0.0, 10.0);
         let (a, b) = (screen(&mut h, end), screen(&mut h, Vec3::new(0.0, 55.0, 10.0)));
         (h, end, a, b)
-    }
-
-    fn play(h: &mut Harness) {
-        while !h.app.synthetic.is_empty() {
-            h.frame();
-        }
-        h.frames(2);
     }
 
     /// Press at `a` and move to `b` in 12 frames, holding the button there.

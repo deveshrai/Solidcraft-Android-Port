@@ -89,6 +89,7 @@
    ]
   }
  },
+ {"click": {"handle": "dialog:section:Advanced"}},
  {
   "click": {
    "handle": "dialog:Edge 2 angle"

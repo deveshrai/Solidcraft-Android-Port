@@ -5,6 +5,7 @@
 //! so the parsed blocks are kept per conversation item and parsed again only when its text
 //! changes.
 
+use crate::fonts::RichTextExt as _;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -41,9 +42,11 @@ fn job(ui: &egui::Ui, spans: &[Span], size: f32, color: Color32) -> LayoutJob {
         let plain = TextFormat { font_id: base.clone(), color, ..Default::default() };
         match s {
             Span::Text(x) => j.append(x, 0.0, plain),
-            Span::Bold(x) => j.append(x, 0.0, TextFormat { color: t.text, ..plain }),
+            Span::Bold(x) => j.append(x, 0.0, TextFormat { font_id: crate::fonts::semibold(size), color: t.text, ..plain }),
             Span::Italic(x) => j.append(x, 0.0, TextFormat { italics: true, ..plain }),
-            Span::Code(x) => j.append(x, 0.0, TextFormat { font_id: FontId::monospace(size - 1.0), background: t.field, ..plain }),
+            Span::Code(x) => {
+                j.append(x, 0.0, TextFormat { font_id: FontId::monospace(size - (t.font_button - t.font_body)), background: t.field, ..plain })
+            }
             Span::Link { label, .. } => j.append(label, 0.0, TextFormat { color: t.accent, underline: Stroke::new(1.0, t.accent), ..plain }),
         }
     }
@@ -58,6 +61,7 @@ fn host(url: &str) -> &str {
 
 /// A paragraph's text, then its links as buttons (a laid-out text cannot be clicked in parts).
 fn spans(ui: &mut egui::Ui, spans: &[Span], size: f32, color: Color32) {
+    let t = Tokens::get();
     ui.add(egui::Label::new(job(ui, spans, size, color)).selectable(true).wrap());
     let links: Vec<(&str, &str)> =
         spans.iter().filter_map(|s| if let Span::Link { label, url } = s { Some((label.as_str(), url.as_str())) } else { None }).collect();
@@ -66,7 +70,7 @@ fn spans(ui: &mut egui::Ui, spans: &[Span], size: f32, color: Color32) {
             for (label, url) in links {
                 // The text above already shows the label; the button says where it goes.
                 let to = format!("↗ {}", host(url));
-                ui.hyperlink_to(RichText::new(to).size(size - 1.0), url).on_hover_text(format!("{label}: {url}"));
+                ui.hyperlink_to(RichText::new(to).size(size - (t.font_button - t.font_body)), url).on_hover_text(format!("{label}: {url}"));
             }
         });
     }
@@ -75,25 +79,29 @@ fn spans(ui: &mut egui::Ui, spans: &[Span], size: f32, color: Color32) {
 /// Draw `src` as Markdown. `slot`: the conversation item it belongs to.
 pub fn show(ui: &mut egui::Ui, slot: usize, src: &str) {
     let t = Tokens::get();
-    let size = 13.0;
+    let size = t.font_button;
     let parsed = blocks(ui.ctx(), slot, src);
     for block in parsed.iter() {
         match block {
             Block::Paragraph(s) => spans(ui, s, size, t.text),
             Block::Heading { level, spans: s } => {
                 let size = match level {
-                    1 => 17.0,
-                    2 => 15.0,
-                    _ => 14.0,
+                    1 => t.font_article_heading,
+                    2 => t.font_subtitle,
+                    _ => t.font_heading,
                 };
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(markdown::plain(s)).size(size).strong().color(t.text)).selectable(true).wrap());
+                ui.add(egui::Label::new(RichText::new(markdown::plain(s)).size(size).semibold().color(t.text)).selectable(true).wrap());
             }
             Block::Code { text, .. } => {
                 egui::Frame::NONE.fill(t.field).corner_radius(4.0).inner_margin(Margin::same(6)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.add(egui::Label::new(RichText::new(text).monospace().size(size - 1.0).color(t.text)).selectable(true).wrap());
-                    if ui.small_button(tr("ui.agent_chat_copy")).clicked() {
+                    ui.add(
+                        egui::Label::new(RichText::new(text).monospace().size(size - (t.font_button - t.font_body)).color(t.text))
+                            .selectable(true)
+                            .wrap(),
+                    );
+                    if crate::ui_kit::button(ui, tr("ui.agent_chat_copy"), crate::ui_kit::Button::Small).clicked() {
                         ui.ctx().copy_text(text.clone());
                     }
                 });
@@ -116,7 +124,7 @@ pub fn show(ui: &mut egui::Ui, slot: usize, src: &str) {
             }
             Block::Pre(text) => {
                 egui::ScrollArea::horizontal().id_salt(("agent_chat_pre", slot, text.len())).show(ui, |ui| {
-                    ui.add(egui::Label::new(RichText::new(text).monospace().size(size - 2.0).color(t.text)).selectable(true));
+                    ui.add(egui::Label::new(RichText::new(text).monospace().size(t.font_small).color(t.text)).selectable(true));
                 });
             }
             Block::Rule => {

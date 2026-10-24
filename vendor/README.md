@@ -30,6 +30,11 @@ Changes:
   With no direction to go by, the edge goes where both of its ends are in one wire.
 - `transversal/divide_face/mod.rs`: a face piece whose wire is not simple makes the operation
   give up (`Face::try_new`) instead of panicking.
+- `transversal/divide_face/mod.rs`: a loop whose polygon in the face's parameters has no area
+  (a small hole's rim divided at the tolerance of a much larger operand: one chord per half
+  circle) is divided again, finer, before its area's sign tells a hole from a face piece. The
+  sign of a zero area was random: the hole became a face of its own, inside out, and the face it
+  was cut in stayed whole.
 - `lib.rs`: `tr!` reports where an operation gives up when `SHAPEOPS_TRACE` is set; compiler
   warnings no longer fail the build.
 - Face and edge history (`transversal/history.rs`, new): `and_with_history` / `or_with_history`
@@ -45,6 +50,12 @@ Changes:
   operand's shell meshes made beforehand (copied for each use, since the loops stores cut their
   edges): a large body cut down to the regions of many small ones is meshed once, which was most
   of each operation's time.
+- `transversal/integrate/mod.rs`: in an AND, a face no intersection divides (a shell that meets
+  nothing of the other) is placed by the crossings of a ray with the other shell counted as each
+  face is oriented, not by its surface alone, and an inward shell (a void, a cut's inverted tool)
+  holds what lies outside it. Faces with reversed surfaces (a revolved body's) counted the wrong
+  way, and a void dropped every face outside it: a cut beside a sealed void came out empty or
+  with the body gone. An OR keeps truck's count.
 
 ## truck-geometry 0.5.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
@@ -67,6 +78,10 @@ Changes:
   does. They multiplied by p only, so the second derivatives of every B-spline and NURBS surface
   of degree p ≥ 3 were 1/(p − 1) of their value (a cubic surface's curvature read as half, #763).
   `crates/kernel/src/surface_second_derivative_tests.rs` holds them to finite differences.
+- `decorators/intersection_curve.rs`: `IntersectionCurve::parameter_division` with a tolerance
+  below truck's `TOLERANCE` (1e-6), or one that is not a number, divides at `TOLERANCE` instead
+  of panicking in truck's tolerance assertion; a join failed on that panic (#4623).
+  `crates/kernel/src/issue_1038_tests.rs` holds it to the division at 1e-6.
 
 ## truck-stepio 0.3.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
@@ -174,6 +189,22 @@ Changes:
   old test is kept as `tessellation::include_test_hooks`, behind a `test-hooks` feature that
   only `solidcraft-kernel`'s tests turn on, and `crates/kernel/tests/tess_include_equivalence.rs`
   compares the two.
+- `tessellation/triangulation.rs`: the constrained Delaunay triangulation of a trimmed face
+  works in (u, v) scaled by the surface's mean speed along each (a power of two, so exact both
+  ways). In raw parameters, a loft side ruled across (about 30 mm) and long along the loft
+  (about 600 mm) is a strip stretched twentyfold, and a trimming node was fanned to boundary
+  nodes hundreds of millimetres away: a flat sheet through a joined tube.
+- `tessellation/triangulation.rs`: every segment of a face's boundary becomes a constraint; one
+  that crosses or overlaps a constraint already added (an intersection edge's polyline can hook
+  back a few micrometres past its vertex) is split where they meet. truck dropped such a
+  segment and joined its start to the first later node it could reach, which on a joined tube
+  left a trimming curve's 130 nodes behind one constraint across the face: slivers from it
+  sagged millimetres off the surface, and a face pinched to a point (#1648) got no triangles.
+  All meshes; faces whose segments all go in mesh as before.
+- `tessellation/mod.rs`: `Deflection::rulings` is now `Deflection::display`: a mesh to display
+  or export (the kernel's `tessellate` and display meshes), which gets the ruling grid lines,
+  and the speed-scaled triangulation above. The meshes a Boolean operation intersects
+  (`Deflection::chord`) keep truck's (u, v) and insertion order.
 - `lib.rs`: compiler warnings no longer fail the build. Example, test and bench targets are
   dropped (their sources are not vendored).
 - `tessellation/triangulation.rs`: adaptive division also splits a cell that bows off its
@@ -185,13 +216,12 @@ Changes:
   face's mesh puts each point at its parameters on the face's own surface, so a point of an edge
   that lies off a surface within tolerance (an intersection-curve sample whose projection did not
   converge, an imported edge) came out in a different place on each of the edge's faces, and the
-  exported mesh had a crack there. In display and export meshes (`Deflection::rulings`), a
+  exported mesh had a crack there. In display and export meshes (`Deflection::display`), a
   vertex at a point of a face's boundary loops that is farther than `TOLERANCE` from the nearest
   point of the face's edges now goes to that point, when it is within the chord tolerance
   (`onto_edges`). Points within `TOLERANCE` stay on the surface, so exact geometry meshes as
   before. The meshes Boolean operations intersect keep truck's points.
-
-- `tessellation/triangulation.rs`: in display and export meshes (`Deflection::rulings`), a
+- `tessellation/triangulation.rs`: in display and export meshes (`Deflection::display`), a
   direction left undivided along the rulings of a face ruled one way also gets a grid line
   through each point of the face's boundary that lies inside the face along it
   (`with_boundary_lines`), when there are at most 16 such points: corners standing into the
@@ -266,6 +296,11 @@ SolidCraft changes:
   and the frame is skipped with a repaint asked for when it is due. The streak and the deadline
   survive a recreate; a configure the device takes ends the streak, a recreate it asked for
   included. A recreate for a lost surface goes ahead as before.
+- `src/lib.rs`, `src/winit.rs`: the device's lost callback marks `RenderState::device_lost`
+  (`DeviceLost`), and the painter draws nothing on a lost device. Before a frame's uploads it
+  submits nothing (`DeviceLost::probe`), so a device the driver lost is found by that
+  submission rather than by the first queue write, which panicked inside wgpu-core
+  (`PendingWrites::activate`, #4172).
 
 ## winit 0.30.13 (Apache-2.0, the winit contributors, https://github.com/rust-windowing/winit)
 

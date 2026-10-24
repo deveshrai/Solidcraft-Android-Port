@@ -9,7 +9,7 @@
 --out FILE      Self-contained static review page (default target/icon-status.html)
 
 Read assets/icons/ui/STYLE_GUIDE.md before editing artwork. SVGs are authoritative.
-Every discovered non-final icon is Open; no inventory file controls discovery.
+Every discovered non-final icon is Open; artwork, source and runtime requests are discovery sources.
 """
 import sys, os, re, glob, html, json, hashlib, collections, tomllib, uuid, datetime
 
@@ -36,6 +36,7 @@ def art_rev():
     paths += glob.glob(ROOT + '/crates/ui-egui/src/**/*.rs', recursive=True)
     paths += glob.glob(HERE + '/*.py')
     paths += [D + '/palette.toml', D + '/aliases.toml', __file__]
+    paths += glob.glob(D + '/requested_icons.txt')
     for path in sorted(paths):
         # Equal-length edits can share an mtime. Only the content identifies what
         # the reviewer saw; file metadata must never authorize stale acceptance.
@@ -56,7 +57,30 @@ def ui_icon_names(source):
         if icon: names.add(icon.group(1))
     for table in re.finditer(r'for\s*\(i,\s*\(label,\s*icon,\s*tip\)\)\s*in\s*\[(.*?)\]\s*\.iter\(', source, re.S):
         names.update(re.findall(r'\("[^"]*",\s*"([a-z][a-z0-9_]*)",\s*"[^"]*"\)', table.group(1)))
+    # System-window wrappers and declarative page lists own their icon arguments.
+    for call in re.finditer(r'\b(?:Window|Confirm)::new\([^;]*?,\s*"([a-z][a-z0-9_]*)"\s*,', source, re.S):
+        names.add(call.group(1))
+    for page in re.finditer(r'\bWindowPage\s*\{[^}]*?\bicon:\s*"([a-z][a-z0-9_]*)"', source, re.S):
+        names.add(page.group(1))
     return names
+
+def requested_icons():
+    """Runtime ids recorded by the Harness audit; flags describe its last actual render."""
+    path = os.path.join(D, 'requested_icons.txt')
+    if not os.path.exists(path):
+        return {}
+    requested = {}
+    with open(path, encoding='utf-8') as manifest:
+        for number, line in enumerate(manifest, 1):
+            if not line.strip() or line.startswith('#'):
+                continue
+            fields = line.strip().split('\t')
+            if len(fields) != 2 or not re.fullmatch(r'[a-z][a-z0-9_]*', fields[0]) or fields[1] not in ('true', 'false'):
+                raise ValueError(f'{path}:{number}: expected icon_id<TAB>true|false')
+            if fields[0] in requested:
+                raise ValueError(f'{path}:{number}: duplicate requested icon {fields[0]}')
+            requested[fields[0]] = fields[1] == 'true'
+    return requested
 
 def scan():
     """Everything derived from the repo: rows, summary."""
@@ -86,6 +110,9 @@ def scan():
         t = open(f, encoding='utf-8').read()
         for name in ui_icon_names(t):
             uses[name].append('ui:' + os.path.relpath(f, ROOT + '/crates/ui-egui/src').replace(os.sep, '/'))
+    runtime = requested_icons()
+    for name in runtime:
+        uses[name].append('ui:runtime audit')
     mk = ROOT + '/assets/icons/ui/source/markers.rs'
     if os.path.exists(mk):
         for name in re.findall(r'=> "(c_[a-z_]+)"', open(mk, encoding='utf-8').read()): uses[name].append('ui:sketch constraint glyph')
@@ -95,7 +122,7 @@ def scan():
     rows = []
     for n in sorted(set(uses) | set(masters) | set(alias_raw)):
         m, acc = alias_of(n)
-        if m in masters and n != 'placeholder': status = 'done'
+        if m in masters and n != 'placeholder' and not runtime.get(n, False): status = 'done'
         else: status, m = 'placeholder', 'placeholder'
         cmds = [u for u in uses.get(n, []) if not u.startswith('ui:')]
         rows.append(dict(id=n, status=status, master=m, accent=acc, commands=len(cmds), example=cmds[0] if cmds else '',

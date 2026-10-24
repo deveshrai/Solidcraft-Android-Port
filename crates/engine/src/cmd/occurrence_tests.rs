@@ -14,6 +14,45 @@ fn near(value: &Value, expected: f64) {
 }
 
 #[test]
+fn component_create_rejects_bodies_without_changing_design() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Body1"}));
+    let doc = s.doc.clone();
+    let active_path = s.active_occurrence_path.clone();
+    let error = s.execute("component.create", &json!({"name":"Part","bodies":["Body1"]})).unwrap_err();
+    assert!(matches!(&error, crate::EngineError::BadParams { cmd, .. } if cmd == "component.create"));
+    let msg = error.to_string();
+    for expected in ["bodies", "name, parent, parent_path, activate", "component.move_bodies", "component.from_bodies"] {
+        assert!(msg.contains(expected), "{msg}");
+    }
+    assert_eq!(s.doc, doc);
+    assert_eq!(s.active_component, 0);
+    assert_eq!(s.active_occurrence_path, active_path);
+    assert_eq!(s.doc.model_body_component(s.model.state().body("Body1").unwrap()), 0);
+}
+
+#[test]
+fn component_create_rejects_unknown_keys_and_accepts_documented_keys() {
+    let mut s = Session::default();
+    let (parent, occurrence) = created(&mut s, "Parent");
+    let params = json!({"name":"Child","parent":parent,"parent_path":[occurrence],"activate":false});
+    let mut invalid = params.clone();
+    invalid["activte"] = json!(true);
+    let doc = s.doc.clone();
+    let error = s.execute("component.create", &invalid).unwrap_err().to_string();
+    assert!(error.contains("activte"), "{error}");
+    assert!(error.contains("name, parent, parent_path, activate"), "{error}");
+    assert_eq!(s.doc, doc);
+    assert_eq!(s.active_component, parent);
+    assert_eq!(s.active_occurrence_path, Some(vec![occurrence]));
+    let child = run(&mut s, "component.create", params);
+    assert_eq!(child["name"], "Child");
+    assert_eq!(child["parent"], parent);
+    assert_eq!(s.active_component, parent);
+    assert_eq!(s.active_occurrence_path, Some(vec![occurrence]));
+}
+
+#[test]
 fn instance_copy_uses_selected_source_transform() {
     let mut s = Session::default();
     let (component, first) = created(&mut s, "Block");
@@ -616,6 +655,61 @@ fn matrix_move_turns_a_quarter_and_moves() {
     }
 }
 
+/// #3223, #2872: a STEP assembly whose part sits two levels down, each level placed, opened and
+/// stood up. With the imported root active, as Open leaves it, a circle sketched on the part's
+/// top face cuts it through, reads as a Cut dragged in and a Join dragged out, and joins it in
+/// one piece instead of starting a body of the root's own.
+#[test]
+fn a_stood_up_nested_step_part_is_cut_and_joined_from_its_face() {
+    let dir = std::env::temp_dir().join(format!("solidcraft-nested-stood-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("nested.step");
+    let mut src = Session::default();
+    let (_, carrier) = created(&mut src, "Carrier");
+    let (part, nested) = created(&mut src, "Nested Part");
+    run(&mut src, "solid.box", json!({"length": 40, "width": 24, "height": 10, "body_name": "NestedBlock"}));
+    run(&mut src, "occurrence.move", json!({"occurrence": carrier, "translate": [12, 7, 5], "axis": [0, 0, 1], "angle": "30 deg"}));
+    run(&mut src, "occurrence.move", json!({"occurrence": nested, "translate": [3, 11, 2], "axis": [0, 1, 0], "angle": "20 deg"}));
+    // The middle of the top face, in the file's frame: the imported root's.
+    let top = solidcraft_doc::apply_point(&src.doc.component_transform(part), solidcraft_geom::Vec3::new(20.0, 12.0, 10.0));
+    run(&mut src, "file.export", json!({"path": path, "format": "step"}));
+
+    let mut s = Session::default();
+    run(&mut s, "doc.open", json!({"path": path, "up": "y"}));
+    let _ = std::fs::remove_dir_all(&dir);
+    let at = solidcraft_doc::apply_point(&s.doc.component_transform(s.active_component), top);
+    run(&mut s, "sketch.create", json!({"plane": {"face": [at.x, at.y, at.z]}, "project_edges": false}));
+    let centre = s
+        .doc
+        .features
+        .iter()
+        .rev()
+        .find_map(|f| match &f.kind {
+            solidcraft_doc::FeatureKind::Sketch { plane: solidcraft_doc::PlaneRef::Face { plane, .. }, .. } => Some(plane.to_local(top)),
+            _ => None,
+        })
+        .unwrap();
+    run(&mut s, "sketch.circle.center", json!({"center": [centre.x, centre.y], "radius": 3}));
+    run(&mut s, "sketch.finish", json!({}));
+    assert_eq!(crate::auto_operation(&s, &json!({"distance": -5})), Some("cut"));
+    assert_eq!(crate::auto_operation(&s, &json!({"distance": 5})), Some("join"));
+    let volume = |s: &mut Session| run(s, "inspect.measure", json!({"bodies": ["NestedBlock"]}))["total"]["volume_mm3"].as_f64().unwrap();
+    let block = 40.0 * 24.0 * 10.0;
+    let hole = std::f64::consts::PI * 3.0 * 3.0;
+
+    // The circle is measured as faceted: within a thousandth of what it removes or adds.
+    for operation in ["cut", "auto"] {
+        run(&mut s, "solid.extrude", json!({"distance": -20, "operation": operation}));
+        assert!((block - volume(&mut s) - hole * 10.0).abs() < 1e-3 * hole * 10.0, "{operation}: {}", volume(&mut s));
+        run(&mut s, "edit.undo", json!({}));
+    }
+    run(&mut s, "solid.extrude", json!({"distance": 5, "operation": "join"}));
+    let st = s.model.state();
+    assert_eq!(st.bodies.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["NestedBlock"]);
+    assert_eq!(st.body("NestedBlock").map(|b| b.body.shell_count()), Some(1));
+    assert!((volume(&mut s) - block - hole * 5.0).abs() < 1e-3 * hole * 5.0, "join: {}", volume(&mut s));
+}
+
 /// A rotation that is one only up to rounding is orthonormalised; a scale, a shear or a mirror
 /// is refused with the reason, and the occurrence stays where it was.
 #[test]
@@ -661,4 +755,76 @@ fn matrix_move_orthonormalises_rounding_and_refuses_what_is_not_rigid() {
     }
     assert_eq!(s.doc.occurrences.iter().find(|o| o.id == occ).unwrap().transform, before);
     run(&mut s, "occurrence.move", json!({"occurrence": occ, "matrix": rounded, "tolerance": 1e-3}));
+}
+
+/// #3383: a combine across components meets the tool where it is shown, not where its numbers
+/// would be in the target's own frame. The plate in a component turned a quarter about X sits at
+/// y -10..0, z -20..20; the boss in the root overlaps it by 10 x 5 x 5. The reverse (a peg in the
+/// turned component cut from a root plate) removes 10 x 10 x 5 of it, not 10 x 10 x 10.
+#[test]
+fn combine_across_a_turned_occurrence_meets_the_tool_where_it_is_shown() {
+    let volume = |s: &Session, name: &str| s.model.state().body(name).map(|b| solidcraft_kernel::measure(&b.body).unwrap().volume).unwrap_or(0.0);
+    let turned = |s: &mut Session, body: Value| {
+        created(s, "Part");
+        run(s, "solid.box", body);
+        run(s, "component.activate", json!({"component": "root"}));
+        run(s, "occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "90 deg"}));
+        run(s, "component.capture_position", json!({}));
+    };
+    let mut s = Session::default();
+    turned(&mut s, json!({"length": 40, "width": 40, "height": 10, "corner": [-20, -20, 0], "body_name": "Plate"}));
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [-5, -5, -25], "operation": "new", "body_name": "Boss"}));
+    run(&mut s, "solid.combine", json!({"target": "Plate", "tools": ["Boss"]}));
+    assert_eq!(s.model.state().body("Plate").map(|b| b.body.shell_count()), Some(1));
+    let want = 40.0 * 40.0 * 10.0 + 10.0 * 10.0 * 10.0 - 10.0 * 5.0 * 5.0;
+    assert!((volume(&s, "Plate") - want).abs() < 1e-6 * want, "{} vs {want}", volume(&s, "Plate"));
+
+    let mut s = Session::default();
+    turned(&mut s, json!({"length": 10, "width": 10, "height": 10, "corner": [-5, -5, 0], "body_name": "Peg"}));
+    run(&mut s, "solid.box", json!({"length": 40, "width": 40, "height": 10, "corner": [-20, -20, 0], "operation": "new", "body_name": "Base"}));
+    run(&mut s, "solid.combine", json!({"target": "Base", "tools": ["Peg"], "operation": "cut"}));
+    let want = 40.0 * 40.0 * 10.0 - 10.0 * 10.0 * 5.0;
+    assert!((volume(&s, "Base") - want).abs() < 1e-6 * want, "{} vs {want}", volume(&s, "Base"));
+}
+
+/// #3383: a feature joining into a body of another, placed component draws its tool where the
+/// tool is shown, as Combine does. Part is moved 100 mm along x, so its 10 mm cubes sit at x 100..110
+/// and 120..130; a box and an extrude drawn from the root over each add 4 x 4 x 5 to it in one
+/// piece, not a separate lump 100 mm further on. A through-all cut is as long as the target is
+/// far where it is shown.
+#[test]
+fn joins_into_a_moved_occurrence_meet_the_tool_where_it_is_shown() {
+    let volume = |s: &Session, name: &str| s.model.state().body(name).map(|b| solidcraft_kernel::measure(&b.body).unwrap().volume).unwrap_or(0.0);
+    let mut s = Session::default();
+    created(&mut s, "Part");
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "A"}));
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [20, 0, 0], "operation": "new", "body_name": "B"}));
+    run(&mut s, "component.activate", json!({"component": "root"}));
+    run(&mut s, "occurrence.move", json!({"occurrence": "Part:1", "translate": [100, 0, 0]}));
+    run(&mut s, "component.capture_position", json!({}));
+    run(&mut s, "solid.box", json!({"length": 4, "width": 4, "height": 15, "corner": [103, 3, 0], "operation": "join", "targets": ["A"]}));
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [123, 3], "p1": [127, 7]}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.extrude", json!({"distance": 15, "operation": "join", "targets": ["B"]}));
+    let want = 10.0 * 10.0 * 10.0 + 4.0 * 4.0 * 5.0;
+    for b in ["A", "B"] {
+        assert_eq!(s.model.state().body(b).map(|b| b.body.shell_count()), Some(1), "{b}");
+        assert!((volume(&s, b) - want).abs() < 1e-6 * want, "{b}: {} vs {want}", volume(&s, b));
+    }
+
+    // Through all reaches the target where it is shown: Part moved 100 mm along x and up, a cut
+    // drawn on the root's XY plane goes 100 mm up through its cube, not 10 mm.
+    let mut s = Session::default();
+    created(&mut s, "Part");
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "C"}));
+    run(&mut s, "component.activate", json!({"component": "root"}));
+    run(&mut s, "occurrence.move", json!({"occurrence": "Part:1", "translate": [100, 0, 100]}));
+    run(&mut s, "component.capture_position", json!({}));
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [103, 3], "p1": [107, 7]}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.extrude", json!({"through_all": true, "operation": "cut", "targets": ["C"]}));
+    let want = 10.0 * 10.0 * 10.0 - 4.0 * 4.0 * 10.0;
+    assert!((volume(&s, "C") - want).abs() < 1e-6 * want, "C: {} vs {want}", volume(&s, "C"));
 }

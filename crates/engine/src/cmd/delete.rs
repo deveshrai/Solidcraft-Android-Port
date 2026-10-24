@@ -1,7 +1,7 @@
 //! Delete for everything that can be selected, in one undo step: sketch entities (while
 //! sketching), timeline features and sketches (with the features that depend on them),
 //! construction planes, bodies (a Remove feature from here on in the timeline), occurrences and
-//! components, and canvases. `dry_run` reports what would go and what would fail without
+//! components, canvases and joints. `dry_run` reports what would go and what would fail without
 //! changing anything, so the UI can ask first.
 
 use serde_json::{Value, json};
@@ -13,7 +13,7 @@ use crate::params::{bad, bool_};
 use crate::{EngineError, Result, Sel, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[CommandSpec::new("selection.delete", "Delete", delete).icon("delete").params(
-    "items?: [selection items]; components?, occurrences?, canvases?: [ids or names]; dry_run?: bool → deleted, would_fail, skipped (one undo step)",
+    "items?: [selection items]; components?, occurrences?, canvases?, joints?: [ids or names]; dry_run?: bool → deleted, deleted_joints, would_fail, skipped (one undo step)",
 )];
 
 /// Run another command's body inside this one (so the whole delete is one undo step).
@@ -52,7 +52,24 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Some(_) => return Err(bad(cmd, "`items` must be a list of selection items")),
     };
+    if let Some(value) = p.get("joints").filter(|v| !v.is_null()) {
+        let Some(joints) = value.as_array() else {
+            return Err(bad(cmd, "`joints` must be a list of ids or names"));
+        };
+        if joints.len() > 10_000 || joints.iter().any(|j| !j.is_string() && j.as_u64().is_none()) {
+            return Err(bad(cmd, "`joints` must contain at most 10000 ids or names"));
+        }
+    }
     let before = s.model.clone();
+    let mut joints = p
+        .get("joints")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|value| super::joints::joint_id(s, Some(value), cmd))
+        .collect::<Result<Vec<_>>>()?;
+    joints.sort_unstable();
+    joints.dedup();
     let features_before: Vec<(u64, String)> = s.doc.features.iter().map(|f| (f.id, f.name.clone())).collect();
     let mut skipped: Vec<String> = Vec::new();
     let mut skip = |why: String| {
@@ -94,6 +111,10 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     }
     features.dedup();
     let mut done = false;
+    for id in &joints {
+        sub(s, "joint.delete", json!({"joint": id}))?;
+        done = true;
+    }
     if !entities.is_empty() {
         if s.active_sketch.is_none() {
             skip("sketch entities are deleted while editing their sketch".into());
@@ -168,7 +189,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         .filter(|r| r.error.is_some() && before.result(r.id).is_some_and(|b| b.error.is_none() && !b.skipped))
         .map(|r| r.name.clone())
         .collect();
-    Ok(json!({ "deleted": deleted, "bodies": bodies, "would_fail": would_fail, "skipped": skipped }))
+    Ok(json!({ "deleted": deleted, "deleted_joints": joints, "bodies": bodies, "would_fail": would_fail, "skipped": skipped }))
 }
 
 #[cfg(test)]
@@ -248,6 +269,80 @@ mod tests {
             json!({"components": ["0"]}),
         ] {
             assert!(s.execute("selection.delete", &p).is_err(), "{p}");
+        }
+    }
+
+    fn joint_assembly() -> Session {
+        let mut s = Session::default();
+        for (name, x) in [("A", 0), ("B", 30), ("C", 60)] {
+            run(&mut s, "component.activate", json!({"component": "root"}));
+            run(&mut s, "component.create", json!({"name": name}));
+            run(&mut s, "solid.box", json!({"length": 20, "width": 20, "height": 10, "corner": [x, 0, 0]}));
+        }
+        run(&mut s, "component.activate", json!({"component": "root"}));
+        run(&mut s, "occurrence.ground", json!({"occurrence": "A:1", "grounded": true}));
+        for (name, other, face) in [("Hinge", "B:1", [40, 10, 0]), ("Glue", "C:1", [70, 10, 0])] {
+            run(
+                &mut s,
+                "joint.create",
+                json!({"type": "revolute", "name": name,
+                "a": {"occurrence": "A:1", "face": [10, 10, 10]}, "b": {"occurrence": other, "face": face}}),
+            );
+        }
+        run(&mut s, "joint.motion_link", json!({"a": "Hinge", "b": "Glue", "ratio": 1}));
+        s
+    }
+
+    #[test]
+    fn selected_joints_and_their_link_are_deleted_in_one_undo_step_with_a_read_only_dry_run() {
+        let mut s = joint_assembly();
+        let features = serde_json::to_value(&s.doc.features).unwrap();
+        let hinge = s.doc.assembly.joints[0].id;
+        let dry = run(&mut s, "selection.delete", json!({"joints": [hinge, "Hinge", "Glue"], "dry_run": true}));
+        assert_eq!(dry["deleted_joints"].as_array().unwrap().len(), 2);
+        assert_eq!(s.doc.assembly.joints.len(), 2);
+        assert_eq!(s.doc.assembly.links.len(), 1);
+        assert_eq!(serde_json::to_value(&s.doc.features).unwrap(), features);
+        run(&mut s, "selection.delete", json!({"joints": [hinge, "Hinge", "Glue"]}));
+        assert!(s.doc.assembly.joints.is_empty() && s.doc.assembly.links.is_empty());
+        assert_eq!(serde_json::to_value(&s.doc.features).unwrap(), features);
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(s.doc.assembly.joints.len(), 2);
+        assert_eq!(s.doc.assembly.links.len(), 1);
+        assert_eq!(serde_json::to_value(&s.doc.features).unwrap(), features);
+        run(&mut s, "edit.redo", json!({}));
+        assert!(s.doc.assembly.joints.is_empty() && s.doc.assembly.links.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_joint_refuses_the_whole_delete_without_losing_features_or_other_joints() {
+        let mut s = joint_assembly();
+        let before = serde_json::to_value(&s.doc.features).unwrap();
+        let feature = s.doc.features[0].id;
+        assert!(s.execute("selection.delete", &json!({"items": [{"type": "feature", "id": feature}], "joints": ["Hinge", "missing"]})).is_err());
+        for joints in [json!("Hinge"), json!([null]), json!([-1]), json!([1.5]), json!(vec!["Hinge"; 10_001])] {
+            assert!(s.execute("selection.delete", &json!({"joints": joints})).is_err());
+        }
+        assert_eq!(serde_json::to_value(&s.doc.features).unwrap(), before);
+        assert_eq!(s.doc.assembly.joints.len(), 2);
+        assert_eq!(s.doc.assembly.links.len(), 1);
+    }
+
+    #[test]
+    fn numeric_joint_ids_do_not_delete_a_different_joint_with_that_numeric_name() {
+        for batch in [false, true] {
+            let mut s = joint_assembly();
+            let hinge = s.doc.assembly.joints[0].id;
+            let glue = s.doc.assembly.joints[1].id;
+            run(&mut s, "joint.edit", json!({"joint": hinge, "name": glue.to_string()}));
+            let features = serde_json::to_value(&s.doc.features).unwrap();
+            let (command, params) = if batch { ("selection.delete", json!({"joints": [glue]})) } else { ("joint.delete", json!({"joint": glue})) };
+            run(&mut s, command, params);
+            assert_eq!(s.doc.assembly.joints.len(), 1);
+            assert_eq!(s.doc.assembly.joints[0].id, hinge, "a numeric id must not match another joint's name");
+            assert_eq!(serde_json::to_value(&s.doc.features).unwrap(), features);
+            run(&mut s, "edit.undo", json!({}));
+            assert_eq!(s.doc.assembly.joints.len(), 2);
         }
     }
 

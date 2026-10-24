@@ -23,6 +23,11 @@ const RECORD_BYTES: usize = 32;
 /// sensitivity). Our axes are in the raw HID units of [`FULL_SCALE`].
 const DAEMON_FULL_SCALE: i64 = 500;
 
+/// Whether the daemon's socket is there, without connecting to it.
+pub fn exists() -> bool {
+    SOCKETS.iter().any(|path| Path::new(path).exists())
+}
+
 pub fn connect() -> Option<UnixStream> {
     SOCKETS.iter().find_map(|path| connect_to(Path::new(path)))
 }
@@ -56,18 +61,34 @@ fn unit(value: impl Into<i64>) -> i16 {
     i16::try_from(scaled.clamp(i64::from(i16::MIN), i64::from(i16::MAX))).unwrap_or_default()
 }
 
-/// Hands every motion record to `publish` until the daemon closes the connection or fails. A
-/// partial record at the end is dropped.
-pub fn read(mut stream: impl Read, mut publish: impl FnMut(Axes)) {
+/// Hands every motion record to `publish` until the daemon closes the connection or fails, or
+/// `stop` says so. A stream with a read timeout (`set_read_timeout`) times out when the daemon is
+/// quiet, which is no record and no disconnect: `stop` is asked, and the read goes on, with what
+/// of a record had arrived kept. A partial record at the end is dropped.
+pub fn read(mut stream: impl Read, mut publish: impl FnMut(Axes), mut stop: impl FnMut() -> bool) {
     let mut record = [0_u8; RECORD_BYTES];
+    let mut filled = 0;
     loop {
-        match stream.read_exact(&mut record) {
-            Ok(()) => {
-                if let Some(axes) = decode(&record) {
-                    publish(axes);
+        match stream.read(record.get_mut(filled..).unwrap_or_default()) {
+            Ok(0) => {
+                log::info!("3D mouse: spacenavd connection ended");
+                return;
+            }
+            Ok(size) => {
+                filled += size;
+                if filled == RECORD_BYTES {
+                    filled = 0;
+                    if let Some(axes) = decode(&record) {
+                        publish(axes);
+                    }
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
+                if stop() {
+                    return;
+                }
+            }
             Err(error) => {
                 log::info!("3D mouse: spacenavd connection ended: {error}");
                 return;
@@ -132,8 +153,39 @@ mod tests {
         daemon.write_all(&bytes).expect("written");
         drop(daemon);
         let mut seen = Vec::new();
-        read(client, |axes| seen.push(axes.translation));
+        read(client, |axes| seen.push(axes.translation), || false);
         assert_eq!(seen, [[70, 0, 0], [0, 0, 0]]);
+    }
+
+    #[test]
+    fn a_quiet_daemon_times_out_without_losing_the_record_it_was_sending() {
+        use crate::space_mouse::fake::Script;
+        use std::io::ErrorKind::{TimedOut, WouldBlock};
+        let bytes = record([0, 100, 0, 0, 0, 0, 0, 8]);
+        let mut script = Script::new();
+        script.timeout(WouldBlock).data(&bytes[..10]).timeout(TimedOut).timeout(WouldBlock).data(&bytes[10..]).timeout(WouldBlock).end();
+        let (mut seen, mut asked) = (Vec::new(), 0);
+        read(
+            script,
+            |axes| seen.push(axes.translation),
+            || {
+                asked += 1;
+                false
+            },
+        );
+        assert_eq!(seen, [[70, 0, 0]]);
+        assert_eq!(asked, 4, "each timeout asks whether to stop");
+    }
+
+    #[test]
+    fn a_stop_ends_the_read_at_the_next_timeout_only() {
+        use crate::space_mouse::fake::Script;
+        let bytes = record([0, 100, 0, 0, 0, 0, 0, 8]);
+        let mut script = Script::new();
+        script.data(&bytes).timeout(std::io::ErrorKind::WouldBlock).data(&bytes);
+        let mut seen = 0;
+        read(script, |_| seen += 1, || true);
+        assert_eq!(seen, 1, "the record before the timeout arrived; the one after never was read");
     }
 
     #[test]

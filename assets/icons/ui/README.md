@@ -18,8 +18,8 @@ artwork changes trigger the live revision check. The server binds only to loopba
 
 Every opening scans SVG masters, aliases and source references. New, unused,
 missing and changed icons are discoverable. **All discovered icons without a valid
-acceptance are Open, including those with notes.** No inventory file or allowlist
-is needed. Rescan sees additions immediately; a running page also polls revisions.
+acceptance are Open, including those with notes.** Discovery also reads `design/requested_icons.txt`, the sorted runtime audit
+manifest; it supplements source scans and never restricts discovery. Rescan sees additions immediately; a running page also polls revisions.
 The internal placeholder glyph is the only excluded card. Shared masters are shown
 separately even when an accepted alias already uses them; reopen that alias before
 requesting a redraw of its protected artwork. Unassigned commands
@@ -82,6 +82,7 @@ Palette changes preserve accepted artwork and never update review hashes.
 | `design/palette.toml`, `aliases.toml` | Shared theme roles, weights and semantic aliases |
 | `design/review.json` | Owner acceptance hashes and current notes |
 | `design/references.toml` | Curated style references; does not control discovery |
+| `design/requested_icons.txt` | Sorted runtime requests and placeholder flags, checked by the Harness audit |
 | `design/tools/author/{lib,bases}.py` | Reusable geometry and canonical cube/slab/arrow bases |
 | `design/tools/author/new_icon.py` | Safe new-master scaffold, never overwrites an id |
 | `design/tools/icon_status.py`, `review_state.py` | Discovery, review backend and state |
@@ -90,7 +91,7 @@ Palette changes preserve accepted artwork and never update review hashes.
 | `source/` | Rust viewport glyphs, markers, navigation and pointer; not command icons |
 
 `crates/ui-egui/build.rs` embeds SVGs, palette and aliases. `icon_svg.rs` parses and
-rasterises them for `icons::paint`; adding an icon still requires its registry or
+rasterises them for `icons::paint_icon`; adding an icon still requires its registry or
 UI assignment and an application rebuild. Review status never controls rendering.
 
 ## Checks and reports
@@ -104,5 +105,25 @@ python3 -B assets/icons/ui/design/tools/icon_status.py --csv
 ```
 
 Reports, screenshots, requests, generated contact sheets and previews stay under
-ignored `target/`. Do not commit generated inventories or historical authoring
-batches. Every non-Markdown resource has an exact row in `ATTRIBUTION.md`.
+ignored `target/`. The runtime request manifest is a committed regression fixture; other generated
+inventories and historical authoring batches do not belong in the repository. Every non-Markdown resource has an exact row in `ATTRIBUTION.md`.
+
+## Runtime menu audit
+
+`cargo test -p solidcraft-ui-egui --test icon_audit` drives the real UI through the
+headless scenario Harness and rejects placeholder requests and unexpected blank
+context-menu icons. It compares sorted requested ids with
+`design/requested_icons.txt` (`id<TAB>placeholder`, one per line). After deliberately
+changing menu coverage or assignments, regenerate and review its diff:
+
+```sh
+UPDATE_ICON_MANIFEST=1 cargo test -p solidcraft-ui-egui --test icon_audit
+```
+
+The review page includes every manifest id, even ids used only in tables or helper
+arguments. A true placeholder flag, missing master or broken alias is reported as
+missing; runtime collection never changes acceptance hashes. The live control
+method `ui.icon_audit` can diagnose requests in a running UI (see
+[control protocol](../../../docs/control-protocol.md)). Keep the Harness traversal
+current when adding menus. A successful traversal covers only the contexts it
+actually opens; document unreachable or untested contexts in the audit report.

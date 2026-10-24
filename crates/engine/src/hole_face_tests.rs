@@ -92,7 +92,7 @@ fn a_slanted_hole_stays_on_its_axis_when_its_face_moves() {
 // part: a 40 x 40 x 20 box at z 0..20 (32000 mm³).
 
 fn box_part(s: &mut Session) {
-    run(s, "solid.box", json!({"length": 40, "width": 40, "height": 20, "name": "Part", "position": [20, 20, 0]}));
+    run(s, "solid.box", json!({"length": 40, "width": 40, "height": 20, "name": "Part"}));
 }
 
 /// A sketch named `Pts` on the XY plane lifted to `z`, holding the given points (ids p0, p1, ...).
@@ -373,4 +373,45 @@ fn drilled_sketch_points_break_through_a_sloping_back_face() {
     let mut reopened = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());
     assert!(reopened.model.result(id).unwrap().error.is_none());
     near(volume(&mut reopened), left);
+}
+
+/// Back (z 0…6) under a smaller Front (z 14…20), and a sketch on Front's top face with points
+/// over Front (`in`) and beyond its edges, over Back (`out1`, `out2`).
+fn front_and_back(s: &mut Session) {
+    run(s, "solid.box", json!({"length": 40, "width": 40, "height": 6, "body_name": "Back"}));
+    run(s, "solid.box", json!({"corner": [10, 10, 14], "length": 20, "width": 20, "height": 6, "body_name": "Front"}));
+    run(s, "sketch.create", json!({"plane": {"face": [20, 20, 20]}, "name": "Pts", "project_edges": false}));
+    for (id, p) in [("in", [20, 20]), ("out1", [5, 5]), ("out2", [35, 35])] {
+        run(s, "sketch.point", json!({"point": p, "id": id}));
+    }
+    run(s, "sketch.finish", json!({}));
+}
+
+/// #2882: holes at the points of a sketch on a body's face drill that body, never one behind it.
+#[test]
+fn holes_from_a_sketch_on_a_face_drill_that_body_only() {
+    let mut s = Session::default();
+    front_and_back(&mut s);
+    let base = volume(&mut s);
+    run(&mut s, "solid.hole", json!({"sketch": "Pts", "points": ["in", "out1", "out2"], "diameter": 5, "depth": 4, "name": "H"}));
+    assert_eq!(s.doc.find_feature("H").unwrap().participants, vec!["Front".to_string()]);
+    near(base - volume(&mut s), pi() * 6.25 * 4.0);
+    assert!(!solid_at(&s, 20.0, 20.0, 18.0), "drilled into Front");
+    for (x, y) in [(5.0, 5.0), (35.0, 35.0), (20.0, 20.0)] {
+        assert!(solid_at(&s, x, y, 5.5) && solid_at(&s, x, y, 3.0), "Back is not drilled at ({x}, {y})");
+    }
+    let mut reopened = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+    near(base - volume(&mut reopened), pi() * 6.25 * 4.0);
+}
+
+/// Through all from Front's face stops at Front; `targets` picks another body to drill instead.
+#[test]
+fn face_sketch_holes_through_all_stay_in_their_body_unless_targets_say_otherwise() {
+    let mut s = Session::default();
+    front_and_back(&mut s);
+    run(&mut s, "solid.hole", json!({"sketch": "Pts", "points": ["in"], "diameter": 5, "name": "H"}));
+    assert!(!solid_at(&s, 20.0, 20.0, 15.0) && solid_at(&s, 20.0, 20.0, 3.0));
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "solid.hole", json!({"sketch": "Pts", "points": ["in"], "diameter": 5, "targets": ["Back"], "name": "H"}));
+    assert!(solid_at(&s, 20.0, 20.0, 15.0) && !solid_at(&s, 20.0, 20.0, 3.0));
 }

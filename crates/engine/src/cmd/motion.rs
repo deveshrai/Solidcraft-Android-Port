@@ -10,7 +10,7 @@ use solidcraft_geom::{Aabb3, Vec3};
 use solidcraft_kernel::Body;
 
 use super::CommandSpec;
-use super::joints::{cannot_move, effective_values, joint_id, occurrence_id, resolve_holding, value};
+use super::joints::{cannot_move, effective_values, joint_id, occurrence_id, place_holding, value};
 use crate::params::{bad, bool_, str_, vec3};
 use crate::{EngineError, Result, Session};
 
@@ -18,8 +18,10 @@ use crate::{EngineError, Result, Session};
 mod analysis;
 #[path = "motion_animation.rs"]
 mod animation;
+#[path = "motion_trace.rs"]
+pub(crate) mod associative;
 #[path = "contact_sweep.rs"]
-mod contact_sweep;
+pub(crate) mod contact_sweep;
 #[path = "motion_sweep.rs"]
 mod sweep;
 
@@ -76,9 +78,14 @@ pub static COMMANDS: &[CommandSpec] = &[
     )),
     CommandSpec::new("motion.trace.keep", "Keep Motion Trace", keep_trace).icon("trace").params(concat!(
         trace_doc!(),
-        "; name? (default Motion TraceN) - keeps the trace as a 3D sketch spline through its points (a new sketch with 3D Sketch \
-         on, in the root component, where no joint moves it; a fixed curve, it does not follow later changes) → sketch, name, curves, points"
+        "; name? (default Motion TraceN); auto_update?: bool (default true); point_ref?: joint origin snap - keeps the trace as a \
+         root 3D sketch spline. Associative curves follow mechanism and driving-input edits; false keeps a fixed curve. \
+         point_ref retains a geometry snap; otherwise point is retained in component coordinates → sketch, name, curves, points"
     )),
+    CommandSpec::new("motion.trace.edit", "Edit Motion Trace", associative::edit).icon("trace").params(
+        "sketch: id|name; joint? with from and to, or study?; index?; samples? (2…500); auto_update?: false to detach. \
+         Edits a saved associative trace's driving conditions in one undo step",
+    ),
     CommandSpec::new("motion.plot", "Plot Motion Study", analysis::plot).icon("graph").noundo().params(analysis::PLOT_DOC),
     CommandSpec::new("motion.interference", "Motion Interference", analysis::interference).icon("interference").noundo().params(analysis::INTERFERENCE_DOC),
     CommandSpec::new("joint.sweep", "Sweep Joint", sweep::sweep).icon("interference").params(sweep::SWEEP_DOC),
@@ -97,12 +104,6 @@ pub static COMMANDS: &[CommandSpec] = &[
 ];
 
 const MAX_ITEMS: usize = 10_000;
-
-fn next_id(s: &Session, cmd: &str) -> Result<u64> {
-    let a = &s.doc.assembly;
-    let ids = a.contact_sets.iter().map(|c| c.id).chain(a.studies.iter().map(|m| m.id)).chain(a.exploded.iter().map(|e| e.id));
-    super::next_free_id(cmd, ids)
-}
 
 fn occurrences(s: &Session, p: &Value, cmd: &str) -> Result<Vec<u64>> {
     let list = p.get("occurrences").and_then(Value::as_array).ok_or_else(|| bad(cmd, "`occurrences` must list occurrences"))?;
@@ -179,6 +180,8 @@ pub fn collisions(s: &Session) -> Vec<(String, String, f64)> {
 /// How deep one body reaches into the other, when more than a touch (`None`: apart or
 /// touching). Points of each tessellation (vertices, edge midpoints, triangle centres) are
 /// tested against the other closed mesh: inside by ray parity, and deeper than the tolerance.
+/// Edges are tested for crossing the other's surface too: plates crossing face to face have
+/// no sample point inside (#3323).
 fn overlap(a: &Body, b: &Body) -> Option<f64> {
     let (ma, mb) = (a.tessellate((a.size() * 1e-3).max(1e-3)).ok()?, b.tessellate((b.size() * 1e-3).max(1e-3)).ok()?);
     mesh_overlap(&ma, &mb, 1e-4 * a.size().max(b.size()).max(1.0))
@@ -208,8 +211,10 @@ fn deepest(a: &solidcraft_geom::Mesh, b: &solidcraft_geom::Mesh, tol: f64) -> f6
     let tb = tris(b);
     let bx = b.bounds();
     let mut pts: Vec<Vec3> = a.positions.clone();
+    let mut edges: Vec<(Vec3, Vec3)> = Vec::new();
     for [p, q, r] in tris(a) {
         pts.extend([(p + q) * 0.5, (q + r) * 0.5, (r + p) * 0.5, (p + q + r) * (1.0 / 3.0)]);
+        edges.extend([(p, q), (q, r), (r, p)]);
     }
     let mut best = 0.0f64;
     for p in pts.into_iter().take(200_000) {
@@ -225,6 +230,52 @@ fn deepest(a: &solidcraft_geom::Mesh, b: &solidcraft_geom::Mesh, tol: f64) -> f6
         let d = tb.iter().map(|[a, b, c]| closest(p, *a, *b, *c).dist(p)).fold(f64::MAX, f64::min);
         if d > tol.max(best) && inside(p, &tb) {
             best = d;
+        }
+    }
+    for (p, q) in edges.into_iter().take(200_000) {
+        best = best.max(crossing(p, q, &tb, bx, tol));
+    }
+    best
+}
+
+/// Where the edge `p`→`q` of one mesh reaches through the surface `tb` of the other: the
+/// depth, or 0 when it misses, only touches, or grazes (the middle of the chord it cuts must
+/// lie inside, deeper than `tol`, as elsewhere in the check). Two plates crossing each other's
+/// faces put no vertex, mid-edge or triangle centre of either inside the other — the chord an
+/// edge cuts is how that crossing is seen (#3323).
+fn crossing(p: Vec3, q: Vec3, tb: &[[Vec3; 3]], bx: Aabb3, tol: f64) -> f64 {
+    if p.x.max(q.x) < bx.min.x - tol
+        || p.x.min(q.x) > bx.max.x + tol
+        || p.y.max(q.y) < bx.min.y - tol
+        || p.y.min(q.y) > bx.max.y + tol
+        || p.z.max(q.z) < bx.min.z - tol
+        || p.z.min(q.z) > bx.max.z + tol
+    {
+        return 0.0;
+    }
+    let d = q - p;
+    let len2 = d.dot(d);
+    if len2 <= 0.0 {
+        return 0.0;
+    }
+    // Where the edge crosses the surface, along the edge. A crossing at a vertex or along an
+    // edge shared by two triangles is found twice (or more); merges of neighbours leave the
+    // entry and exit of each chord as one pair each.
+    let mut hits: Vec<f64> = tb.iter().filter_map(|t| contact_sweep::segment_hits_triangle(p, q, t)).map(|h| (h - p).dot(d) / len2).collect();
+    if hits.len() < 2 {
+        return 0.0;
+    }
+    hits.sort_by(|x, y| x.total_cmp(y));
+    hits.dedup_by(|x, y| (*x - *y).abs() < 1e-6);
+    let mut best = 0.0;
+    for pair in hits.chunks(2) {
+        if pair.len() < 2 {
+            break;
+        }
+        let m = p + d * ((pair[0] + pair[1]) * 0.5);
+        let deep = tb.iter().map(|[a, b, c]| closest(m, *a, *b, *c).dist(m)).fold(f64::MAX, f64::min);
+        if deep > tol.max(best) && inside(m, tb) {
+            best = deep;
         }
     }
     best
@@ -326,7 +377,7 @@ fn drive_with_contact(s: &mut Session, want: &[(u64, Vec<f64>)], given: &BTreeSe
                 j.values = q;
             }
         }
-        resolve_holding(s, &held)
+        place_holding(s, &held)
     };
     // Loops already open at the start stay as they are; a loop the motion opens stops it.
     let open_at_start: BTreeSet<u64> = set(s, 0.0).conflicts.iter().map(|c| c.0).collect();
@@ -427,7 +478,7 @@ fn new_set(s: &mut Session, p: &Value) -> Result<Value> {
     if s.doc.assembly.contact_sets.len() >= MAX_ITEMS {
         return Err(bad(cmd, "too many contact sets"));
     }
-    let id = next_id(s, cmd)?;
+    let id = s.doc_mut().allocate_id()?;
     let name = str_(p, "name").map(str::to_string).unwrap_or_else(|| format!("Contact Set{}", s.doc.assembly.contact_sets.len() + 1));
     let a = &mut s.doc_mut().assembly;
     a.contact_sets.push(ContactSet { id, name: name.clone(), occurrences: occ, suppressed: false });
@@ -535,9 +586,13 @@ fn study(s: &mut Session, p: &Value) -> Result<Value> {
             keys.push(StudyKey { joint, index, points });
         }
     }
-    let id = next_id(s, cmd)?;
-    let count = s.doc.assembly.studies.len();
-    let a = &mut s.doc_mut().assembly;
+    let doc = s.doc_mut();
+    let id = match existing {
+        Some(i) => doc.assembly.studies.get(i).ok_or_else(|| bad(cmd, "no such motion study"))?.id,
+        None => doc.allocate_id()?,
+    };
+    let count = doc.assembly.studies.len();
+    let a = &mut doc.assembly;
     let out = match existing.and_then(|i| a.studies.get_mut(i)) {
         Some(m) => {
             if let Some(n) = steps {
@@ -833,7 +888,16 @@ fn trace(s: &mut Session, p: &Value) -> Result<Value> {
 /// world, which no joint moves) with 3D Sketch on and the spline through the trace's points.
 fn keep_trace(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "motion.trace.keep";
-    let (mut points, mut out) = sample_trace(s, p, cmd)?;
+    let source = if bool_(p, "auto_update") != Some(false) { Some(associative::source(s, p, cmd)?) } else { None };
+    let (mut points, out) = sample_trace(s, p, cmd)?;
+    finish_trace(&mut points);
+    if points.len() < 2 {
+        return Err(bad(cmd, "the point does not move: there is no trace to keep"));
+    }
+    keep_sampled_trace(s, p, cmd, points, out, source)
+}
+
+fn finish_trace(points: &mut Vec<Vec3>) {
     // Where the motion stood still (at a limit or a stop), one fit point.
     points.dedup_by(|a, b| a.dist(*b) < 1e-6);
     // A full cycle comes back to where it started (to the loop solver's tolerance): the spline
@@ -848,9 +912,16 @@ fn keep_trace(s: &mut Session, p: &Value) -> Result<Value> {
         }
         points.push(first);
     }
-    if points.len() < 2 {
-        return Err(bad(cmd, "the point does not move: there is no trace to keep"));
-    }
+}
+
+fn keep_sampled_trace(
+    s: &mut Session,
+    p: &Value,
+    cmd: &str,
+    points: Vec<Vec3>,
+    mut out: Value,
+    source: Option<solidcraft_doc::motion::MotionTrace>,
+) -> Result<Value> {
     let name = match str_(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
         Some(n) => n.to_string(),
         None => (1..=s.doc.features.len() + 1).map(|k| format!("Motion Trace{k}")).find(|n| s.doc.find_feature(n).is_none()).unwrap_or_default(),
@@ -871,15 +942,27 @@ fn keep_trace(s: &mut Session, p: &Value) -> Result<Value> {
     s.revision += 1;
     let (made, spline) = made?;
     let sketch = made.get("sketch").cloned().unwrap_or(Value::Null);
-    out["sketch"] = sketch;
+    out["sketch"] = sketch.clone();
     out["name"] = made.get("name").cloned().unwrap_or(Value::Null);
     out["curves"] = spline.get("curves").cloned().unwrap_or(Value::Null);
     out["points"] = json!(points.len());
+    if let Some(mut source) = source {
+        source.sketch = sketch.as_u64().ok_or_else(|| bad(cmd, "trace sketch is missing"))?;
+        source.wire = spline
+            .get("curves")
+            .and_then(Value::as_array)
+            .and_then(|v| v.first())
+            .and_then(Value::as_str)
+            .ok_or_else(|| bad(cmd, "trace curve is missing"))?
+            .to_string();
+        associative::remember(s, &source);
+        s.doc_mut().assembly.traces.push(source);
+    }
     Ok(out)
 }
 
 fn list_studies(s: &mut Session, _p: &Value) -> Result<Value> {
-    Ok(json!({"studies": s.doc.assembly.studies}))
+    Ok(json!({"studies": s.doc.assembly.studies, "traces": associative::list(s)}))
 }
 
 fn delete_study(s: &mut Session, p: &Value) -> Result<Value> {
@@ -953,7 +1036,7 @@ fn explode_create(s: &mut Session, p: &Value) -> Result<Value> {
     if s.doc.assembly.exploded.len() >= MAX_ITEMS {
         return Err(bad(cmd, "too many exploded views"));
     }
-    let id = next_id(s, cmd)?;
+    let id = s.doc_mut().allocate_id()?;
     let name = str_(p, "name").map(str::to_string).unwrap_or_else(|| format!("Exploded View{}", s.doc.assembly.exploded.len() + 1));
     s.doc_mut().assembly.exploded.push(ExplodedView { id, name: name.clone(), moves: moves.clone() });
     Ok(json!({"view": id, "name": name, "moves": moves.iter().map(|(o, t)| json!({"occurrence": o, "translate": t})).collect::<Vec<_>>()}))

@@ -15,7 +15,7 @@ files = sorted(glob.glob(d + '/svg/*/*.svg'))
 for path in Path(d).rglob('*'):
     if not path.is_file(): continue
     rel = path.relative_to(d).as_posix()
-    allowed = (rel in {'palette.toml', 'aliases.toml', 'review.json', 'references.toml'}
+    allowed = (rel in {'palette.toml', 'aliases.toml', 'review.json', 'references.toml', 'requested_icons.txt'}
                or path.suffix == '.md'
                or (rel.startswith('svg/') and path.suffix == '.svg')
                or (path.parent in {Path(d) / 'tools', Path(d) / 'tools/author'} and path.suffix == '.py')
@@ -79,6 +79,36 @@ if os.path.exists(references):
             if name not in names and name not in al: err(references, name + ': reference artwork is missing')
 for message in icon_palette.validation_errors(pal, names | set(al)):
     err(d + '/palette.toml', message)
+# the review page lies its icons on the real app surfaces: its colours must be the app's tokens
+def app_tokens():
+    src = open(os.path.join(d, '..', '..', '..', 'styles', 'ui', 'palettes.rs'), encoding='utf-8').read()
+    lo, hi = src.index('pub const fn light'), src.index('pub const fn dark')
+    light_src, dark_src = src[lo:hi], src[hi:]
+    def pick(block, name, dark):
+        pat = (r'\bt\.%s = Color32::from_rgb\((\d+), (\d+), (\d+)\)' if dark else r'\b%s: Color32::from_rgb\((\d+), (\d+), (\d+)\)') % name
+        m = re.search(pat, block)
+        return None if not m else '#%02x%02x%02x' % tuple(int(x) for x in m.groups())
+    out = {}
+    for name in ('toolbar', 'panel', 'border', 'text', 'text_dim', 'viewport_top'):
+        out[name] = (pick(light_src, name, False), pick(dark_src, name, True) or pick(light_src, name, False))
+    return out
+css_path = os.path.join(d, 'tools', 'review', 'review.css')
+if os.path.exists(css_path):
+    try:
+        tok = app_tokens()
+        css = open(css_path, encoding='utf-8').read()
+        want = {
+            ':root{': {'--bg': tok['panel'][0], '--fg': tok['text'][0], '--card': tok['toolbar'][0], '--line': tok['border'][0], '--mut': tok['text_dim'][0]},
+            'body.dark{': {'--bg': tok['viewport_top'][1], '--fg': tok['text'][1], '--card': tok['toolbar'][1], '--line': tok['border'][1], '--mut': tok['text_dim'][1]},
+        }
+        for block, values in want.items():
+            line = next((l for l in css.split('\n') if l.startswith(block)), '')
+            for var, hexv in values.items():
+                m = re.search(re.escape(var) + r':(#[0-9a-fA-F]{6})', line)
+                if not m or m.group(1).lower() != hexv:
+                    err(css_path, '%s%s is %s, the app token is %s (palettes.rs)' % (block, var, m.group(1) if m else 'missing', hexv))
+    except (OSError, ValueError) as e:
+        err(css_path, 'cannot compare with palettes.rs: %s' % e)
 # an icon accepted as final on the review page must not change (un-accept it there to work on it again)
 import json, review_state
 rp = d + '/review.json'

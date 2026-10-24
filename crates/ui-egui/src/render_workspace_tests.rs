@@ -146,10 +146,10 @@ fn clicked_image_controls_complete_cancel_and_export_without_dirtying_the_design
         let mut h = Harness::new();
         h.app.preferences.language = language.into();
         h.frames(1);
-        let check = h.app.tr("render.image_check").to_string();
+        let check = h.app.tr("cmd.render_preflight").to_string();
         let start = h.app.tr("render.image_start").to_string();
         let export = h.app.tr("render.image_export").to_string();
-        let cancel = h.app.tr("render.image_cancel").to_string();
+        let cancel = h.app.tr("cmd.render_cancel").to_string();
         h.call("ui.resize", json!({"width":1600,"height":1400}));
         enter(&mut h.app, true).unwrap();
         h.app.render_workspace.view.draft.width = 16;
@@ -356,7 +356,7 @@ fn delayed_image_export_holds_its_document_without_changing_history() {
     let path = h.dir.join("delayed.png");
     let doc = h.app.session.doc.clone();
     let undo = h.app.session.undo.len();
-    let ctx = egui::Context::default();
+    let ctx = crate::fonts::test_context();
     let slot: Slot = Default::default();
     save(&mut h.app, &slot);
     export_image(&mut h.app, job, false);
@@ -384,7 +384,7 @@ fn delayed_image_export_cancel_and_overwrite_choice_preserve_existing_files() {
     let path = h.dir.join("existing.png");
     std::fs::write(&path, b"existing contents").unwrap();
     let doc = h.app.session.doc.clone();
-    let ctx = egui::Context::default();
+    let ctx = crate::fonts::test_context();
     let slot: Slot = Default::default();
     save(&mut h.app, &slot);
     export_image(&mut h.app, job, false);
@@ -409,7 +409,7 @@ fn delayed_image_export_never_substitutes_a_newer_retained_image() {
     use crate::picker_test_support::{Slot, save};
     let (mut h, job) = async_export_fixture();
     let path = h.dir.join("old-image.png");
-    let ctx = egui::Context::default();
+    let ctx = crate::fonts::test_context();
     let slot: Slot = Default::default();
     save(&mut h.app, &slot);
     export_image(&mut h.app, job, false);
@@ -431,7 +431,7 @@ fn delayed_image_export_holds_close_and_new_document_until_cancel() {
     use crate::picker_test_support::{Slot, save};
     let (mut h, job) = async_export_fixture();
     let path = h.dir.join("closed.png");
-    let ctx = egui::Context::default();
+    let ctx = crate::fonts::test_context();
     let slot: Slot = Default::default();
     save(&mut h.app, &slot);
     export_image(&mut h.app, job, false);
@@ -463,7 +463,7 @@ fn delayed_image_export_refuses_an_internally_replaced_document_even_with_overwr
         let changed = h.app.session.doc.clone();
         let history = (h.app.session.undo.len(), h.app.session.revision);
         *slot.borrow_mut() = Some(Some(path.to_string_lossy().into_owned()));
-        crate::file_picker::tick(&mut h.app, &egui::Context::default());
+        crate::file_picker::tick(&mut h.app, &crate::fonts::test_context());
         assert_eq!(std::fs::read(path).unwrap(), b"keep this file");
         assert!(Arc::ptr_eq(&changed, &h.app.session.doc));
         assert_eq!((h.app.session.undo.len(), h.app.session.revision), history);
@@ -521,7 +521,7 @@ fn render_preview_navigates_like_the_modelling_viewport_in_every_preset() {
     let arounds = [crate::prefs::OrbitAround::ViewCentre, crate::prefs::OrbitAround::Cursor, crate::prefs::OrbitAround::Origin];
     for preset in crate::prefs::NAV_PRESETS.iter().map(|p| p.id) {
         for around in arounds {
-            let (design_ctx, render_ctx) = (egui::Context::default(), egui::Context::default());
+            let (design_ctx, render_ctx) = (crate::fonts::test_context(), crate::fonts::test_context());
             let mut design = nav_app(false, preset, around);
             let mut render = nav_app(true, preset, around);
             let (mut design_time, mut render_time) = (0.0, 0.0);

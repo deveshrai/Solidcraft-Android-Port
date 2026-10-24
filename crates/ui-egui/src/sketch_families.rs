@@ -44,21 +44,34 @@ pub fn family(id: &str) -> Option<&'static Family> {
     FAMILIES.iter().find(|f| f.commands.contains(&id))
 }
 
-/// UI state only, swapped with document tabs; never dirties the model or its undo history.
-#[derive(Clone, Debug, Default)]
-pub struct Choices(BTreeMap<&'static str, &'static str>);
+/// The variant last started in each family. A user preference, so it survives new and opened
+/// designs and restarts; it never dirties the model or its undo history. Keys are family labels,
+/// values command ids; anything that is not a variant of its family is ignored when read.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct Choices(BTreeMap<String, String>);
 
 impl Choices {
     pub fn remember(&mut self, id: &str) {
         if let Some(f) = family(id)
             && let Some(id) = f.commands.iter().find(|c| **c == id)
         {
-            self.0.insert(f.label, id);
+            self.0.insert(f.label.to_string(), (*id).to_string());
         }
     }
 
     pub fn selected(&self, f: &Family) -> Option<&'static CommandSpec> {
-        self.0.get(f.label).copied().or_else(|| f.commands.first().copied()).and_then(solidcraft_engine::find_command)
+        let saved = self.0.get(f.label).and_then(|s| f.commands.iter().find(|c| **c == s.as_str()));
+        saved.or_else(|| f.commands.first()).copied().and_then(solidcraft_engine::find_command)
+    }
+
+    /// What a family's main button or shortcut starts: its remembered variant when `id` is the
+    /// family's default command (the one carrying the shortcut), otherwise `id` itself.
+    pub fn resolve(&self, id: &'static str) -> &'static str {
+        match family(id) {
+            Some(f) if f.commands.first().copied() == Some(id) => self.selected(f).map_or(id, |c| c.id),
+            _ => id,
+        }
     }
 }
 
@@ -92,5 +105,39 @@ mod tests {
         ] {
             assert_eq!(choices.selected(family(id).unwrap()).unwrap().id, expected);
         }
+    }
+
+    #[test]
+    fn rectangle_comes_back_in_the_variant_last_used_and_it_survives_a_prefs_reload() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("sketch.create", serde_json::json!({"plane":"XY"})).unwrap();
+        h.app.start("sketch.rectangle.three_point");
+        h.settle();
+        assert_eq!(h.app.tool.as_ref().map(|t| t.cmd), Some("sketch.rectangle.three_point"));
+        h.app.tool = None;
+        // The main button and the shortcut both start the family's default command.
+        let rect = family("sketch.rectangle.two_point").unwrap();
+        assert_eq!(h.app.preferences.sketch_variants.selected(rect).unwrap().id, "sketch.rectangle.three_point");
+        assert_eq!(h.app.preferences.sketch_variants.resolve("sketch.rectangle.two_point"), "sketch.rectangle.three_point");
+        h.app.start(h.app.preferences.sketch_variants.resolve("sketch.rectangle.two_point"));
+        assert_eq!(h.app.tool.as_ref().map(|t| t.cmd), Some("sketch.rectangle.three_point"));
+        // Another family is untouched, and a non-default variant is never rewritten.
+        assert_eq!(h.app.preferences.sketch_variants.resolve("sketch.circle.center"), "sketch.circle.center");
+        assert_eq!(h.app.preferences.sketch_variants.resolve("sketch.rectangle.center"), "sketch.rectangle.center");
+        // A new design keeps it; so does a restart.
+        let mut restored = crate::SolveApp::new(Default::default(), Default::default());
+        restored.load_prefs(&h.app.prefs());
+        assert_eq!(restored.preferences.sketch_variants.resolve("sketch.rectangle.two_point"), "sketch.rectangle.three_point");
+    }
+
+    #[test]
+    fn old_or_damaged_prefs_fall_back_to_each_familys_first_variant() {
+        let mut app = crate::SolveApp::new(Default::default(), Default::default());
+        app.load_prefs(r#"{"preferences":{"save_mesh_format":"3mf"}}"#);
+        assert_eq!(app.preferences.sketch_variants.resolve("sketch.rectangle.two_point"), "sketch.rectangle.two_point");
+        app.load_prefs(r#"{"preferences":{"sketch_variants":{"Rectangle":"sketch.circle.center","Gone":"x"}}}"#);
+        assert_eq!(app.preferences.sketch_variants.resolve("sketch.rectangle.two_point"), "sketch.rectangle.two_point");
+        app.load_prefs(r#"{"preferences":{"sketch_variants":7}}"#);
+        assert_eq!(app.preferences.sketch_variants.resolve("sketch.polygon.inscribed"), "sketch.polygon.inscribed");
     }
 }

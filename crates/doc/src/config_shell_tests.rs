@@ -180,6 +180,9 @@ fn shell_planar_format13_keeps_v12_documents_and_refuses_future() {
     assert_eq!(current["format"], crate::format::format_string(crate::format::FORMAT));
     current["format"] = json!("solidcraft/12");
     crate::format::pieces_in_shell_order(&mut legacy["features"]);
+    for f in legacy["features"].as_array_mut().into_iter().flatten() {
+        f["kernel_piece_order"] = json!(true);
+    }
     assert_eq!(legacy, current, "the migration preserves every prior field");
     legacy["format"] = json!(crate::format::format_string(crate::format::FORMAT + 1));
     assert!(crate::format::read(&legacy.to_string()).is_err());

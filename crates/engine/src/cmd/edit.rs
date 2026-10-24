@@ -39,13 +39,13 @@ pub static COMMANDS: &[CommandSpec] = &[
         .doc_only()
         .params("features?: [id|name], groups?: [ids], group?: id (omit or null to move to the timeline root)"),
     CommandSpec::new("timeline.move_many", "Move Timeline Items", move_many).icon("reorder").params(
-        "features?: [id|name], groups?: [folder ids], group?: folder id, position: insertion slot; atomically changes folder membership and moves all selected contents as one block",
+        "features?: [id|name], groups?: [folder ids], group?: folder id, position: insertion slot, active?: bool (true = the moved contents end up before the history marker, false = behind it; other features keep their state); atomically changes folder membership and moves all selected contents as one block",
     ),
     CommandSpec::new("timeline.rollback", "Move Timeline Marker", rollback).icon("rollback").params("position: number of features to keep active, or \"end\" (omit = end)"),
-    CommandSpec::new("timeline.roll_to", "Roll History Marker", rollback).icon("rollback")
+    CommandSpec::new("timeline.roll_to", "Roll History Marker", roll_to).icon("rollback")
         .params("position: number of features to keep active, or \"end\" (omit = end) | feature: id|name (the marker goes right after it)"),
     CommandSpec::new("timeline.reorder", "Reorder Feature", reorder).icon("reorder")
-        .params("feature: id|name, position: its new index; refused when a feature that worked would fail"),
+        .params("feature: id|name, position: its new index, active?: bool (true = it ends up before the history marker, false = behind it; other features keep their state); refused when a feature that worked would fail"),
     CommandSpec::new("timeline.reorder_many", "Reorder Features", reorder_many).icon("reorder").params(
         "features: [id|name], position: insertion slot in the current history; selected features keep their relative order; refused when a feature that worked would fail",
     ),
@@ -330,15 +330,7 @@ fn group(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(cmd, "`name` must be 1…128 characters")),
         None => format!("Folder{}", s.doc.timeline_groups.len() + 1),
     };
-    let id = s
-        .doc
-        .timeline_groups
-        .iter()
-        .map(|group| group.id)
-        .max()
-        .unwrap_or(0)
-        .checked_add(1)
-        .ok_or_else(|| bad(cmd, "no more timeline folder ids are available"))?;
+    let id = s.doc_mut().allocate_id()?;
     let parent = match p.get("parent") {
         Some(Value::Null) | None => None,
         Some(_) => Some(timeline_group_id_field(s, p, "parent", cmd)?),
@@ -499,7 +491,9 @@ fn move_many(s: &mut Session, p: &Value) -> Result<Value> {
     }
     sort_group_features(&mut next);
     let slot = num(p, "position").map(|x| x.max(0.0) as usize).ok_or_else(|| bad(cmd, "`position` must be a number"))?;
-    let (next, ordered) = reorder_features(s, next, &moving, slot, cmd)?;
+    let active = active_param(p, cmd)?;
+    let (mut next, ordered) = reorder_features(s, next, &moving, slot, cmd)?;
+    place_marker(s, &mut next, &moving, active, cmd)?;
     if next != *s.doc {
         *s.doc_mut() = next;
     }
@@ -507,10 +501,19 @@ fn move_many(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn rollback(s: &mut Session, p: &Value) -> Result<Value> {
+    move_marker(s, p, "timeline.rollback")
+}
+
+fn roll_to(s: &mut Session, p: &Value) -> Result<Value> {
+    move_marker(s, p, "timeline.roll_to")
+}
+
+/// `timeline.rollback` and `timeline.roll_to`, refusing in the name of the one asked for (#4712).
+fn move_marker(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let n = s.doc.features.len();
     let pos = match p.get("feature") {
         Some(f) => {
-            let id = feature_id(s, Some(f), "timeline.roll_to")?;
+            let id = feature_id(s, Some(f), cmd)?;
             s.doc.feature_index(id).map(|i| i + 1)
         }
         // A number of features, or "end" (as omitting it); anything else is refused rather than
@@ -521,7 +524,13 @@ fn rollback(s: &mut Session, p: &Value) -> Result<Value> {
             Some(v) => {
                 let x = v.as_f64().or_else(|| v.as_str().and_then(|t| t.trim().parse::<f64>().ok())).and_then(crate::params::finite);
                 let why = "`position` must be a number of features to keep active, or \"end\"";
-                Some(x.map(|x| x.max(0.0) as usize).ok_or_else(|| bad("timeline.roll_to", why))?)
+                let x = x.ok_or_else(|| bad(cmd, why))?;
+                // A negative position was taken as 0, rolling the whole timeline back: an agent
+                // meaning "one step back" by -1 lost every body without a word (#4712).
+                if x < 0.0 {
+                    return Err(bad(cmd, format!("`position` {x} is negative: it counts the features to keep active, 0 to {n} (or \"end\")")));
+                }
+                Some(x as usize)
             }
         },
     };
@@ -1065,7 +1074,8 @@ fn reorder(s: &mut Session, p: &Value) -> Result<Value> {
     let n = s.doc.features.len();
     let to = num(p, "position").map(|x| x.max(0.0) as usize).ok_or_else(|| bad(cmd, "`position` must be a number"))?.min(n.saturating_sub(1));
     let from = s.doc.feature_index(id).ok_or_else(|| bad(cmd, "feature"))?;
-    if from == to {
+    let active = active_param(p, cmd)?;
+    if from == to && active.is_none() {
         return Ok(json!({"feature": id, "position": to}));
     }
     let mut next = (*s.doc).clone();
@@ -1075,15 +1085,44 @@ fn reorder(s: &mut Session, p: &Value) -> Result<Value> {
     sort_group_features(&mut next);
     require_contiguous_groups(&next, cmd)?;
     // Everything that evaluated before must still evaluate.
-    let mut after = solidcraft_doc::Model::new();
+    let mut after = s.model.clone();
     after.evaluate(&next);
     let broken = newly_broken(&s.model, &after);
     if !broken.is_empty() {
         let list: Vec<String> = broken.iter().map(|(n, e)| format!("{n} ({e})")).collect();
         return Err(bad(cmd, format!("moving {name} there breaks {}", list.join("; "))));
     }
-    *s.doc_mut() = next;
+    place_marker(s, &mut next, &[id], active, cmd)?;
+    if next != *s.doc {
+        *s.doc_mut() = next;
+    }
     Ok(json!({"feature": id, "position": to}))
+}
+
+/// The optional `active` of a move: whether the moved features end up before the history marker.
+fn active_param(p: &Value, cmd: &str) -> Result<Option<bool>> {
+    match p.get("active") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(active)) => Ok(Some(*active)),
+        Some(_) => Err(bad(cmd, "`active` must be true or false")),
+    }
+}
+
+/// With `active` given, put the history marker of the reordered `next` so the `moving` features
+/// are active (before it) or rolled back (behind it) while every other feature keeps its state, in
+/// the same step as the move. Refused when `position` puts them on the other side of it.
+fn place_marker(s: &Session, next: &mut solidcraft_doc::Document, moving: &[u64], active: Option<bool>, cmd: &str) -> Result<()> {
+    let Some(active) = active else { return Ok(()) };
+    let n = s.doc.features.len();
+    let was_active: std::collections::BTreeSet<u64> = s.doc.features.iter().take(s.doc.marker.unwrap_or(n)).map(|feature| feature.id).collect();
+    let stays_active = |id: u64| if moving.contains(&id) { active } else { was_active.contains(&id) };
+    let count = next.features.iter().filter(|feature| stays_active(feature.id)).count();
+    if !next.features.iter().take(count).all(|feature| stays_active(feature.id)) {
+        let side = if active { "before" } else { "behind" };
+        return Err(bad(cmd, format!("`position` is not {side} the history marker, as `active: {active}` asks")));
+    }
+    next.marker = (count < next.features.len()).then_some(count);
+    Ok(())
 }
 
 fn reorder_many(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1253,6 +1292,11 @@ fn redefine(s: &mut Session, p: &Value) -> Result<Value> {
     if std::mem::discriminant(&new.kind) != std::mem::discriminant(&old.kind) && !(boundary(&new.kind) && boundary(&old.kind)) {
         return Err(bad(cmd, format!("{} is not a {} feature", old.name, cid)));
     }
+    // The trial still holds the old feature, so a plane offset from its own name was made there,
+    // and once swapped in it would be built on itself (#3567).
+    if new.kind.names_feature(&old.name) {
+        return Err(bad(cmd, format!("{} can't be built on itself: pick another plane or face", old.name)));
+    }
     // Optional inputs can move other inputs' positions (e.g. Distance 2 goes before Taper).
     // Keep each existing model parameter attached to its semantic input, rather than its
     // old index. Constructor-assigned names for new inputs cannot reuse the old dimensions.
@@ -1338,7 +1382,10 @@ fn dependents(s: &mut Session, p: &Value) -> Result<Value> {
     let id = feature_id(s, p.get("feature"), cmd)?;
     let mut next = (*s.doc).clone();
     let gone = next.delete_feature(id)?;
-    let mut after = solidcraft_doc::Model::new();
+    // On a copy of the session's model, which shares its evaluation cache (#2678): the features
+    // before this one are reused rather than recomputed, and the delete that usually follows
+    // finds the ones after it already computed.
+    let mut after = s.model.clone();
     after.evaluate(&next);
     let names = |ids: &[u64]| -> Vec<String> { ids.iter().filter(|x| **x != id).filter_map(|x| s.doc.feature(*x).map(|f| f.name.clone())).collect() };
     let broken: Vec<String> = newly_broken(&s.model, &after).into_iter().map(|(n, _)| n).collect();

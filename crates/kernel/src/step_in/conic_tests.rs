@@ -18,6 +18,47 @@ const CONTEXT: &str = "#90=ADVANCED_BREP_SHAPE_REPRESENTATION('',(#81),#91);\n#9
 /// Height of the cone pieces: the 45° cone `x² + y² = z²` up to `z = H`.
 const H: f64 = 10.0;
 
+#[test]
+fn extruded_ellipse_seam_uses_profile_angles_for_oblique_sweeps() {
+    use mt::{MetricSpace, ParametricSurface};
+
+    let text = format!(
+        "{HEAD}
+#1=CARTESIAN_POINT('',(10.,-20.,3.));
+#2=DIRECTION('',(0.,0.,1.));
+#3=DIRECTION('',(1.,0.,0.));
+#4=AXIS2_PLACEMENT_3D('',#1,#2,#3);
+#5=ELLIPSE('',#4,9.,4.);
+#6=DIRECTION('',(0.5,0.25,1.));
+#7=VECTOR('',#6,1.);
+#8=SURFACE_OF_LINEAR_EXTRUSION('',#5,#7);
+{TAIL}"
+    );
+    let ex = p21::parse(&text).unwrap();
+    let cx = Ctx { ex: &ex, len: 1.0, ang: 1.0, tol: 1e-6, snap: 1e-6 };
+    let origin = mt::Point3::new(10.0, -20.0, 3.0);
+    let d = mt::Vector3::new(0.5, 0.25, 1.0).normalize();
+    let point = |angle: f64, h: f64| origin + mt::Vector3::new(9.0 * angle.cos(), 4.0 * angle.sin(), 0.0) + d * h;
+    let extent: Vec<_> = [-0.04, 0.0, 0.04].into_iter().flat_map(|a| [point(a, 0.0), point(a, 10.0)]).collect();
+    for seam in [Vec::new(), vec![point(-0.04, 0.0), point(-0.04, 10.0)]] {
+        let surface = geom::surface(&cx, 8, &extent, &seam, true, 0).unwrap();
+        for i in 0..=16 {
+            for j in 0..=4 {
+                let q = surface.subs(i as f64 / 16.0, j as f64 / 4.0) - origin;
+                let q = q - d * (q.z / d.z);
+                assert!(((q.x / 9.0).powi(2) + (q.y / 4.0).powi(2) - 1.0).abs() < 1e-12);
+            }
+        }
+        let start = surface.subs(0.0, 0.5);
+        let q = start - d * ((start.z - origin.z) / d.z);
+        if seam.is_empty() {
+            assert!(q.distance(point(std::f64::consts::PI, 0.0)) < 1e-9);
+        } else {
+            assert!(q.distance(point(-0.04, 0.0)) < 1e-9);
+        }
+    }
+}
+
 fn rel(a: f64, b: f64) -> f64 {
     (a - b).abs() / b.abs().max(1e-9)
 }
@@ -193,5 +234,42 @@ fn hostile_conics_never_panic() {
         if let Ok(imp) = r {
             assert!(!imp.warnings.is_empty(), "a broken conic imported silently");
         }
+    }
+}
+
+/// A cone to a point written with no vertex at its point (#258): the cone face's only loop is
+/// its base circle, or that circle and a VERTEX_LOOP at the point, which has no edges. It was
+/// read as a sliver at the base and the solid came in as a flat disc; the face reaches the
+/// point now.
+#[test]
+fn a_cone_bounded_only_by_its_base_circle_reaches_its_point() {
+    let (r, h) = (6.0f64, 15.0f64);
+    for apex_loop in [false, true] {
+        let mut t = String::from(HEAD);
+        t += "#1=CARTESIAN_POINT('',(0.,0.,0.));\n#2=DIRECTION('',(0.,0.,-1.));\n#3=DIRECTION('',(1.,0.,0.));\n#4=AXIS2_PLACEMENT_3D('',#1,#2,#3);\n";
+        t += &format!("#5=CONICAL_SURFACE('',#4,{r:.1},{:.15});\n", (r / h).atan());
+        t += "#6=DIRECTION('',(0.,0.,1.));\n#7=AXIS2_PLACEMENT_3D('',#1,#6,#3);\n#8=PLANE('',#7);\n";
+        t += &format!("#9=CIRCLE('',#7,{r:.1});\n#10=CARTESIAN_POINT('',({r:.1},0.,0.));\n#11=VERTEX_POINT('',#10);\n");
+        t += "#12=EDGE_CURVE('',#11,#11,#9,.T.);\n";
+        t += "#20=ORIENTED_EDGE('',*,*,#12,.F.);\n#21=EDGE_LOOP('',(#20));\n#22=FACE_OUTER_BOUND('',#21,.T.);\n#23=ADVANCED_FACE('',(#22),#8,.F.);\n";
+        t += "#30=ORIENTED_EDGE('',*,*,#12,.T.);\n#31=EDGE_LOOP('',(#30));\n#32=FACE_OUTER_BOUND('',#31,.T.);\n";
+        if apex_loop {
+            t += &format!(
+                "#33=CARTESIAN_POINT('',(0.,0.,{h:.1}));\n#34=VERTEX_POINT('',#33);\n#35=VERTEX_LOOP('',#34);\n#36=FACE_BOUND('',#35,.T.);\n"
+            );
+            t += "#37=ADVANCED_FACE('',(#32,#36),#5,.T.);\n";
+        } else {
+            t += "#37=ADVANCED_FACE('',(#32),#5,.T.);\n";
+        }
+        t += "#80=CLOSED_SHELL('',(#23,#37));\n#81=MANIFOLD_SOLID_BREP('Cone',#80);\n";
+        t += CONTEXT;
+        t += TAIL;
+        let imp = step_import(&t).unwrap();
+        let body = &imp.bodies[0].body;
+        let m = measure(body).unwrap();
+        let exact = PI * r * r * h / 3.0;
+        assert!(rel(m.volume, exact) < 2e-3, "vertex loop {apex_loop}: volume {} vs {exact}", m.volume);
+        let top = body.tessellate(0.01).unwrap().positions.iter().map(|p| p.z).fold(f64::MIN, f64::max);
+        assert!((top - h).abs() < 1e-6, "vertex loop {apex_loop}: reaches z = {top}, not {h}");
     }
 }

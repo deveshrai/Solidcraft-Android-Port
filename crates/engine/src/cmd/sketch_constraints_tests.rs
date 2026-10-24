@@ -156,6 +156,35 @@ fn auto_constrain_fully_constrains_a_rough_sketch() {
 }
 
 #[test]
+fn internal_freedom_queries_skip_redundancy_and_keep_constraint_acceptance() {
+    use solidcraft_sketch::{ConstraintKind, Sketch, profiling::capture};
+
+    let mut sk = Sketch::new();
+    let q = sk.add_point(Vec2::new(10.0, 2.0), None).unwrap();
+    let k = ConstraintKind::Distance { p: 0, q, value: 10.0 };
+    sk.add_constraint(k.clone(), None).unwrap();
+    let redundant = sk.add_constraint(k.clone(), None).unwrap();
+    let (dof, profile) = capture(|| super::dof_now(&sk));
+    assert_eq!(dof, 1);
+    assert_eq!(profile.counters.redundancy_checks, 0);
+
+    let mut doc = solidcraft_doc::Document::default();
+    let before = sk.clone();
+    let (rejected, profile) = capture(|| super::try_add(&mut sk, &mut doc, k, dof, false));
+    assert_eq!(rejected, None, "a duplicate must not be accepted as a DOF reduction");
+    assert_eq!(sk, before);
+    assert_eq!(profile.counters.redundancy_checks, 0);
+
+    let (accepted, profile) = capture(|| super::try_add(&mut sk, &mut doc, ConstraintKind::DistanceX { p: 0, q, value: 6.0 }, dof, false));
+    assert_eq!(accepted, Some(0));
+    assert_eq!(profile.counters.redundancy_checks, 0);
+    let full = solidcraft_sketch::solve(&mut sk);
+    assert!(full.ok());
+    assert_eq!(full.dof, 0);
+    assert!(full.redundant.contains(&redundant), "the final full report must retain diagnostics");
+}
+
+#[test]
 fn drawing_infers_tangent_and_perpendicular() {
     let mut s = new_sketch();
     let l1 = ids(&run(&mut s, "sketch.line", json!({"points": [[0, 0], [10, 10]], "infer": true}))["curves"])[0].clone();
@@ -190,6 +219,32 @@ fn smart_constrain_and_driven_toggle() {
     assert!(s.doc.param(d["param"].as_str().unwrap()).is_none(), "the parameter goes");
     let r = run(&mut s, "sketch.toggle_driven", json!({"constraint": did}));
     assert_eq!(r["driven"], false);
+}
+
+/// #4691: a point put on a line's midpoint snap is held there (a MidPoint constraint), and one
+/// put on a curve stays on it, as a line's end does: they no longer move freely.
+#[test]
+fn a_point_on_a_midpoint_or_a_curve_snap_is_held_there() {
+    let mut s = new_sketch();
+    let l = ids(&run(&mut s, "sketch.line", json!({"points": [[0, 0], [20, 0]]}))["curves"])[0].clone();
+    let m = run(&mut s, "sketch.point", json!({"point": format!("mid:{l}")}))["point"].as_str().unwrap().to_string();
+    let on = run(&mut s, "sketch.point", json!({"point": format!("on:{l}:5,0.2")}))["point"].as_str().unwrap().to_string();
+    let si = run(&mut s, "sketch.inspect", json!({}));
+    let names: Vec<&str> = si["constraints"].as_array().unwrap().iter().filter_map(|c| c["name"].as_str()).collect();
+    assert!(names.contains(&"MidPoint") && names.contains(&"Coincident"), "{si}");
+    // Lengthen the line: the midpoint's point follows the middle, the other stays on the line.
+    run(&mut s, "sketch.move_point", json!({"point": format!("{l}.end"), "to": [40, 0]}));
+    let sk = sketch(&s);
+    let at = |id: &str| sk.resolve_point(id).and_then(|i| sk.point(i)).unwrap();
+    assert!(at(&m).dist(Vec2::new(20.0, 0.0)) < 1e-7, "{:?}", at(&m));
+    assert!(at(&on).y.abs() < 1e-7, "{:?}", at(&on));
+    // A snap that can't be read is refused and makes nothing (it was answered as a point).
+    let points = sk.points.len();
+    for bad in ["on:c1:abc", "on:c1", "on:c1:1,2,3", "on:l1:1"] {
+        let e = s.execute("sketch.point", &json!({"point": bad.replace("l1", &l)})).unwrap_err().to_string();
+        assert!(e.contains("is not a snap it takes"), "{bad}: {e}");
+    }
+    assert_eq!(sketch(&s).points.len(), points, "nothing made");
 }
 
 #[test]
@@ -285,6 +340,47 @@ fn an_angle_between_lines_takes_the_reading_nearest_its_value_and_reports_degree
 }
 
 #[test]
+fn an_angle_between_two_lines_from_one_point_measures_the_angle_between_them() {
+    // #2724: two radii of a circle 120° apart measured 60°, and 150° apart 30°.
+    for deg in [30.0_f64, 60.0, 90.0, 120.0, 150.0] {
+        let far = [20.0 * deg.to_radians().cos(), 20.0 * deg.to_radians().sin()];
+        // Both drawn out from the centre, the second drawn in towards it, or a corner.
+        let shapes = [
+            vec![json!([[0, 0], [20, 0]]), json!([[0, 0], far])],
+            vec![json!([[0, 0], [20, 0]]), json!([far, [0, 0]])],
+            vec![json!([[20, 0], [0, 0], far])],
+        ];
+        for (i, lines) in shapes.iter().enumerate() {
+            let mut s = new_sketch();
+            for pts in lines {
+                run(&mut s, "sketch.line", json!({"points": pts, "connect": false}));
+            }
+            let d = run(&mut s, "sketch.dimension", json!({"entities": ["l1", "l2"]}));
+            assert!((d["measured"].as_f64().unwrap() - deg).abs() < 1e-4, "{deg}° shape {i}: {d}");
+        }
+        // A value turns the corner's sides to it, keeping them on the same side of each other.
+        let mut s = new_sketch();
+        run(&mut s, "sketch.line", json!({"points": [[20, 0], [0, 0], far], "connect": false}));
+        let want = deg + 10.0;
+        let d = run(&mut s, "sketch.dimension", json!({"entities": ["l1", "l2"], "value": format!("{want} deg")}));
+        assert!((d["measured"].as_f64().unwrap() - want).abs() < 1e-6, "{deg}°: {d}");
+        let sk = sketch(&s);
+        let line = |l: &str| crate::cmd::sketch::line_pts(&sk, sk.curve_index(l).unwrap()).unwrap();
+        let ((a0, a1), (b0, b1)) = (line("l1"), line("l2"));
+        assert!(a1.dist(b0) < 1e-9, "the corner stays joined");
+        let (ra, rb) = (a0 - a1, b1 - b0);
+        let between = ra.cross(rb).abs().atan2(ra.dot(rb)).to_degrees();
+        assert!((between - want).abs() < 1e-6, "{deg}°: the sides are {between}° apart");
+    }
+    // Lines that share no end keep the acute reading.
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [20, 0]], "connect": false}));
+    run(&mut s, "sketch.line", json!({"points": [[30, 10], [40, 27.3205]], "connect": false}));
+    let d = run(&mut s, "sketch.dimension", json!({"entities": ["l1", "l2"]}));
+    assert!((d["measured"].as_f64().unwrap() - 60.0).abs() < 1e-3, "{d}");
+}
+
+#[test]
 fn symmetry_moves_a_free_line_between_two_fixed_lines() {
     // #1796: with both mirrored lines fixed, the symmetry line between them (a free construction
     // line) is the one to move; it was refused as "neither entity can move".
@@ -302,4 +398,571 @@ fn symmetry_moves_a_free_line_between_two_fixed_lines() {
     for (end, x) in [("left.start", 0.0), ("left.end", 0.0), ("right.start", 10.0), ("right.end", 10.0)] {
         assert!((at(end).x - x).abs() < 1e-9, "{end} moved to {:?}", at(end));
     }
+}
+
+/// A 20 x 10 rectangle (sides l1..l4; left = l4 and right = l2 run in opposite directions) and a
+/// free vertical line at x = -20 as the symmetry line (#2940, #2961).
+fn rectangle_and_axis(dimension_left: bool) -> (Session, Vec<String>) {
+    let mut s = new_sketch();
+    let r = run(&mut s, "sketch.rectangle.two_point", json!({"p0": [-12, 0], "p1": [8, 10]}));
+    let sides = ids(&r["curves"]);
+    run(&mut s, "sketch.line", json!({"points": [[-20, -5], [-20, 15]], "construction": true, "ids": ["axis"]}));
+    if dimension_left {
+        run(&mut s, "sketch.dimension", json!({"entities": [sides[3].clone()], "value": 10}));
+    }
+    (s, sides)
+}
+
+/// Both sides keep their `height` and their ends mirror in x about `axis_x`.
+fn assert_sides_mirror_with_height(s: &Session, left: &str, right: &str, axis_x: f64, height: f64) {
+    let sk = sketch(s);
+    let at = |r: String| sk.point(sk.resolve_point(&r).unwrap()).unwrap();
+    for side in [left, right] {
+        let (a, b) = (at(format!("{side}.start")), at(format!("{side}.end")));
+        assert!(((a.y - b.y).abs() - height).abs() < 1e-3, "{side} height {:?} {:?}", a, b);
+        assert!((a.x - b.x).abs() < 1e-7, "{side} not vertical: {:?} {:?}", a, b);
+    }
+    let (l, r) = (at(format!("{left}.start")), at(format!("{right}.start")));
+    assert!((l.x + r.x - 2.0 * axis_x).abs() < 1e-6, "sides not mirrored: {l:?} {r:?}");
+}
+
+#[test]
+fn symmetry_of_rectangle_sides_keeps_their_height() {
+    // #2940: the opposite sides of a rectangle run in opposite directions, so pairing their ends
+    // by index forced both heights to 0.
+    let (mut s, sides) = rectangle_and_axis(false);
+    run(&mut s, "sketch.constraint.symmetry", json!({"a": sides[3], "b": sides[1], "line": "axis"}));
+    assert_sides_mirror_with_height(&s, &sides[3], &sides[1], -20.0, 10.0);
+}
+
+#[test]
+fn symmetry_of_a_dimensioned_rectangle_side_is_accepted() {
+    // #2961: with a length on a side, the same symmetry was refused as "neither entity can move".
+    let (mut s, sides) = rectangle_and_axis(true);
+    run(&mut s, "sketch.constraint.symmetry", json!({"a": sides[3], "b": sides[1], "line": "axis"}));
+    assert_sides_mirror_with_height(&s, &sides[3], &sides[1], -20.0, 10.0);
+}
+
+#[test]
+fn symmetry_of_rectangle_sides_with_swapped_arguments() {
+    let (mut s, sides) = rectangle_and_axis(true);
+    run(&mut s, "sketch.constraint.symmetry", json!({"a": sides[1], "b": sides[3], "line": "axis"}));
+    assert_sides_mirror_with_height(&s, &sides[3], &sides[1], -20.0, 10.0);
+}
+
+#[test]
+fn symmetry_of_rectangle_sides_about_the_y_axis() {
+    let mut s = new_sketch();
+    let r = run(&mut s, "sketch.rectangle.two_point", json!({"p0": [-12, 0], "p1": [8, 10]}));
+    let sides = ids(&r["curves"]);
+    run(&mut s, "sketch.dimension", json!({"entities": [sides[3].clone()], "value": 10}));
+    run(&mut s, "sketch.constraint.symmetry", json!({"a": sides[3], "b": sides[1], "line": "y"}));
+    assert_sides_mirror_with_height(&s, &sides[3], &sides[1], 0.0, 10.0);
+}
+
+#[test]
+fn symmetry_slides_a_rectangle_whose_width_is_dimensioned() {
+    // #4030: with the width fixed, the second side can't move on its own and the axis never
+    // moves, so the symmetry was refused as "neither entity can move". The whole rectangle slides
+    // sideways instead, keeping its 42 mm width.
+    let mut s = new_sketch();
+    let r = run(&mut s, "sketch.rectangle.two_point", json!({"p0": [-19, -16], "p1": [23, 10], "construction": true}));
+    let sides = ids(&r["curves"]);
+    run(&mut s, "sketch.dimension", json!({"entities": [sides[0].clone()], "value": 42}));
+    run(&mut s, "sketch.constraint.symmetry", json!({"a": sides[3], "b": sides[1], "line": "y"}));
+    assert_sides_mirror_with_height(&s, &sides[3], &sides[1], 0.0, 26.0);
+    let sk = sketch(&s);
+    let at = |r: String| sk.point(sk.resolve_point(&r).unwrap()).unwrap();
+    let (l, r) = (at(format!("{}.start", sides[3])), at(format!("{}.start", sides[1])));
+    assert!((r.x - l.x - 42.0).abs() < 1e-6 && (l.x + 21.0).abs() < 1e-6, "sides at ±21: {l:?} {r:?}");
+}
+
+#[test]
+fn midpoint_alignment_persists_undoes_and_survives_endpoint_edits() {
+    use solidcraft_sketch::ConstraintKind;
+    for mode in ["horizontal", "vertical"] {
+        for reverse in [false, true] {
+            let mut s = new_sketch();
+            run(&mut s, "sketch.line", json!({"points":[[10,10],[30,20]],"infer":false,"connect":false}));
+            run(&mut s, "sketch.point", json!({"point":[24,40],"id":"target"}));
+            let before = s.doc.to_json();
+            let undo = s.undo.len();
+            let refs = if reverse { json!(["target",{"midpoint":"l1"}]) } else { json!([{"midpoint":"l1"},"target"]) };
+            let result = run(&mut s, "sketch.constraint.horizontal_vertical", json!({"points":refs,"mode":mode}));
+            assert_eq!(result["created"]["points"].as_array().unwrap().len(), 1);
+            assert_eq!(result["created"]["constraints"].as_array().unwrap().len(), 2);
+            assert_eq!(result["sketch"]["dof"], 5, "H/V removes one degree of freedom; the midpoint adds none");
+            assert!(result["created"]["curves"].as_array().unwrap().is_empty());
+            assert_eq!(s.undo.len(), undo + 1);
+            let after = s.doc.to_json();
+            run(&mut s, "edit.undo", json!({}));
+            assert_eq!(s.doc.to_json(), before);
+            run(&mut s, "edit.redo", json!({}));
+            assert_eq!(s.doc.to_json(), after);
+            let mut reopened = Session::new(solidcraft_doc::Document::from_json(&after).unwrap());
+            reopened.active_sketch = s.active_sketch;
+            for end in [[50., -15.], [-20., 65.]] {
+                run(&mut reopened, "sketch.move_point", json!({"point":"l1.end","to":end}));
+                let sk = sketch(&reopened);
+                let point = sk.point(sk.resolve_point("target").unwrap()).unwrap();
+                let mid = line_midpoint(&sk, "l1");
+                assert!((if mode == "horizontal" { point.y - mid.y } else { point.x - mid.x }).abs() < 1e-6);
+                assert_eq!(sk.points.len(), 5);
+            }
+            let sk = sketch(&reopened);
+            assert!(sk.constraints.iter().any(|c| matches!(c.kind, ConstraintKind::Midpoint { .. })));
+            assert!(sk.constraints.iter().any(|c| matches!(c.kind, ConstraintKind::HorizontalPoints { .. } | ConstraintKind::VerticalPoints { .. })));
+            run(&mut reopened, "sketch.delete", json!({"entities":["l1"]}));
+            assert!(!sketch(&reopened).constraints.iter().any(|c| matches!(c.kind, ConstraintKind::Midpoint { .. })));
+            assert!(sketch(&reopened).constraints.iter().any(|c| c.id == result["constraint"].as_str().unwrap()));
+        }
+    }
+}
+
+#[test]
+fn midpoint_alignment_rejects_invalid_or_conflicting_references_atomically() {
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points":[[10,10],[30,20]],"infer":false,"connect":false}));
+    run(&mut s, "sketch.circle.center", json!({"center":[40,50],"radius":3}));
+    run(&mut s, "sketch.constraint.fix", json!({"entities":["l1","c1"]}));
+    for points in [
+        json!([{"midpoint":"l1"},"c1.center"]),
+        json!([{"midpoint":"c1"},"origin"]),
+        json!([{"midpoint":"missing"},"origin"]),
+        json!([{"midpoint":"l1"},{"midpoint":"l1"}]),
+        json!([{"midpoint":12},"origin"]),
+        json!([{"midpoint":"l1"}]),
+        json!([{"midpoint":"l1"},"origin","c1.center"]),
+    ] {
+        let before = s.doc.to_json();
+        let undo = s.undo.len();
+        assert!(s.execute("sketch.constraint.horizontal_vertical", &json!({"points":points,"mode":"vertical"})).is_err(), "{points}");
+        assert_eq!(s.doc.to_json(), before);
+        assert_eq!(s.undo.len(), undo);
+    }
+}
+
+fn line_midpoint(sk: &solidcraft_sketch::Sketch, id: &str) -> Vec2 {
+    // Read the curve's current endpoints: after a corner cut an original endpoint
+    // id can still name the retained construction side's corner.
+    let solidcraft_sketch::CurveKind::Line { a, b } = sk.curves[sk.curve_index(id).unwrap()].kind else { panic!("expected line") };
+    (sk.point(a).unwrap() + sk.point(b).unwrap()) * 0.5
+}
+
+#[test]
+fn midpoint_alignment_reuses_associative_points_and_rejects_self_alignment() {
+    use solidcraft_sketch::ConstraintKind;
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points":[[10,10],[30,20]],"infer":false,"connect":false}));
+    // A drawing-time midpoint is an ordinary, reusable point too.
+    run(&mut s, "sketch.line", json!({"points":["mid:l1",[20,40]],"infer":false,"connect":false}));
+    run(&mut s, "sketch.point", json!({"point":[24,50],"id":"target"}));
+    let count = sketch(&s).points.len();
+    let result = run(&mut s, "sketch.constraint.horizontal_vertical", json!({"points":[{"midpoint":"l1"},"target"],"mode":"vertical"}));
+    assert!(result["created"]["points"].as_array().unwrap().is_empty());
+    assert_eq!(result["created"]["constraints"].as_array().unwrap().len(), 1);
+    let sk = sketch(&s);
+    assert_eq!(sk.points.len(), count);
+    assert_eq!(sk.constraints.iter().filter(|c| matches!(c.kind, ConstraintKind::Midpoint { .. })).count(), 1);
+    for refs in [json!([{"midpoint":"l1"},"l2.start"]), json!(["l2.start",{"midpoint":"l1"}])] {
+        let before = s.doc.to_json();
+        let undo = s.undo.len();
+        assert!(s.execute("sketch.constraint.horizontal_vertical", &json!({"points":refs})).is_err());
+        assert_eq!(s.doc.to_json(), before);
+        assert_eq!(s.undo.len(), undo);
+    }
+}
+
+#[test]
+fn midpoint_alignment_constraints_delete_independently_and_leave_the_point() {
+    use solidcraft_sketch::ConstraintKind;
+    for delete_midpoint in [false, true] {
+        let mut s = new_sketch();
+        run(&mut s, "sketch.line", json!({"points":[[10,10],[30,20]],"infer":false,"connect":false}));
+        run(&mut s, "sketch.point", json!({"point":[24,40],"id":"target"}));
+        run(&mut s, "sketch.constraint.fix", json!({"entity":"l1"}));
+        let result = run(&mut s, "sketch.constraint.horizontal_vertical", json!({"points":[{"midpoint":"l1"},"target"],"mode":"vertical"}));
+        let sk = sketch(&s);
+        let helper = result["created"]["points"][0].as_str().unwrap().to_string();
+        let mid = sk.constraints.iter().find(|c| matches!(c.kind, ConstraintKind::Midpoint { .. })).unwrap().id.clone();
+        let hv = result["constraint"].as_str().unwrap().to_string();
+        let deleted = if delete_midpoint { &mid } else { &hv };
+        let retained = if delete_midpoint { &hv } else { &mid };
+        let before = s.doc.to_json();
+        run(&mut s, "sketch.delete", json!({"entities":[deleted]}));
+        let sk = sketch(&s);
+        assert!(sk.resolve_point(&helper).is_some());
+        assert!(sk.constraints.iter().any(|c| &c.id == retained));
+        assert!(!sk.constraints.iter().any(|c| &c.id == deleted));
+        assert_eq!(sk.points.len(), 5);
+        let after = s.doc.to_json();
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(s.doc.to_json(), before);
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(s.doc.to_json(), after);
+        let mut reopened = Session::new(solidcraft_doc::Document::from_json(&after).unwrap());
+        reopened.active_sketch = s.active_sketch;
+        assert_eq!(sketch(&reopened).points.len(), 5);
+        if delete_midpoint {
+            // Once its defining relation is deleted it is an ordinary free point.
+            run(&mut reopened, "sketch.move_point", json!({"point":helper,"to":[55,65]}));
+            let sk = sketch(&reopened);
+            let helper = sk.point(sk.resolve_point(&helper).unwrap()).unwrap();
+            let target = sk.point(sk.resolve_point("target").unwrap()).unwrap();
+            assert!((helper.x - target.x).abs() < 1e-6);
+            assert!(helper.dist(line_midpoint(&sk, "l1")) > 1.0);
+        } else {
+            run(&mut reopened, "sketch.move_point", json!({"point":"target","to":[55,65]}));
+            let sk = sketch(&reopened);
+            let helper = sk.point(sk.resolve_point(&helper).unwrap()).unwrap();
+            assert!(helper.dist(line_midpoint(&sk, "l1")) < 1e-6);
+            assert!((sk.point(sk.resolve_point("target").unwrap()).unwrap().x - helper.x).abs() > 1.0);
+        }
+    }
+}
+
+#[test]
+fn midpoint_alignment_keeps_original_side_after_fillet_and_chamfer() {
+    use solidcraft_sketch::ConstraintKind;
+    for (command, params) in
+        [("sketch.fillet", json!({"point":"l1.end","radius":3})), ("sketch.chamfer.equal_distance", json!({"point":"l1.end","distance":3}))]
+    {
+        let mut s = new_sketch();
+        run(&mut s, "sketch.line", json!({"points":[[10,10],[50,10],[50,40]],"infer":true}));
+        run(&mut s, "sketch.point", json!({"point":[32,60],"id":"target"}));
+        let aligned = run(&mut s, "sketch.constraint.horizontal_vertical", json!({"points":[{"midpoint":"l1"},"target"],"mode":"vertical"}));
+        let helper = aligned["created"]["points"][0].as_str().unwrap();
+        let before = sketch(&s);
+        let original_mid = before.point(before.resolve_point(helper).unwrap()).unwrap();
+        run(&mut s, command, params);
+        let after = s.doc.to_json();
+        let mut reopened = Session::new(solidcraft_doc::Document::from_json(&after).unwrap());
+        reopened.active_sketch = s.active_sketch;
+        let sk = sketch(&reopened);
+        let (point, line) = sk
+            .constraints
+            .iter()
+            .find_map(|c| match c.kind {
+                ConstraintKind::Midpoint { p, l } => Some((p, l)),
+                _ => None,
+            })
+            .unwrap();
+        assert!(sk.curves[line].construction);
+        let mid = sk.point(point).unwrap();
+        assert!(mid.dist(original_mid) < 1e-5, "{command}: {mid:?} vs {original_mid:?}");
+        assert!((sk.point(sk.resolve_point("target").unwrap()).unwrap().x - mid.x).abs() < 1e-6);
+        assert!(mid.dist(line_midpoint(&sk, "l1")) > 0.5, "midpoint belongs to original full side");
+        assert!(mid.dist(line_midpoint(&sk, &sk.curves[line].id)) < 1e-6);
+    }
+}
+
+#[test]
+fn midpoint_alignment_remaps_after_unrelated_geometry_is_deleted() {
+    use solidcraft_sketch::ConstraintKind;
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points":[[-30,-20],[-10,-10]],"infer":false,"connect":false}));
+    run(&mut s, "sketch.line", json!({"points":[[10,10],[30,20]],"infer":false,"connect":false}));
+    run(&mut s, "sketch.point", json!({"point":[24,40],"id":"target"}));
+    let result = run(&mut s, "sketch.constraint.horizontal_vertical", json!({"points":[{"midpoint":"l2"},"target"],"mode":"vertical"}));
+    run(&mut s, "sketch.delete", json!({"entities":["l1"]}));
+    run(&mut s, "sketch.move_point", json!({"point":"l2.end","to":[60,-10]}));
+    let sk = sketch(&s);
+    let helper = sk.point(sk.resolve_point(result["created"]["points"][0].as_str().unwrap()).unwrap()).unwrap();
+    assert!(helper.dist(line_midpoint(&sk, "l2")) < 1e-6);
+    assert!((sk.point(sk.resolve_point("target").unwrap()).unwrap().x - helper.x).abs() < 1e-6);
+    assert!(sk.constraints.iter().any(|c| matches!(c.kind, ConstraintKind::Midpoint { l: 0, .. })));
+    // Deleting the helper itself removes its H/V and Midpoint relationships.
+    run(&mut s, "sketch.delete", json!({"entities":[result["created"]["points"][0]]}));
+    assert!(sketch(&s).constraints.is_empty());
+}
+
+fn line_ends(sk: &solidcraft_sketch::Sketch, id: &str) -> (Vec2, Vec2) {
+    let solidcraft_sketch::CurveKind::Line { a, b } = sk.curves[sk.curve_index(id).unwrap()].kind else { panic!("expected line") };
+    (sk.point(a).unwrap(), sk.point(b).unwrap())
+}
+
+#[test]
+fn midpoint_of_two_lines_centres_the_second_on_the_first() {
+    use solidcraft_sketch::ConstraintKind;
+    for reverse in [false, true] {
+        let mut s = new_sketch();
+        run(&mut s, "sketch.line", json!({"points":[[0,0],[60,0]],"infer":false,"connect":false}));
+        run(&mut s, "sketch.line", json!({"points":[[5,-10],[25,-10]],"infer":false,"connect":false}));
+        let (first, second) = if reverse { ("l2", "l1") } else { ("l1", "l2") };
+        let stays = line_ends(&sketch(&s), first);
+        let length = {
+            let (a, b) = line_ends(&sketch(&s), second);
+            a.dist(b)
+        };
+        let before = s.doc.to_json();
+        let undo = s.undo.len();
+        let result = run(&mut s, "sketch.constraint.midpoint", json!({"a":first,"b":second}));
+        assert_eq!(result["created"]["points"].as_array().unwrap().len(), 1);
+        assert_eq!(result["created"]["constraints"].as_array().unwrap().len(), 2);
+        assert_eq!(s.undo.len(), undo + 1);
+        let sk = sketch(&s);
+        assert_eq!(line_ends(&sk, first), stays, "the first pick stays put");
+        let (a, b) = line_ends(&sk, second);
+        assert!((a.dist(b) - length).abs() < 1e-6, "the second keeps its length");
+        assert!(line_midpoint(&sk, first).dist(line_midpoint(&sk, second)) < 1e-6);
+        assert_eq!(sk.constraints.iter().filter(|c| matches!(c.kind, ConstraintKind::Midpoint { .. })).count(), 2);
+
+        // Saved as ordinary points and constraints: it reopens and keeps holding.
+        let after = s.doc.to_json();
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(s.doc.to_json(), before);
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(s.doc.to_json(), after);
+        let mut reopened = Session::new(solidcraft_doc::Document::from_json(&after).unwrap());
+        reopened.active_sketch = s.active_sketch;
+        run(&mut reopened, "sketch.move_point", json!({"point":"l1.end","to":[80,15]}));
+        let sk = sketch(&reopened);
+        assert!(line_midpoint(&sk, "l1").dist(line_midpoint(&sk, "l2")) < 1e-6);
+    }
+}
+
+#[test]
+fn midpoint_takes_a_point_and_a_line_in_either_pick_order() {
+    for (a, b) in [("p", "l1"), ("l1", "p")] {
+        let mut s = new_sketch();
+        run(&mut s, "sketch.line", json!({"points":[[0,0],[40,0]],"infer":false,"connect":false}));
+        run(&mut s, "sketch.point", json!({"point":[7,9],"id":"p"}));
+        run(&mut s, "sketch.constraint.midpoint", json!({"a":a,"b":b}));
+        let sk = sketch(&s);
+        let p = sk.point(sk.resolve_point("p").unwrap()).unwrap();
+        assert!(p.dist(line_midpoint(&sk, "l1")) < 1e-6, "{a} then {b}");
+    }
+}
+
+#[test]
+fn midpoint_of_two_lines_reuses_an_existing_midpoint() {
+    use solidcraft_sketch::ConstraintKind;
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points":[[0,0],[60,0]],"infer":false,"connect":false}));
+    run(&mut s, "sketch.line", json!({"points":[[5,-10],[25,-10]],"infer":false,"connect":false}));
+    // l3 starts at the midpoint of l2: that point is reused, not duplicated.
+    run(&mut s, "sketch.line", json!({"points":["mid:l2",[15,-30]],"infer":false,"connect":false}));
+    let count = sketch(&s).points.len();
+    let result = run(&mut s, "sketch.constraint.midpoint", json!({"a":"l1","b":"l2"}));
+    assert!(result["created"]["points"].as_array().unwrap().is_empty());
+    let sk = sketch(&s);
+    assert_eq!(sk.points.len(), count);
+    assert_eq!(sk.constraints.iter().filter(|c| matches!(c.kind, ConstraintKind::Midpoint { .. })).count(), 2);
+    assert!(line_midpoint(&sk, "l1").dist(line_midpoint(&sk, "l2")) < 1e-6);
+    // Applying it again finds nothing to add.
+    let before = s.doc.to_json();
+    assert!(s.execute("sketch.constraint.midpoint", &json!({"a":"l2","b":"l1"})).is_err());
+    assert_eq!(s.doc.to_json(), before);
+}
+
+#[test]
+fn midpoint_rejects_wrong_picks_without_changing_the_sketch() {
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points":[[0,0],[60,0]],"infer":false,"connect":false}));
+    run(&mut s, "sketch.circle.center", json!({"center":[40,50],"radius":3}));
+    run(&mut s, "sketch.point", json!({"point":[7,9],"id":"p"}));
+    for params in [
+        json!({"a":"l1","b":"l1"}),
+        json!({"a":"l1","b":"c1"}),
+        json!({"a":"c1","b":"l1"}),
+        json!({"a":"p","b":"origin"}),
+        json!({"a":"p","b":"c1"}),
+        json!({"a":"l1","b":"missing"}),
+        json!({"a":"l1"}),
+        json!({"a":12,"b":"l1"}),
+    ] {
+        let before = s.doc.to_json();
+        let undo = s.undo.len();
+        assert!(s.execute("sketch.constraint.midpoint", &params).is_err(), "{params}");
+        assert_eq!(s.doc.to_json(), before, "{params}");
+        assert_eq!(s.undo.len(), undo, "{params}");
+    }
+}
+
+/// A parameter's row in `parameters.list` (Null when there is none).
+fn param_row(s: &mut Session, name: &str) -> Value {
+    let l = run(s, "parameters.list", json!({}));
+    l["parameters"].as_array().and_then(|a| a.iter().find(|p| p["name"] == name)).cloned().unwrap_or(Value::Null)
+}
+
+/// The distance between a line's ends on the solved sketch.
+fn line_length(s: &Session, line: &str) -> f64 {
+    let sk = sketch(s);
+    let at = |r: &str| sk.point(sk.resolve_point(r).unwrap()).unwrap();
+    at(&format!("{line}.start")).dist(at(&format!("{line}.end")))
+}
+
+/// A session with the user parameter `len = 60 mm` and a sketch holding one 30 mm line `la`
+/// whose start is on the origin.
+fn sketch_with_len() -> Session {
+    let mut s = Session::default();
+    run(&mut s, "parameters.add", json!({"name": "len", "expression": "60 mm"}));
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [30, 0]], "ids": ["la"], "infer": false}));
+    run(&mut s, "sketch.constraint.coincident", json!({"a": "la.start", "b": "origin"}));
+    s
+}
+
+/// `name = expression` in a dimension's value adds the user parameter and dimensions with it
+/// (#2916): the expression may be anything the parameter editor takes (arithmetic, units,
+/// parentheses, functions, other parameters), and is stored as typed on the new parameter.
+#[test]
+fn a_dimension_value_can_define_a_user_parameter() {
+    let cases = [
+        ("w = 20", "20"),
+        ("w=40/2", "40/2"),
+        ("  w = (10 + 30) / 2 ", "(10 + 30) / 2"),
+        ("w = 1 in - 5.4 mm", "1 in - 5.4 mm"),
+        ("w = len / 3", "len / 3"),
+        ("w = sqrt(400)", "sqrt(400)"),
+        ("w = 2 * (len / 6)", "2 * (len / 6)"),
+        ("w = min(len, 20 mm)", "min(len, 20 mm)"),
+    ];
+    for (value, stored) in cases {
+        let mut s = sketch_with_len();
+        let d = run(&mut s, "sketch.dimension", json!({"entities": ["la"], "value": value}));
+        assert_eq!(d["defined"], "w", "{value}: {d}");
+        assert_eq!(d["expression"], "w", "{value}: the dimension refers to the parameter: {d}");
+        assert!((d["measured"].as_f64().unwrap() - 20.0).abs() < 1e-6, "{value}: {d}");
+        assert!((line_length(&s, "la") - 20.0).abs() < 1e-6, "{value}");
+        let w = param_row(&mut s, "w");
+        assert_eq!(w["source"], "user", "{value}: {w}");
+        assert_eq!(w["expression"], stored, "{value}: {w}");
+        assert_eq!(w["unit"], "mm", "{value}: {w}");
+        assert!((w["value"].as_f64().unwrap() - 20.0).abs() < 1e-9, "{value}: {w}");
+        // The dimension follows the parameter from now on.
+        run(&mut s, "parameters.change", json!({"name": "w", "expression": "30 mm"}));
+        assert!((line_length(&s, "la") - 30.0).abs() < 1e-6, "{value}");
+    }
+}
+
+/// A bare right-hand side is in the design's unit, like a bare dimension value, and the new
+/// parameter carries that unit; an angle's parameter is in degrees.
+#[test]
+fn a_defined_parameter_takes_the_design_unit_or_degrees() {
+    let mut s = Session::default();
+    run(&mut s, "document.units", json!({"units": "in"}));
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [30, 0]], "ids": ["la"], "infer": false}));
+    let d = run(&mut s, "sketch.dimension", json!({"entities": ["la"], "value": "w = 2"}));
+    assert_eq!(d["defined"], "w", "{d}");
+    assert!((d["measured"].as_f64().unwrap() - 50.8).abs() < 1e-6, "{d}");
+    // Stored with the design's unit spelled out, as a bare dimension value is.
+    let w = param_row(&mut s, "w");
+    assert_eq!((w["unit"].as_str(), w["expression"].as_str()), (Some("in"), Some("2 in")), "{w}");
+    assert!((line_length(&s, "la") - 50.8).abs() < 1e-6);
+    // A unit in the expression wins over the design's.
+    run(&mut s, "sketch.line", json!({"points": [[0, 50], [30, 50]], "ids": ["lb"], "infer": false}));
+    let d = run(&mut s, "sketch.dimension", json!({"entities": ["lb"], "value": "h = 20 mm"}));
+    assert!((d["measured"].as_f64().unwrap() - 20.0).abs() < 1e-6, "{d}");
+    assert_eq!((param_row(&mut s, "h")["unit"].as_str(), param_row(&mut s, "h")["expression"].as_str()), (Some("in"), Some("20 mm")));
+
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [10, 0]], "ids": ["a"], "infer": false}));
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [10, 10]], "ids": ["b"], "infer": false}));
+    let d = run(&mut s, "sketch.dimension", json!({"entities": ["a", "b"], "type": "angle", "value": "ang = 60"}));
+    assert_eq!((d["defined"].as_str(), d["unit"].as_str()), (Some("ang"), Some("deg")), "{d}");
+    assert!((d["measured"].as_f64().unwrap() - 60.0).abs() < 1e-6, "{d}");
+    let ang = param_row(&mut s, "ang");
+    assert_eq!((ang["unit"].as_str(), ang["expression"].as_str()), (Some("deg"), Some("60")), "{ang}");
+    assert!((line_angle(&s, "a", "b") - 60.0).abs() < 1e-6);
+}
+
+/// A definition that cannot be made is refused with the reason, and leaves no parameter behind:
+/// a taken or reserved name, no expression, a driven dimension, a left side that is not a name
+/// (which stays the old parse error), and a dimension the sketch refuses.
+#[test]
+fn a_definition_that_cannot_be_made_is_refused_and_leaves_nothing() {
+    let refused = [
+        ("w = 20", json!({"name": "w", "expression": "5 mm"}), "there is already a parameter `w`: type `w` to use it"),
+        ("len = 20", Value::Null, "there is already a parameter `len`"),
+        ("mm = 5", Value::Null, "`mm` is a unit name, so it cannot be a parameter name"),
+        ("sin = 5", Value::Null, "`sin` is a function name, so it cannot be a parameter name"),
+        ("pi = 5", Value::Null, "`pi` is a constant, so it cannot be a parameter name"),
+        ("w =", Value::Null, "`w =` needs a value after the `=`"),
+        ("w = ", Value::Null, "needs a value"),
+        ("2 = 3", Value::Null, "unexpected `=`"),
+        ("w == 3", Value::Null, "unexpected `=`"),
+        ("w = nope", Value::Null, "nope"),
+        ("w = 1 deg", Value::Null, ""),
+        ("w = w", Value::Null, ""),
+    ];
+    for (value, add, message) in refused {
+        let mut s = sketch_with_len();
+        if !add.is_null() {
+            run(&mut s, "parameters.add", add);
+        }
+        let before = run(&mut s, "parameters.list", json!({}))["count"].clone();
+        let e = s.execute("sketch.dimension", &json!({"entities": ["la"], "value": value})).unwrap_err().to_string();
+        assert!(e.contains(message), "{value}: {e}");
+        assert_eq!(run(&mut s, "parameters.list", json!({}))["count"], before, "{value}: a refused definition added a parameter");
+        assert_eq!(sketch(&s).constraints.iter().filter(|c| c.param.is_some()).count(), 0, "{value}: a refused definition added a dimension");
+    }
+    // A driven (reference) dimension has no value, so it defines nothing.
+    let mut s = sketch_with_len();
+    let e = s.execute("sketch.dimension", &json!({"entities": ["la"], "value": "w = 20", "driven": true})).unwrap_err().to_string();
+    assert!(e.contains("driven"), "{e}");
+    assert!(param_row(&mut s, "w").is_null());
+    // A dimension the sketch already determines is refused as before, and its parameter with it.
+    let mut s = sketch_with_len();
+    run(&mut s, "sketch.dimension", json!({"entities": ["la"], "value": 30}));
+    let e = s.execute("sketch.dimension", &json!({"entities": ["la.start", "la.end"], "value": "w = 30"})).unwrap_err().to_string();
+    assert!(e.contains("already determined"), "{e}");
+    assert!(param_row(&mut s, "w").is_null(), "the parameter of a refused dimension was kept");
+    // Placed as driven instead (`if_redundant`), it has no value and defines nothing.
+    let d = run(&mut s, "sketch.dimension", json!({"entities": ["la.start", "la.end"], "value": "w = 30", "if_redundant": "driven"}));
+    assert_eq!((d["driven"].as_bool(), d.get("defined")), (Some(true), None), "{d}");
+    assert!(param_row(&mut s, "w").is_null(), "a driven dimension kept the parameter");
+}
+
+/// The parameter and the dimension are one command, so one undo removes both and one redo
+/// brings both back.
+#[test]
+fn undoing_a_defining_dimension_removes_the_parameter_too() {
+    let mut s = sketch_with_len();
+    let params = run(&mut s, "parameters.list", json!({}))["count"].as_u64().unwrap();
+    run(&mut s, "sketch.dimension", json!({"entities": ["la"], "value": "w = 20"}));
+    assert_eq!(run(&mut s, "parameters.list", json!({}))["count"].as_u64().unwrap(), params + 2, "the user parameter and the dimension's own");
+    run(&mut s, "edit.undo", json!({}));
+    assert!(param_row(&mut s, "w").is_null());
+    assert_eq!(run(&mut s, "parameters.list", json!({}))["count"].as_u64().unwrap(), params);
+    assert!((line_length(&s, "la") - 30.0).abs() < 1e-6);
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(param_row(&mut s, "w")["expression"], "20");
+    assert!((line_length(&s, "la") - 20.0).abs() < 1e-6);
+}
+
+/// Coincident on two circles (or arcs) lays the second on the first: one centre and one
+/// radius, in one step, and the first stays. It used to be refused ("two curves must both be
+/// straight lines").
+#[test]
+fn coincident_circles_lie_on_each_other() {
+    let mut s = new_sketch();
+    run(&mut s, "sketch.circle.center", json!({"center":[0,0],"radius":10}));
+    run(&mut s, "sketch.circle.center", json!({"center":[3,1],"radius":8}));
+    let undo = s.undo.len();
+    let r = run(&mut s, "sketch.constraint.coincident", json!({"a":"c1","b":"c2"}));
+    assert_eq!(r["constraints"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!(s.undo.len(), undo + 1);
+    let sk = sketch(&s);
+    let circle = |id: &str| {
+        let c = sk.curve_index(id).unwrap();
+        match sk.curves[c].kind {
+            solidcraft_sketch::CurveKind::Circle { c, r } => (sk.point(c).unwrap(), r),
+            _ => panic!("{id} is a circle"),
+        }
+    };
+    let ((c1, r1), (c2, r2)) = (circle("c1"), circle("c2"));
+    assert!(c1.dist(Vec2::new(0.0, 0.0)) < 1e-6 && (r1 - 10.0).abs() < 1e-6, "the first stays");
+    assert!(c2.dist(c1) < 1e-6 && (r2 - r1).abs() < 1e-6, "the second lies on it: {c2:?} r {r2}");
+    // Again: nothing to add.
+    assert!(s.execute("sketch.constraint.coincident", &json!({"a":"c1","b":"c2"})).is_err());
+    // An arc onto a circle.
+    run(&mut s, "sketch.arc.three_point", json!({"start":[20,0],"through":[25,5],"end":[30,0]}));
+    run(&mut s, "sketch.constraint.coincident", json!({"a":"c1","b":"a1"}));
+    let sk = sketch(&s);
+    let a = sk.curve_index("a1").unwrap();
+    let solidcraft_sketch::CurveKind::Arc { c, a: start, .. } = sk.curves[a].kind else { panic!("a1 is an arc") };
+    assert!(sk.point(c).unwrap().dist(Vec2::new(0.0, 0.0)) < 1e-6);
+    assert!((sk.point(start).unwrap().dist(sk.point(c).unwrap()) - 10.0).abs() < 1e-6);
 }

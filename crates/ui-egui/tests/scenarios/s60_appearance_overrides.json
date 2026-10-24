@@ -5,6 +5,8 @@
   {"call": "ui.menu", "params": {"x": 300, "y": 300, "target": {"type": "body", "name": "Body1"}}},
   {"call": "ui.menuPick", "params": {"item": "Appearance"}},
   {"expect": {"dialog": "Appearance", "shown": "Remove override"}},
+  {"note": "The shared 28 px controls make this card scroll; reveal Search inside its body."},
+  {"call": "ui.scroll", "params": {"x": 1345, "y": 650, "delta": -400}},
   {"click": {"handle": "appearance:search"}},
   {"text": "no-such-appearance"},
   {"expect": {"shown": "No matching appearances"}},

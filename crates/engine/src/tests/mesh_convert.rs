@@ -22,6 +22,31 @@ fn imported_box() -> Session {
     Session::new(doc)
 }
 
+/// An edit keeps the design as it was for undo, and an imported mesh's triangles are shared
+/// with that copy, not copied (a scan's are hundreds of megabytes): after an edit and its undo
+/// the document holds the same arrays. They still save as plain arrays.
+#[test]
+fn edits_share_an_imported_meshs_triangles_with_undo() {
+    let mut s = imported_box();
+    let arrays = |s: &Session| match &s.doc.features[0].kind {
+        FeatureKind::MeshImport { meshes, .. } => (meshes[0].positions.clone(), meshes[0].triangles.clone()),
+        other => panic!("{other:?}"),
+    };
+    let (positions, triangles) = arrays(&s);
+    run(&mut s, "parameters.add", json!({"name":"size","expression":"2","unit":""}));
+    let (p, t) = arrays(&s);
+    assert!(std::sync::Arc::ptr_eq(&p, &positions) && std::sync::Arc::ptr_eq(&t, &triangles), "shared after an edit");
+    run(&mut s, "edit.undo", json!({}));
+    let (p, t) = arrays(&s);
+    assert!(std::sync::Arc::ptr_eq(&p, &positions) && std::sync::Arc::ptr_eq(&t, &triangles), "shared after undo");
+    let saved =
+        serde_json::to_value(MeshData { name: "M".into(), positions: vec![1.5, 2.0, 3.0].into(), triangles: vec![0, 0, 0].into(), color: None })
+            .unwrap();
+    assert_eq!(saved, json!({"name":"M","positions":[1.5,2.0,3.0],"triangles":[0,0,0]}));
+    let back: MeshData = serde_json::from_value(saved).unwrap();
+    assert_eq!(&back.positions[..], &[1.5, 2.0, 3.0]);
+}
+
 #[test]
 fn mesh_conversion_is_parametric_undoable_and_editable_after_cold_reopen() {
     let mut s = imported_box();
@@ -190,4 +215,62 @@ fn installed_slicers_are_listed() {
     let mut s = imported_box();
     let r = s.execute("file.slicers", &json!({})).unwrap();
     assert!(r["slicers"].is_array());
+}
+
+fn insert_box_mesh(s: &mut Session, suffix: &str) -> (String, u64) {
+    let mut source = imported_box();
+    let path = std::env::temp_dir().join(format!("solidcraft-convert-component-{}-{suffix}.stl", std::process::id()));
+    run(&mut source, "file.save_mesh", json!({"path":path}));
+    let result = run(s, "file.insert_mesh", json!({"path":path,"name":"Mesh 1"}));
+    std::fs::remove_file(path).unwrap();
+    let component = result["component"].as_u64().unwrap();
+    let state = s.model.state();
+    let body = state.bodies.iter().find(|body| s.doc.model_body_component(body) == component).unwrap().name.clone();
+    (body, component)
+}
+
+#[test]
+fn inserted_mesh_converts_in_its_owner_from_an_active_ancestor() {
+    for nested in [false, true] {
+        let mut s = Session::default();
+        if nested {
+            run(&mut s, "component.create", json!({"name":"Assembly"}));
+        }
+        let context = (s.active_component, s.active_occurrence_path.clone());
+        let (body, owner) = insert_box_mesh(&mut s, if nested { "nested" } else { "root" });
+        let before = s.doc.to_json();
+        assert!(s.execute("mesh.convert", &json!({"body":body,"tolerance":"2 mm"})).is_err());
+        assert_eq!(s.doc.to_json(), before);
+        assert_eq!((s.active_component, s.active_occurrence_path.clone()), context);
+        run(&mut s, "mesh.convert", json!({"body":body,"tolerance":"0.01 mm"}));
+        assert_eq!((s.active_component, s.active_occurrence_path.clone()), context);
+        let check = |s: &Session| {
+            let state = s.model.state();
+            let converted = state.body(&body).unwrap();
+            assert!(!converted.body.is_mesh());
+            assert_eq!(converted.body.faces(0.01).unwrap().len(), 6);
+            assert_eq!(s.doc.model_body_component(converted), owner);
+            assert_eq!(s.doc.feature(converted.feature).unwrap().component, owner);
+            assert!(s.model.results.iter().all(|r| r.error.is_none()));
+        };
+        check(&s);
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(s.doc.to_json(), before);
+        run(&mut s, "edit.redo", json!({}));
+        check(&s);
+        check(&Session::new(Document::from_json(&s.doc.to_json()).unwrap()));
+    }
+}
+
+#[test]
+fn conversion_from_another_branch_names_the_component_to_activate() {
+    let mut s = Session::default();
+    let (body, _) = insert_box_mesh(&mut s, "other-branch");
+    run(&mut s, "component.create", json!({"name":"Other"}));
+    let before = s.doc.to_json();
+    let context = (s.active_component, s.active_occurrence_path.clone());
+    let error = s.execute("mesh.convert", &json!({"body":body})).unwrap_err().to_string();
+    assert!(error.contains("activate component 'Mesh 1' first"), "{error}");
+    assert_eq!(s.doc.to_json(), before);
+    assert_eq!((s.active_component, s.active_occurrence_path.clone()), context);
 }

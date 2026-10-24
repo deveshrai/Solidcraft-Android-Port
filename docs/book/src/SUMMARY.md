@@ -23,6 +23,7 @@
 
 - [Contributing](dev/contributing.md)
 - [Architecture](dev/architecture.md)
+- [UI kit](dev/ui-kit.md)
 - [Extensible library proposal](dev/libraries.md)
   - [Local scalar libraries](dev/local-libraries.md)
 - [The command engine](dev/commands.md)

@@ -3,17 +3,7 @@ use std::sync::Arc;
 use serde_json::json;
 use solidcraft_engine::Sel;
 
-use crate::scenario::Harness;
-
-fn fixture() -> (Harness, u64, u64) {
-    let mut h = Harness::new();
-    let part = h.app.run("component.create", json!({"name":"Block"})).unwrap();
-    let component = part["component"].as_u64().unwrap();
-    let occurrence = part["occurrence"].as_u64().unwrap();
-    h.app.run("solid.box", json!({"length":10,"width":10,"height":10})).unwrap();
-    h.app.run("component.activate", json!({"component":0})).unwrap();
-    (h, component, occurrence)
-}
+use crate::test_support::component_box as fixture;
 
 #[test]
 fn navigating_and_selecting_reuse_placements_but_rows_read_live_view_state() {

@@ -29,9 +29,7 @@ fn moved_colours_keep_the_values_they_were_drawn_with() {
         assert_eq!(t.analysis.access, [[0.20, 0.75, 0.30], [0.85, 0.22, 0.20]]);
         assert_eq!(t.analysis.curvature, [[0.15, 0.35, 0.95], [0.10, 0.80, 0.25], [0.90, 0.15, 0.10]]);
         assert!(!t.analysis.hatch);
-        assert_eq!(t.app_bar_icon, [Color32::from_rgb(225, 230, 238), Color32::from_rgb(120, 140, 170), Color32::from_rgb(120, 190, 255)]);
-        assert_eq!(t.logo, [Color32::from_rgb(96, 158, 236), Color32::from_rgb(58, 136, 238), Color32::from_rgb(55, 108, 197), Color32::WHITE]);
-        assert_eq!(t.icons.glint, Color32::from_white_alpha(160));
+        assert_eq!(t.logo, [Color32::from_rgb(96, 158, 236), Color32::from_rgb(58, 136, 238), Color32::from_rgb(55, 108, 197)]);
         assert_eq!(t.icons.marker_halo, Color32::from_black_alpha(150));
         assert_eq!(t.icons.agent, Color32::from_rgb(168, 85, 247));
     }
@@ -59,7 +57,7 @@ fn analysis_colours_reach_the_shader_in_its_order() {
 // Icons no longer take their colours from the caller or from `IconColors`: the SVG masters name
 // palette roles (`assets/icons/ui/design/palette.toml`, light and dark, plus accents) that
 // `icon_svg` resolves. `icon_svg`'s own tests hold that every master parses and that only the
-// palette's colours exist; the colour vision modes do not reach them yet.
+// palette's colours exist, including its colour-vision variants.
 
 /// The most colour literals each UI file may hold, and why. None of them carries a meaning that a
 /// colour vision mode must change. A file with more fails here: make the new colour a token in
@@ -75,17 +73,12 @@ const ALLOWED_LITERALS: &[(&str, usize, &str)] = &[
     ("dialogs_library.rs", 1, "a library appearance's swatch: the colour is the fact"),
     ("dialogs_assembly.rs", 1, "the interference fill, shaded from its token"),
     ("dialogs_motion.rs", 1, "a white outline"),
-    ("documents.rs", 4, "white hover overlays on document tabs"),
-    ("frame.rs", 1, "the window shadow"),
     ("gizmo.rs", 2, "the gizmo's neutral grey ball"),
     ("icons.rs", 1, "the white tint that carries an icon image's opacity"),
-    ("home.rs", 4, "white ink on accent buttons, and thumbnail tints"),
     ("ref_images.rs", 1, "a reference image's opacity tint"),
-    ("sketch_palette.rs", 1, "white text on the accent button"),
-    ("sketch_text.rs", 1, "white text on the selection chip"),
     ("theme_files.rs", 1, "a colour read from a theme file, which sets tokens"),
-    ("titlebar.rs", 4, "the window close button's red hover (the system's convention), white hovers and ink"),
-    ("toolbar.rs", 3, "white hover overlays and the version text"),
+    ("titlebar.rs", 2, "the window close button's red hover (the system's convention) and white ink"),
+    ("toolbar.rs", 1, "the version text"),
 ];
 
 const COLOUR_LITERALS: &[&str] = &[
@@ -124,22 +117,29 @@ fn colours_outside_the_theme_are_only_the_listed_neutral_ones() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let dirs = [root.join("src"), root.join("../../assets/icons/ui/source")];
     let mut found = Vec::new();
-    for dir in &dirs {
-        let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
-            if !name.ends_with(".rs") || name.ends_with("_tests.rs") || name == "theme.rs" {
+    fn scan(dir: &std::path::Path, prefix: &str, found: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_str().unwrap();
+            let relative = format!("{prefix}{name}");
+            if path.is_dir() {
+                scan(&path, &format!("{relative}/"), found);
                 continue;
             }
-            let src = std::fs::read_to_string(&path).unwrap_or_default();
+            if !name.ends_with(".rs") || name.ends_with("_tests.rs") || matches!(name, "theme.rs" | "gallery.rs" | "test_support.rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).unwrap();
             let code = src.split("#[cfg(test)]").next().unwrap_or(&src);
             let n: usize = COLOUR_LITERALS.iter().map(|p| code.matches(p).count()).sum();
-            let allowed = ALLOWED_LITERALS.iter().find(|(f, _, _)| *f == name).map_or(0, |(_, n, _)| *n);
+            let allowed = ALLOWED_LITERALS.iter().find(|(f, _, _)| *f == relative).map_or(0, |(_, n, _)| *n);
             if n > allowed {
-                found.push(format!("{name}: {n} colour literal(s), at most {allowed} allowed"));
+                found.push(format!("{relative}: {n} colour literal(s), at most {allowed} allowed"));
             }
         }
+    }
+    for dir in &dirs {
+        scan(dir, "", &mut found);
     }
     assert!(found.is_empty(), "colour literals outside theme::Tokens: {found:?}");
 }

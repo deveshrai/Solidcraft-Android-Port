@@ -1,3 +1,4 @@
+use crate::test_support::run_all;
 use serde_json::json;
 use solidcraft_engine::Session;
 
@@ -11,12 +12,6 @@ fn app_with(cmds: &[(&str, Value)]) -> SolveApp {
         s.execute(id, p).unwrap();
     }
     SolveApp::new(s, Services::default())
-}
-
-fn run_all(app: &mut SolveApp, c: Vec<(String, Value)>) {
-    for (id, p) in c {
-        app.run(&id, p).unwrap();
-    }
 }
 
 /// A face pick places a boss; optional values left empty take the rule; ribs only with a count;

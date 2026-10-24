@@ -19,13 +19,13 @@ use crate::params::{bad, num, str_, string_list};
 use crate::{Result, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[CommandSpec::new("inspect.clearance", "Clearance", clearance).icon("interference").noundo().params(
-    "bodies?: [names] (default: every solid body, in world placement, but those in `against`); against?: [names] (only pairs with one body in `bodies` and the other here); \
+    "bodies?: [names] (default: every solid body, in world placement, but those in `against`; mesh bodies are not measured); against?: [names] (only pairs with one body in `bodies` and the other here); \
      min_volume?: mm³ (default 0.01: smaller overlaps count as contact); clearance?: mm (default 0: report pairs closer than this); \
      nearest?: n (each body of `bodies` gets its n nearest others); skip_within?: \"occurrence\" (pairs of bodies of one occurrence) | \
      \"component\" (pairs of bodies inside one placed component, its subcomponents included) | null; tolerance?: mm (default 1e-6: a gap \
      below it is contact, 0) → overlaps: [{a, b, volume_mm3, area_mm2, bbox, center}]; near: [{a, b, distance_mm, from, to, overlap_mm3?: \
      a contact's shared volume below min_volume, exact?: false when measured on the meshes}], nearest by body (the same for pairs that overlap: 0); \
-     nearest: {body: [{body, distance_mm}]}; unchecked: [{a, b, reason}] (pairs whose overlap could not be worked out); pairs_checked; \
+     nearest: {body: [{body, distance_mm}]}; unchecked: [{a, b, reason}] (pairs whose overlap could not be worked out; each mesh body, STL/3MF/OBJ import, is not measured and is listed as {a: name, b: null, reason: \"mesh body: not checked\"}, also when named in `bodies` or `against`; the result's `bodies` counts the solid bodies only); pairs_checked; \
      pairs_reused (of those, measured by an earlier call: neither body changed or moved since); pairs_pruned (ruled out by their boxes); ms. Distances are measured on the exact faces and edges, the meshes only rule pairs out",
 )];
 
@@ -92,12 +92,19 @@ fn clearance(s: &mut Session, p: &Value) -> Result<Value> {
     };
 
     let st = s.world_state();
-    let solid: Vec<&solidcraft_doc::ModelBody> = st.bodies.iter().filter(|b| !b.body.is_mesh()).collect();
+    let (mesh_bodies, solid): (Vec<&solidcraft_doc::ModelBody>, Vec<&solidcraft_doc::ModelBody>) = st.bodies.iter().partition(|b| b.body.is_mesh());
+    // Mesh bodies are not measured. A mesh body named in `bodies` or `against` is left out of the
+    // pairs and listed as unchecked, rather than refused as "no solid body".
     let named = |key: &str| -> Result<Vec<usize>> {
         let names = string_list(p, key);
         let mut out = Vec::new();
         for n in &names {
-            let i = solid.iter().position(|b| &b.name == n).ok_or_else(|| bad(cmd, format!("no solid body `{n}`")))?;
+            let Some(i) = solid.iter().position(|b| &b.name == n) else {
+                if mesh_bodies.iter().any(|b| &b.name == n) {
+                    continue;
+                }
+                return Err(bad(cmd, format!("no solid body `{n}`")));
+            };
             if !out.contains(&i) {
                 out.push(i);
             }
@@ -249,7 +256,15 @@ fn clearance(s: &mut Session, p: &Value) -> Result<Value> {
     let results = results.into_iter().map(|r| r.unwrap_or_else(|| Ok(PairResult::default())));
 
     let mut known: HashMap<(usize, usize), f64> = HashMap::new();
-    let (mut overlaps, mut near, mut unchecked) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut overlaps, mut near) = (Vec::new(), Vec::new());
+    // The mesh bodies the call was about (every one without `bodies`, else those named in
+    // `bodies` or `against`) come first, so "nothing found" is not read as "no overlap".
+    let asked: Vec<String> = ["bodies", "against"].iter().flat_map(|k| string_list(p, k)).collect();
+    let mut unchecked: Vec<Value> = mesh_bodies
+        .iter()
+        .filter(|b| p.get("bodies").is_none_or(Value::is_null) || asked.contains(&b.name))
+        .map(|b| json!({"a": b.name, "b": null, "reason": super::interference::MESH_NOT_CHECKED}))
+        .collect();
     let name = |i: usize| solid.get(i).map_or("", |b| b.name.as_str());
     for (&(i, j), r) in close.iter().zip(results) {
         let r = match r {

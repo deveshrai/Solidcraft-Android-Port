@@ -2,6 +2,8 @@
 //! Loft, Offset and Ruled Surface, Blend and Boundary Surface, Patch, Stitch, Thicken, Extend, Trim, Untrim
 //! and Split Face. Each has a live preview and Edit Feature.
 
+use crate::dialogs::put;
+use crate::ui_kit::{choice_row, expr_row, hint_row};
 use serde_json::{Map, Value, json};
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::expr::Kind as ValueKind;
@@ -9,86 +11,95 @@ use solidcraft_engine::doc::{AxisRef, Direction, FaceAt, FeatureKind, Mat, Plane
 use solidcraft_engine::geom::Vec3;
 
 use crate::SolveApp;
-use crate::dialogs::{Kind, OP_LABELS, OPS, combo, field, op_index, row_label};
-use crate::selection::{AXES, BODIES, CURVES, EDGES, FACES, PLANES, PROFILES, SelInput, VERTICES};
+use crate::dialogs::{Kind, OP_LABELS, OPS, combo, form_row, op_index};
+use crate::selection::{AXES, BODIES, CURVES, EDGES, FACES, PLANES, PROFILES, SelInput, SelectionExt as _, VERTICES, items, point_value as pt};
+use crate::ui_kit;
 
-/// A surface tool dialog's values.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Surf {
-    /// `direction`: an index into [`EXTRUDE_SIDES`].
-    Extrude {
-        distance: String,
-        direction: usize,
-    },
-    /// `axis`: a stored {origin, dir} axis, used while no axis is picked.
-    Revolve {
-        angle: String,
-        symmetric: bool,
-        axis: Option<Value>,
-    },
-    Sweep(crate::dialogs_sweep::SweepOpts),
-    /// `rail_fit`: how the guide rails reshape the sections (an index into the sweep dialog's
-    /// rail fits).
-    Loft {
-        rail_fit: usize,
-    },
-    /// `continuity`: an index into [`BLEND_CONTINUITY`] for each end, [from, to]; `bulge`: how
-    /// full each end leaves (0 is the plain bridge); `stitch`: sew the blend onto both bodies.
-    Blend {
-        continuity: [usize; 2],
-        bulge: [f64; 2],
-        stitch: bool,
-    },
-    /// `continuity`: an index into [`PATCH_CONTINUITY`] (for a loop of sketch curves, how much of
-    /// the sketch's plane each side repeats; for picked edges, how the surface meets the faces
-    /// beside them); `join`: sew the surface into the body of its edges.
-    Boundary {
-        continuity: usize,
-        join: bool,
-    },
-    /// `continuity`: an index into [`PATCH_CONTINUITY`] (how a patch on edges meets the faces
-    /// beside its loop).
-    Patch {
-        continuity: usize,
-    },
-    Unstitch,
-    ReverseNormal,
-    Offset {
-        distance: String,
-        chain: bool,
-    },
-    /// `mode`: an index into [`RULED_MODES`].
-    Ruled {
-        distance: String,
-        mode: usize,
-        angle: String,
-        flip: bool,
-        round: bool,
-    },
-    Stitch {
-        tolerance: String,
-    },
-    Thicken {
-        thickness: String,
-        symmetric: bool,
-        operation: usize,
-    },
-    Extend {
-        distance: String,
-    },
-    /// `direction`: the stored sweep direction of trimming curves (none: the sketch's normal).
-    Trim {
-        extend: bool,
-        stitch: bool,
-        direction: Option<Vec3>,
-    },
-    /// `holes`: an index into [`UNTRIM_HOLES`].
-    Untrim {
-        holes: usize,
-        outer: bool,
-        in_place: bool,
-    },
-    SplitFace,
+crate::dialog_descriptor::dialog_descriptors! {
+    /// A surface tool dialog's values.
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum Surf {
+        Offset("surface.offset", "OFFSET SURFACE", [("Faces", FACES, true)],
+            FeatureKind::SurfaceOffset { distance, chain, .. }) {
+            distance: String = "2 mm".into() => distance.to_string(),
+            chain: bool = false => *chain,
+        } => json!({"distance": distance});
+        Stitch("surface.stitch", "STITCH", [("Surfaces", BODIES, true)],
+            FeatureKind::Stitch { tolerance, .. }) {
+            tolerance: String = String::new() => if tolerance.trim() == "0" { String::new() } else { tolerance.to_string() },
+        } => json!({});
+        Thicken("surface.thicken", "THICKEN", [("Surfaces", BODIES, true)],
+            FeatureKind::Thicken { thickness, symmetric, operation, .. }) {
+            thickness: String = "2 mm".into() => thickness.to_string(),
+            symmetric: bool = false => *symmetric,
+            operation: usize = 0 => op_index(operation),
+        } => json!({"thickness": thickness, "symmetric": symmetric, "operation": OPS.get(*operation).copied().unwrap_or("new")});
+        Extend("surface.extend", "EXTEND", [("Edges", EDGES, true)],
+            FeatureKind::SurfaceExtend { distance, .. }) {
+            distance: String = "10 mm".into() => distance.to_string(),
+        } => json!({"distance": distance});
+        ; custom {
+            /// `direction`: an index into [`EXTRUDE_SIDES`].
+            Extrude {
+                distance: String,
+                direction: usize,
+            },
+            /// `axis`: a stored {origin, dir} axis, used while no axis is picked.
+            Revolve {
+                angle: String,
+                symmetric: bool,
+                axis: Option<Value>,
+            },
+            Sweep(crate::dialogs_sweep::SweepOpts),
+            /// `rail_fit`: how the guide rails reshape the sections (an index into the sweep dialog's
+            /// rail fits).
+            Loft {
+                rail_fit: usize,
+            },
+            /// `continuity`: an index into [`BLEND_CONTINUITY`] for each end, [from, to]; `bulge`: how
+            /// full each end leaves (0 is the plain bridge); `stitch`: sew the blend onto both bodies.
+            Blend {
+                continuity: [usize; 2],
+                bulge: [f64; 2],
+                stitch: bool,
+            },
+            /// `continuity`: an index into [`PATCH_CONTINUITY`] (for a loop of sketch curves, how much of
+            /// the sketch's plane each side repeats; for picked edges, how the surface meets the faces
+            /// beside them); `join`: sew the surface into the body of its edges.
+            Boundary {
+                continuity: usize,
+                join: bool,
+            },
+            /// `continuity`: an index into [`PATCH_CONTINUITY`] (how a patch on edges meets the faces
+            /// beside its loop).
+            Patch {
+                continuity: usize,
+            },
+            Unstitch,
+            ReverseNormal,
+            /// `mode`: an index into [`RULED_MODES`].
+            Ruled {
+                distance: String,
+                mode: usize,
+                angle: String,
+                flip: bool,
+                round: bool,
+            },
+            /// `direction`: the stored sweep direction of trimming curves (none: the sketch's normal).
+            Trim {
+                extend: bool,
+                stitch: bool,
+                direction: Option<Vec3>,
+            },
+            /// `holes`: an index into [`UNTRIM_HOLES`].
+            Untrim {
+                holes: usize,
+                outer: bool,
+                in_place: bool,
+            },
+            SplitFace,
+        }
+    }
 }
 
 impl Surf {
@@ -103,14 +114,11 @@ impl Surf {
             Surf::Patch { .. } => "PATCH",
             Surf::Unstitch => "UNSTITCH",
             Surf::ReverseNormal => "REVERSE NORMAL",
-            Surf::Offset { .. } => "OFFSET SURFACE",
             Surf::Ruled { .. } => "RULED SURFACE",
-            Surf::Stitch { .. } => "STITCH",
-            Surf::Thicken { .. } => "THICKEN",
-            Surf::Extend { .. } => "EXTEND",
             Surf::Trim { .. } => "TRIM",
             Surf::Untrim { .. } => "UNTRIM",
             Surf::SplitFace => "SPLIT FACE",
+            _ => self.simple_metadata().map_or("", |(_, title)| title),
         }
     }
 
@@ -170,13 +178,9 @@ fn inputs(k: &Surf) -> Vec<SelInput> {
         Surf::Patch { .. } => vec![SelInput::new("Boundary", PROFILES | EDGES, true), SelInput::new("Pass through", VERTICES | FACES, true)],
         Surf::Unstitch => vec![SelInput::new("Body, or faces to take out", BODIES | FACES, true)],
         Surf::ReverseNormal => vec![SelInput::new("Surface, or faces to turn over", BODIES | FACES, true)],
-        Surf::Offset { .. } => vec![SelInput::new("Faces", FACES, true)],
         Surf::Ruled { .. } => {
             vec![SelInput::new("Edges", EDGES, true), SelInput::new("Reference face", FACES, false), SelInput::new("Direction", AXES | EDGES, false)]
         }
-        Surf::Stitch { .. } => vec![SelInput::new("Surfaces", BODIES, true)],
-        Surf::Thicken { .. } => vec![SelInput::new("Surfaces", BODIES, true)],
-        Surf::Extend { .. } => vec![SelInput::new("Edges", EDGES, true)],
         Surf::Trim { .. } => vec![
             SelInput::new("Surface", BODIES, false),
             SelInput::new("Trimming tool (plane, face or curves)", PLANES | FACES | CURVES, true),
@@ -186,6 +190,7 @@ fn inputs(k: &Surf) -> Vec<SelInput> {
         ],
         Surf::Untrim { .. } => vec![SelInput::new("Face", FACES, false), SelInput::new("Holes (edges on them)", EDGES, true)],
         Surf::SplitFace => vec![SelInput::new("Faces to split", FACES, true), SelInput::new("Splitting tool", PLANES | FACES, false)],
+        _ => k.simple_inputs(),
     }
 }
 
@@ -201,15 +206,11 @@ pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
         "surface.patch" => Surf::Patch { continuity: 0 },
         "surface.unstitch" => Surf::Unstitch,
         "surface.reverse_normal" => Surf::ReverseNormal,
-        "surface.offset" => Surf::Offset { distance: "2 mm".into(), chain: false },
         "surface.ruled" => Surf::Ruled { distance: "10 mm".into(), mode: 0, angle: "5 deg".into(), flip: false, round: false },
-        "surface.stitch" => Surf::Stitch { tolerance: String::new() },
-        "surface.thicken" => Surf::Thicken { thickness: "2 mm".into(), symmetric: false, operation: 0 },
-        "surface.extend" => Surf::Extend { distance: "10 mm".into() },
         "surface.trim" => Surf::Trim { extend: false, stitch: false, direction: None },
         "surface.untrim" => Surf::Untrim { holes: 0, outer: false, in_place: false },
         "solid.split_face" => Surf::SplitFace,
-        _ => return None,
+        _ => Surf::simple_start(id)?.0,
     };
     let i = inputs(&k);
     Some((Kind::Surface(k), i))
@@ -220,148 +221,95 @@ pub fn rows(ui: &mut egui::Ui, k: &mut Surf) -> bool {
     let mut enter = false;
     match k {
         Surf::Stitch { tolerance } => {
-            row_label(ui, "Tolerance");
-            let r = ui.add(egui::TextEdit::singleline(tolerance).hint_text("tight"));
-            crate::params_dialog::complete(ui, &r, tolerance);
-            enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            ui.end_row();
+            enter |= hint_row(ui, "Tolerance", tolerance, "tight");
         }
         Surf::Thicken { thickness, symmetric, operation } => {
-            row_label(ui, "Thickness");
-            enter |= field(ui, thickness);
-            ui.end_row();
-            row_label(ui, "Direction");
-            let mut dir = usize::from(*symmetric);
-            combo(ui, "th_dir", &["One Side", "Symmetric"], &mut dir);
-            *symmetric = dir == 1;
-            ui.end_row();
-            row_label(ui, "Operation");
-            combo(ui, "th_op", &OP_LABELS, operation);
-            ui.end_row();
+            enter |= expr_row(ui, "Thickness", thickness);
+            form_row(ui, "Direction", |ui| {
+                let mut dir = usize::from(*symmetric);
+                ui_kit::segmented(ui, &mut dir, &["One Side", "Symmetric"], Default::default());
+                *symmetric = dir == 1;
+            });
+            choice_row(ui, "Operation", "th_op", operation, &OP_LABELS);
         }
         Surf::Extend { distance } => {
-            row_label(ui, "Distance");
-            enter |= field(ui, distance);
-            ui.end_row();
+            enter |= expr_row(ui, "Distance", distance);
         }
         Surf::Revolve { angle, symmetric, .. } => {
-            row_label(ui, "Angle");
-            enter |= field(ui, angle);
-            ui.end_row();
-            row_label(ui, "Direction");
-            let mut dir = usize::from(*symmetric);
-            combo(ui, "sr_dir", &["One Side", "Symmetric"], &mut dir);
-            *symmetric = dir == 1;
-            ui.end_row();
+            enter |= expr_row(ui, "Angle", angle);
+            form_row(ui, "Direction", |ui| {
+                let mut dir = usize::from(*symmetric);
+                ui_kit::segmented(ui, &mut dir, &["One Side", "Symmetric"], Default::default());
+                *symmetric = dir == 1;
+            });
         }
         Surf::Offset { distance, chain } => {
-            row_label(ui, "Distance");
-            enter |= field(ui, distance);
-            ui.end_row();
-            row_label(ui, "Tangent chain");
-            ui.checkbox(chain, "");
-            ui.end_row();
+            enter |= expr_row(ui, "Distance", distance);
+            ui_kit::options(ui, "offset_options", &mut [("Tangent chain", chain)]);
         }
         Surf::Ruled { distance, mode, angle, flip, round } => {
-            row_label(ui, "Distance");
-            enter |= field(ui, distance);
-            ui.end_row();
-            row_label(ui, "Type");
-            combo(ui, "ru_mode", &RULED_MODES.map(|(label, _)| label), mode);
-            ui.end_row();
+            enter |= expr_row(ui, "Distance", distance);
+            choice_row(ui, "Type", "ru_mode", mode, &RULED_MODES.map(|(label, _)| label));
             if RULED_MODES.get(*mode).is_some_and(|(_, m)| *m == "angle") {
-                row_label(ui, "Angle");
-                enter |= field(ui, angle);
-                ui.end_row();
+                enter |= expr_row(ui, "Angle", angle);
             }
-            row_label(ui, "Corners");
-            let mut corner = usize::from(*round);
-            combo(ui, "ru_corners", &["Mitre", "Round"], &mut corner);
-            *round = corner == 1;
-            ui.end_row();
-            row_label(ui, "Flip");
-            ui.checkbox(flip, "");
-            ui.end_row();
+            form_row(ui, "Corners", |ui| {
+                let mut corner = usize::from(*round);
+                ui_kit::segmented(ui, &mut corner, &["Mitre", "Round"], Default::default());
+                *round = corner == 1;
+            });
+            ui_kit::options(ui, "ruled_options", &mut [("Flip", flip)]);
         }
         Surf::Extrude { distance, direction } => {
-            row_label(ui, "Distance");
-            enter |= field(ui, distance);
-            ui.end_row();
-            row_label(ui, "Direction");
-            combo(ui, "sx_dir", &EXTRUDE_SIDES.map(|(label, _)| label), direction);
-            ui.end_row();
+            enter |= expr_row(ui, "Distance", distance);
+            form_row(ui, "Direction", |ui| {
+                ui_kit::segmented(ui, direction, &EXTRUDE_SIDES.map(|(label, _)| label), Default::default());
+            });
         }
         Surf::Untrim { holes, outer, in_place } => {
-            row_label(ui, "Holes");
-            combo(ui, "ut_holes", &UNTRIM_HOLES, holes);
-            ui.end_row();
-            row_label(ui, "Restore outer boundary");
-            ui.checkbox(outer, "");
-            ui.end_row();
-            row_label(ui, "In place (surfaces)");
-            ui.checkbox(in_place, "");
-            ui.end_row();
+            choice_row(ui, "Holes", "ut_holes", holes, &UNTRIM_HOLES);
+            ui_kit::options(ui, "untrim_options", &mut [("Restore outer boundary", outer), ("In place (surfaces)", in_place)]);
         }
         Surf::Patch { continuity } => {
-            row_label(ui, "Continuity");
-            combo(ui, "pa_cont", &PATCH_CONTINUITY.map(|(label, _)| label), continuity);
-            ui.end_row();
+            form_row(ui, "Continuity", |ui| {
+                ui_kit::segmented(ui, continuity, &PATCH_CONTINUITY.map(|(label, _)| label), Default::default());
+            });
         }
         Surf::Blend { continuity, bulge, stitch } => {
-            // One row per end, so the dialog keeps its docked width.
             let [from, to] = continuity;
             let [from_bulge, to_bulge] = bulge;
-            row_label(ui, "Start continuity");
-            combo(ui, "bl_cont0", &BLEND_CONTINUITY.map(|(label, _)| label), from);
-            ui.end_row();
-            row_label(ui, "Start bulge");
-            ui.add(egui::DragValue::new(from_bulge).range(-0.9..=3.0).speed(0.01).max_decimals(2));
-            ui.end_row();
-            row_label(ui, "End continuity");
-            combo(ui, "bl_cont1", &BLEND_CONTINUITY.map(|(label, _)| label), to);
-            ui.end_row();
-            row_label(ui, "End bulge");
-            ui.add(egui::DragValue::new(to_bulge).range(-0.9..=3.0).speed(0.01).max_decimals(2));
-            ui.end_row();
-            row_label(ui, "Stitch to both bodies");
-            ui.checkbox(stitch, "");
-            ui.end_row();
+            form_row(ui, "Start continuity", |ui| {
+                combo(ui, "bl_cont0", &BLEND_CONTINUITY.map(|(label, _)| label), from);
+            });
+            form_row(ui, "Start bulge", |ui| {
+                ui_kit::scalar_field(ui, from_bulge, -0.9..=3.0);
+            });
+            form_row(ui, "End continuity", |ui| {
+                combo(ui, "bl_cont1", &BLEND_CONTINUITY.map(|(label, _)| label), to);
+            });
+            form_row(ui, "End bulge", |ui| {
+                ui_kit::scalar_field(ui, to_bulge, -0.9..=3.0);
+            });
+            ui_kit::options(ui, "blend_options", &mut [("Stitch to both bodies", stitch)]);
         }
         Surf::Boundary { continuity, join } => {
-            row_label(ui, "Continuity");
-            combo(ui, "bo_cont", &PATCH_CONTINUITY.map(|(label, _)| label), continuity);
-            ui.end_row();
-            row_label(ui, "Operation");
-            let mut op = usize::from(*join);
-            combo(ui, "bo_op", &BOUNDARY_OPS, &mut op);
-            *join = op == 1;
-            ui.end_row();
+            form_row(ui, "Continuity", |ui| {
+                ui_kit::segmented(ui, continuity, &PATCH_CONTINUITY.map(|(label, _)| label), Default::default());
+            });
+            form_row(ui, "Operation", |ui| {
+                let mut op = usize::from(*join);
+                combo(ui, "bo_op", &BOUNDARY_OPS, &mut op);
+                *join = op == 1;
+            });
         }
         Surf::Trim { extend, stitch, .. } => {
-            row_label(ui, "Extend to meet");
-            ui.checkbox(extend, "");
-            ui.end_row();
-            row_label(ui, "Stitch the kept pieces");
-            ui.checkbox(stitch, "");
-            ui.end_row();
+            ui_kit::options(ui, "trim_options", &mut [("Extend to meet", extend), ("Stitch the kept pieces", stitch)]);
         }
         Surf::Sweep(opts) => enter |= crate::dialogs_sweep::rows(ui, opts, "ss"),
         Surf::Loft { rail_fit } => crate::dialogs_sweep::rail_fit_row(ui, "sl", rail_fit),
         Surf::SplitFace | Surf::Unstitch | Surf::ReverseNormal => {}
     }
     enter
-}
-
-fn items(inputs: &[SelInput], i: usize) -> &[Sel] {
-    inputs.get(i).map(|x| x.items.as_slice()).unwrap_or(&[])
-}
-
-fn pt(v: Vec3) -> Value {
-    json!([v.x, v.y, v.z])
-}
-
-fn bodies(inputs: &[SelInput], i: usize) -> Vec<String> {
-    items(inputs, i).iter().filter_map(|x| if let Sel::Body { name } = x { Some(name.clone()) } else { None }).collect()
 }
 
 /// One body and points on the picked faces of it (none: a whole body picked).
@@ -374,7 +322,7 @@ fn body_and_faces(picks: &[Sel]) -> Result<(String, Vec<Value>), String> {
     if picks.iter().any(|x| body_of(x).as_ref() != Some(&body)) {
         return Err("pick faces of one body".into());
     }
-    let faces = picks.iter().filter_map(|x| if let Sel::Face { point, .. } = x { Some(pt(*point)) } else { None }).collect();
+    let faces = picks.face_points().into_iter().map(pt).collect();
     Ok((body, faces))
 }
 
@@ -391,9 +339,8 @@ fn body_and_edges(picks: &[Sel]) -> Result<(String, Vec<Value>), String> {
 
 /// The sketch, profiles and curves of a surface builder's picks (all in one sketch).
 fn sheet_picks(app: &SolveApp, picks: &[Sel]) -> Result<Value, String> {
-    let profiles: Vec<(u64, usize)> =
-        picks.iter().filter_map(|x| if let Sel::Profile { sketch, index } = x { Some((*sketch, *index)) } else { None }).collect();
-    let curves: Vec<String> = picks.iter().filter_map(|x| if let Sel::SketchCurve { id } = x { Some(id.clone()) } else { None }).collect();
+    let profiles: Vec<(u64, usize)> = picks.profiles();
+    let curves: Vec<String> = picks.curve_ids();
     let sketch = match profiles.first() {
         Some((sk, _)) => *sk,
         None => crate::dialogs::curves_sketch(app, &curves, None).ok_or("the curves must be in one sketch")?,
@@ -556,8 +503,7 @@ pub fn commands(app: &SolveApp, k: &Surf, inputs: &[SelInput], extra: &Map<Strin
             need(0, "profiles or curves to sweep")?;
             need(1, "the path")?;
             let mut p = sheet_picks(app, items(inputs, 0))?;
-            let path: Vec<String> =
-                items(inputs, 1).iter().filter_map(|x| if let Sel::SketchCurve { id } = x { Some(id.clone()) } else { None }).collect();
+            let path: Vec<String> = items(inputs, 1).curve_ids();
             p["path_sketch"] =
                 json!(crate::dialogs::curves_sketch(app, &path, p["sketch"].as_u64()).ok_or("the path curves must be in one other sketch")?);
             p["path"] = json!(path);
@@ -618,8 +564,7 @@ pub fn commands(app: &SolveApp, k: &Surf, inputs: &[SelInput], extra: &Map<Strin
             let word = PATCH_CONTINUITY.get(*continuity).map_or("g0", |(_, w)| *w);
             let across = items(inputs, 1);
             let picks = items(inputs, 0);
-            let sketch_ids: Vec<String> =
-                picks.iter().filter_map(|x| if let Sel::SketchCurve { id } = x { Some(id.clone()) } else { None }).collect();
+            let sketch_ids: Vec<String> = picks.curve_ids();
             // Two to four sketch curves of one sketch and nothing across: the loop patch.
             let looped = across.is_empty() && !*join && sketch_ids.len() == picks.len() && (2..=4).contains(&picks.len());
             match looped.then(|| crate::dialogs::curves_sketch(app, &sketch_ids, None)).flatten() {
@@ -657,14 +602,12 @@ pub fn commands(app: &SolveApp, k: &Surf, inputs: &[SelInput], extra: &Map<Strin
         }
         Surf::Patch { continuity } => {
             need(0, "a boundary (sketch profiles or a loop of edges)")?;
-            let profiles: Vec<(u64, usize)> =
-                items(inputs, 0).iter().filter_map(|x| if let Sel::Profile { sketch, index } = x { Some((*sketch, *index)) } else { None }).collect();
+            let profiles: Vec<(u64, usize)> = items(inputs, 0).profiles();
             if let Some((sk, _)) = profiles.first() {
                 let idx: Vec<usize> = profiles.iter().filter(|(s, _)| s == sk).map(|(_, i)| *i).collect();
                 ("surface.patch", json!({"sketch": sk, "profiles": idx}))
             } else {
-                let edges: Vec<Value> =
-                    items(inputs, 0).iter().filter_map(|x| if let Sel::Edge { point, .. } = x { Some(pt(*point)) } else { None }).collect();
+                let edges: Vec<Value> = items(inputs, 0).edge_points().into_iter().map(pt).collect();
                 let body = items(inputs, 0).iter().find_map(|x| if let Sel::Edge { body, .. } = x { Some(body.clone()) } else { None });
                 let mut p = json!({"edges": edges, "body": body});
                 if let Some((_, word)) = PATCH_CONTINUITY.get(*continuity).filter(|_| *continuity > 0) {
@@ -683,13 +626,13 @@ pub fn commands(app: &SolveApp, k: &Surf, inputs: &[SelInput], extra: &Map<Strin
                 ("surface.patch", p)
             }
         }
-        Surf::Offset { distance, chain } => {
+        Surf::Offset { chain, .. } => {
             need(0, "the faces to offset")?;
             let (body, faces) = body_and_faces(items(inputs, 0))?;
             if faces.is_empty() {
                 return Err("pick faces to offset".into());
             }
-            let mut p = json!({"body": body, "faces": faces, "distance": distance});
+            let mut p = json!({"body": body, "faces": faces});
             if *chain {
                 p["chain"] = json!(true);
             }
@@ -736,31 +679,25 @@ pub fn commands(app: &SolveApp, k: &Surf, inputs: &[SelInput], extra: &Map<Strin
         }
         Surf::Stitch { tolerance } => {
             need(0, "the surfaces to stitch")?;
-            let mut p = json!({ "bodies": bodies(inputs, 0) });
-            if !tolerance.trim().is_empty() {
-                p["tolerance"] = json!(tolerance);
-            }
+            let mut p = json!({ "bodies": items(inputs, 0).body_names() });
+            put(&mut p, &[("tolerance", tolerance)]);
             ("surface.stitch", p)
         }
-        Surf::Thicken { thickness, symmetric, operation } => {
+        Surf::Thicken { .. } => {
             need(0, "the surfaces to thicken")?;
-            (
-                "surface.thicken",
-                json!({"bodies": bodies(inputs, 0), "thickness": thickness, "symmetric": symmetric, "operation": OPS.get(*operation).copied().unwrap_or("new")}),
-            )
+            ("surface.thicken", json!({"bodies": items(inputs, 0).body_names()}))
         }
-        Surf::Extend { distance } => {
+        Surf::Extend { .. } => {
             need(0, "the edges to extend")?;
             let body =
                 items(inputs, 0).iter().find_map(|x| if let Sel::Edge { body, .. } = x { Some(body.clone()) } else { None }).unwrap_or_default();
-            let edges: Vec<Value> =
-                items(inputs, 0).iter().filter_map(|x| if let Sel::Edge { point, .. } = x { Some(pt(*point)) } else { None }).collect();
-            ("surface.extend", json!({"body": body, "edges": edges, "distance": distance}))
+            let edges: Vec<Value> = items(inputs, 0).edge_points().into_iter().map(pt).collect();
+            ("surface.extend", json!({"body": body, "edges": edges}))
         }
         Surf::Trim { extend, stitch, direction } => {
             need(0, "the surface to trim")?;
             need(2, "what to keep (points on it)")?;
-            let body = bodies(inputs, 0).into_iter().next().unwrap_or_default();
+            let body = items(inputs, 0).body_names().into_iter().next().unwrap_or_default();
             // One point keeps its side, several the regions they pick.
             let points = |i: usize| -> Option<Value> {
                 let pts: Vec<Value> =
@@ -772,7 +709,7 @@ pub fn commands(app: &SolveApp, k: &Surf, inputs: &[SelInput], extra: &Map<Strin
                 }
             };
             let mut p = json!({"body": body, "keep": points(2).ok_or("pick what to keep")?});
-            if let Some(other) = bodies(inputs, 3).into_iter().next() {
+            if let Some(other) = items(inputs, 3).body_names().into_iter().next() {
                 need(4, "what to keep of the other surface")?;
                 p["with"] = json!(other);
                 p["keep_with"] = points(4).ok_or("pick what to keep of the other surface")?;
@@ -815,8 +752,7 @@ pub fn commands(app: &SolveApp, k: &Surf, inputs: &[SelInput], extra: &Map<Strin
             match holes {
                 0 => p["holes"] = json!("all"),
                 1 => {
-                    let picked: Vec<Value> =
-                        items(inputs, 1).iter().filter_map(|x| if let Sel::Edge { point, .. } = x { Some(pt(*point)) } else { None }).collect();
+                    let picked: Vec<Value> = items(inputs, 1).edge_points().into_iter().map(pt).collect();
                     if picked.is_empty() {
                         return Err("pick edges of the holes to remove".into());
                     }
@@ -835,8 +771,7 @@ pub fn commands(app: &SolveApp, k: &Surf, inputs: &[SelInput], extra: &Map<Strin
         Surf::SplitFace => {
             need(0, "the faces to split")?;
             need(1, "the splitting tool")?;
-            let faces: Vec<Value> =
-                items(inputs, 0).iter().filter_map(|x| if let Sel::Face { point, .. } = x { Some(pt(*point)) } else { None }).collect();
+            let faces: Vec<Value> = items(inputs, 0).face_points().into_iter().map(pt).collect();
             let body = items(inputs, 0).iter().find_map(|x| if let Sel::Face { body, .. } = x { Some(body.clone()) } else { None });
             let (key, t) = tool(app, items(inputs, 1).first())?;
             let mut p = json!({"faces": faces, "body": body});
@@ -844,6 +779,7 @@ pub fn commands(app: &SolveApp, k: &Surf, inputs: &[SelInput], extra: &Map<Strin
             ("solid.split_face", p)
         }
     };
+    k.fill_simple_params(&mut p);
     if let Value::Object(m) = &mut p {
         // A ruled surface's kept direction is used above, or dropped with its mode.
         for (k, v) in extra.iter().filter(|(k, _)| !(cmd == "surface.ruled" && k.as_str() == "direction")) {
@@ -872,6 +808,7 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind, frame: &Mat) -> Option<(K
                 AxisRef::World { axis } => (Some(Sel::Axis { name: axis.to_ascii_uppercase() }), None),
                 AxisRef::SketchAxis { axis } => (Some(Sel::Axis { name: axis.to_ascii_lowercase() }), None),
                 AxisRef::SketchLine { curve } => (Some(Sel::SketchCurve { id: curve.clone() }), None),
+                AxisRef::Construction { name } => (Some(Sel::Axis { name: name.to_string() }), None),
                 AxisRef::Line { origin, dir } => (
                     None,
                     Some(json!({
@@ -1011,10 +948,9 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind, frame: &Mat) -> Option<(K
             }
             return Some((Kind::Surface(k), ins, extra));
         }
-        FeatureKind::SurfaceOffset { faces, distance, chain, .. } => (
-            Surf::Offset { distance: distance.to_string(), chain: *chain },
-            vec![faces.iter().filter_map(|p| crate::dialogs::face_sel(s, p.0)).collect()],
-        ),
+        FeatureKind::SurfaceOffset { faces, .. } => {
+            (Surf::simple_restore(kind)?, vec![faces.iter().filter_map(|p| crate::dialogs::face_sel(s, p.0)).collect()])
+        }
         FeatureKind::SurfaceRuled { edges, distance, mode, angle, direction, flip, corners, face, .. } => {
             let k = Surf::Ruled {
                 distance: distance.to_string(),
@@ -1047,15 +983,11 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind, frame: &Mat) -> Option<(K
             };
             (if matches!(kind, FeatureKind::Unstitch { .. }) { Surf::Unstitch } else { Surf::ReverseNormal }, vec![sels])
         }
-        FeatureKind::Stitch { bodies, tolerance } => (
-            Surf::Stitch { tolerance: if tolerance.trim() == "0" { String::new() } else { tolerance.to_string() } },
-            vec![bodies.iter().map(|n| Sel::Body { name: n.to_string() }).collect()],
-        ),
-        FeatureKind::Thicken { bodies, thickness, symmetric, operation, .. } => (
-            Surf::Thicken { thickness: thickness.to_string(), symmetric: *symmetric, operation: op_index(operation) },
-            vec![bodies.iter().map(|n| Sel::Body { name: n.to_string() }).collect()],
-        ),
-        FeatureKind::SurfaceExtend { edges, distance, mode, up_to, neighbours, .. } => {
+        FeatureKind::Stitch { bodies, .. } => (Surf::simple_restore(kind)?, vec![bodies.iter().map(|n| Sel::Body { name: n.to_string() }).collect()]),
+        FeatureKind::Thicken { bodies, .. } => {
+            (Surf::simple_restore(kind)?, vec![bodies.iter().map(|n| Sel::Body { name: n.to_string() }).collect()])
+        }
+        FeatureKind::SurfaceExtend { edges, mode, up_to, neighbours, .. } => {
             // The dialog edits the edges and the distance; the rest is kept as it was.
             let mut extra = Map::new();
             if !mode.is_natural() {
@@ -1079,7 +1011,7 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind, frame: &Mat) -> Option<(K
                 }
                 _ => {}
             }
-            let k = Surf::Extend { distance: distance.to_string() };
+            let k = Surf::simple_restore(kind)?;
             let mut ins = inputs(&k);
             if let Some(inp) = ins.first_mut() {
                 inp.items = edges.iter().filter_map(edge).collect();

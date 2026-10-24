@@ -108,3 +108,51 @@ fn pairs_left_when_the_budget_runs_out_are_listed_not_checked() {
         assert!(s.execute("inspect.interference", &json!({"budget_s": bad})).is_err(), "{bad}");
     }
 }
+
+/// Two STL copies of a cube inserted into a design. Returns the names of the two mesh bodies.
+pub(super) fn insert_two_mesh_cubes(s: &mut Session, tag: &str) -> Vec<String> {
+    let dir = std::env::temp_dir().join(format!("solidcraft-mesh-unchecked-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let stl = dir.join("cube.stl");
+    let mut cube = Session::default();
+    run(&mut cube, "solid.box", json!({"length": 20, "width": 20, "height": 20, "corner": [0, 0, 0], "body_name": "Cube"}));
+    run(&mut cube, "file.export", json!({"path": stl.to_string_lossy()}));
+    for _ in 0..2 {
+        run(s, "file.insert_mesh", json!({"path": stl.to_string_lossy()}));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    s.world_state().bodies.iter().filter(|b| b.body.is_mesh()).map(|b| b.name.clone()).collect()
+}
+
+/// #3249: mesh bodies (STL, 3MF, OBJ imports) are not intersected, but they used to vanish from
+/// the answer: `count: 0, unchecked: []` read as "no collision". Each is now listed in `unchecked`
+/// with a reason, and the solid bodies are checked as before.
+#[test]
+fn mesh_bodies_are_listed_as_unchecked_not_dropped() {
+    let mut s = Session::default();
+    let meshes = insert_two_mesh_cubes(&mut s, "interference");
+    assert_eq!(meshes.len(), 2, "{meshes:?}");
+    // Only meshes: nothing is checked, and both are said to be left out.
+    let i = run(&mut s, "inspect.interference", json!({}));
+    assert_eq!((i["count"].as_u64(), i["checked"].as_u64()), (Some(0), Some(0)), "{i}");
+    let unchecked = i["unchecked"].as_array().cloned().unwrap_or_default();
+    assert_eq!(unchecked.len(), 2, "{i}");
+    for (u, name) in unchecked.iter().zip(&meshes) {
+        assert_eq!(u["a"].as_str(), Some(name.as_str()), "{i}");
+        assert!(u["b"].is_null(), "{i}");
+        assert_eq!(u["reason"], "mesh body: not checked", "{i}");
+    }
+    // With solid bodies beside them: those are checked, the meshes are still listed.
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [100, 0, 0], "operation": "new", "body_name": "A"}));
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [105, 0, 0], "operation": "new", "body_name": "B"}));
+    let i = run(&mut s, "inspect.interference", json!({}));
+    assert_eq!((i["count"].as_u64(), i["checked"].as_u64()), (Some(1), Some(2)), "{i}");
+    assert_eq!(i["unchecked"].as_array().map(Vec::len), Some(2), "{i}");
+    // Naming only solid bodies lists no mesh; naming a mesh body lists just that one.
+    let i = run(&mut s, "inspect.interference", json!({"bodies": ["A", "B"]}));
+    assert_eq!(i["unchecked"].as_array().map(Vec::len), Some(0), "{i}");
+    let i = run(&mut s, "inspect.interference", json!({"bodies": ["A", meshes[0]]}));
+    assert_eq!(i["checked"], 1, "{i}");
+    assert_eq!(i["unchecked"][0]["a"].as_str(), Some(meshes[0].as_str()), "{i}");
+}

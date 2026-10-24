@@ -5,8 +5,9 @@
 //! - `engine.script {commands: [...]}`: run a command script
 //! - `engine.batch {commands: [...], rollback?}`: the steps in one request, each as
 //!   `engine.execute` runs it; stops at the first failure and goes back to the checkpoint
-//!   (per-step results, `failed`, `undone`). Refused (`engine.batch unavailable: …`) while the
-//!   agent cursor is shown or when a step loads a file
+//!   (per-step results, `failed`, `undone`, `rolled_back`). Refused (`engine.batch unavailable: …`)
+//!   when a step loads a file; with the agent cursor shown, the pointer acts out a short summary
+//!   of it first
 //! - `engine.commands`: every command with tab, panel, params and enablement
 //! - `document.inspect {measure?}`: the design (parameters, timeline, bodies, sketches)
 //! - `ui.inspect`: UI state, viewport rect, camera, tool and dialog
@@ -23,6 +24,7 @@
 //!   headless CPU render of the model with the current camera, in the window's theme, with the
 //!   section the viewport shows (no window needed); the ground grid and the origin's axes as the
 //!   window shows them, unless `grid` or `axes` says
+//! - `ui.icon_audit {reset?, stop?}`: collect/drain requested icon names, resolved masters and placeholder flags;
 //! - `ui.menu {x?, y?, target?, close?}`: open a context menu at a point (the viewport's marking
 //!   menu, or a browser menu with `target: {type: body|sketch|component, …}`); without a point,
 //!   the open menu and its items. `ui.menuPick {item}` runs an item by id or label;
@@ -54,12 +56,14 @@ pub struct ControlRequest {
     pub method: String,
     pub params: Value,
     pub reply: Sender<ControlResponse>,
+    /// Set once the window starts on it; until then it waits its turn (`control.running`, #3654).
+    pub started: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<ControlResponse>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx }, rx)
+        (Self { method: method.into(), params, reply: tx, started: Default::default() }, rx)
     }
 }
 
@@ -97,7 +101,7 @@ fn key_from(name: &str) -> Option<egui::Key> {
 fn execute(app: &mut SolveApp, id: &str, params: Value) -> Result<Value, String> {
     let r = app.run(id, params);
     if r.is_ok()
-        && !matches!(id, "view.navigate" | "view.ambient_occlusion" | "view.graphics_preset")
+        && !matches!(id, "view.layout" | "view.navigate" | "view.ambient_occlusion" | "view.graphics_preset" | "view.history_layout")
         && app.session.active_sketch.is_none()
         && app.session.world_state().bodies.len() == 1
         && app.session.undo.len() <= 2
@@ -122,6 +126,18 @@ const MAX_BATCH: usize = 10_000;
 /// bypass.
 const LOADS_A_FILE: [&str; 3] = ["doc.open", "file.insert_step", "file.insert_mesh"];
 
+/// Why `engine.batch` refuses these steps before running any: a step loads a file (send such
+/// steps one by one).
+pub(crate) fn batch_refusal(steps: &[Value]) -> Option<String> {
+    let (i, c) = steps.iter().enumerate().find_map(|(i, step)| command(step).filter(|c| LOADS_A_FILE.contains(c)).map(|c| (i, c)))?;
+    Some(format!("engine.batch unavailable: step {i} ({c}) loads a file"))
+}
+
+/// A batch step's command id (the agent cursor points at its toolbar button).
+pub(crate) fn batch_step_command(step: &Value) -> Option<&str> {
+    command(step)
+}
+
 /// `engine.batch {commands, rollback?, timings?, profile?}`: the steps in one request, so in one
 /// frame (#743). With `timings` the reply adds each step's time and `total_ms`, with `profile`
 /// each step's kernel share too (`solidcraft_engine::timing`, #1833). Each
@@ -133,12 +149,10 @@ fn batch(app: &mut SolveApp, p: &Value) -> Outcome {
     let Some(steps) = p.get("commands").and_then(Value::as_array).filter(|s| s.len() <= MAX_BATCH) else {
         return err(format!("engine.batch: commands must be an array of at most {MAX_BATCH} steps"));
     };
-    // The agent cursor acts out each `engine.execute` on its own.
-    if app.ui.agent_cursor.show {
-        return err("engine.batch unavailable: the agent cursor is shown");
-    }
-    if let Some((i, c)) = steps.iter().enumerate().find_map(|(i, step)| command(step).filter(|c| LOADS_A_FILE.contains(c)).map(|c| (i, c))) {
-        return err(format!("engine.batch unavailable: step {i} ({c}) loads a file"));
+    // (With the agent cursor shown, the pointer has already acted out a short summary of the
+    // batch: `agent_cursor::intercept`.)
+    if let Some(why) = batch_refusal(steps) {
+        return err(why);
     }
     let rollback = p.get("rollback").and_then(Value::as_bool).unwrap_or(true);
     let profile = p.get("profile").and_then(Value::as_bool).unwrap_or(false);
@@ -160,7 +174,9 @@ fn batch(app: &mut SolveApp, p: &Value) -> Outcome {
             Err(e) => {
                 let restored = checkpoint.is_some_and(|id| app.run("edit.restore_checkpoint", json!({"checkpoint": id})).is_ok());
                 let failed = json!({"index": i, "command": command(step), "error": e});
-                let reply = json!({"completed": i, "results": results, "failed": failed, "undone": if restored { i } else { 0 }});
+                // `rolled_back`: the design really is back at its checkpoint.
+                let reply =
+                    json!({"completed": i, "results": results, "failed": failed, "undone": if restored { i } else { 0 }, "rolled_back": restored});
                 return ok(with_timings(reply, timed, rows, clock.ms()));
             }
         }
@@ -196,14 +212,16 @@ pub fn request_scope(app: &SolveApp, params: &Value) -> Result<Option<vfs::PathS
 /// mode, the section the viewport shows: an open Section Analysis dialog's preview, a sketch's
 /// Slice), with the grid and the origin's axes as `guides` says.
 pub(crate) fn view_scene(app: &SolveApp, guides: solidcraft_engine::view::Guides) -> solidcraft_engine::render::Scene {
-    solidcraft_engine::view::scene_with_palette_and_guides(
+    let mut scene = solidcraft_engine::view::scene_with_palette_and_guides(
         &app.session,
         &app.cam,
         crate::viewport::section_plane(app),
         solidcraft_engine::view::world_curve_parts,
         &crate::viewport::scene_palette(app.ui.dark, app.preferences.color_vision),
         guides,
-    )
+    );
+    scene.plain_cap = !crate::viewport::section_hatch(app);
+    scene
 }
 
 /// The grid and the origin's axes as the window shows them (the Grid and Origin switches).
@@ -354,12 +372,13 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
                 }
             }
             match (serde_json::from_value::<crate::UiState>(cur), serde_json::from_value::<solidcraft_engine::Visibility>(vis)) {
-                (Ok(u), Ok(v)) => {
+                (Ok(mut u), Ok(v)) => {
                     if (u.tab == "RENDER") != crate::render_workspace::active(app)
                         && let Err(e) = crate::render_workspace::enter(app, u.tab == "RENDER")
                     {
                         return err(e);
                     }
+                    u.ribbon_context = app.ui.ribbon_context.clone();
                     app.ui = u;
                     app.session.visibility = v;
                     ok(serde_json::to_value(&app.ui).unwrap_or_default())
@@ -369,7 +388,6 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
         }
         "ui.view" => {
             let v = s("view").unwrap_or("home");
-            app.viewport.orbit_snap = None;
             app.viewport.orbit_free = None;
             if p.get("animate").and_then(Value::as_bool).unwrap_or(false) {
                 if v != "fit" && v != "home" && StandardView::parse(v).is_none() {
@@ -393,6 +411,18 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
             ok(json!(app.cam))
         }
         "ui.camera" => wrap(camera(app, p)),
+        "ui.palette" => {
+            if p.get("open").and_then(Value::as_bool) == Some(false) {
+                app.ui.palette_open = false;
+                app.sbox.text.clear();
+            } else {
+                app.start("ui.palette");
+                if let Some(query) = s("text") {
+                    app.sbox.text = query.chars().take(crate::shortcut_box::MAX_QUERY).collect();
+                }
+            }
+            ok(json!({"open": app.ui.palette_open, "text": app.sbox.text}))
+        }
         "ui.start" => {
             let Some(id) = s("command") else { return err("missing `command`") };
             // `params`: what the dialog opens on. Refused: nothing starts, or the dialog closes.
@@ -654,6 +684,16 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
             app.synthetic.push(egui::Event::Text(s("text").unwrap_or("").to_string()));
             ok(Value::Null)
         }
+        "ui.icon_audit" => {
+            if b("reset") {
+                crate::icon_svg::audit::start();
+            }
+            let requested = crate::icon_svg::audit::take();
+            if b("stop") {
+                crate::icon_svg::audit::stop();
+            }
+            ok(json!({"requested": requested}))
+        }
         "ui.menu" => {
             if b("close") {
                 crate::context_menu::close(app);
@@ -848,7 +888,6 @@ fn camera(app: &mut SolveApp, p: &Value) -> Result<Value, String> {
         return serde_json::to_value(app.cam).map_err(|e| e.to_string());
     }
     app.cancel_view_animation();
-    app.viewport.orbit_snap = None;
     app.viewport.orbit_free = None;
     app.cam = cam;
     match fit {
@@ -943,7 +982,7 @@ mod tests {
     #[test]
     fn touchpad_text_prefix_does_not_collapse_queued_pointer_frames() {
         let mut app = SolveApp::new(Session::default(), Services::default());
-        let ctx = egui::Context::default();
+        let ctx = crate::fonts::test_context();
         let (req, _) = ControlRequest::new("ui.text", json!({"text":"prefix"}));
         assert!(matches!(handle(&mut app, &ctx, &req), Outcome::Done(_)));
         for params in [json!({"x":10,"y":10,"shift":true}), json!({"x":20,"y":20,"alt":true}), json!({"x":30,"y":30})] {
@@ -967,7 +1006,7 @@ mod tests {
     #[test]
     fn touchpad_automation_preserves_each_queued_moves_modifiers() {
         let mut app = SolveApp::new(Session::default(), Services::default());
-        let ctx = egui::Context::default();
+        let ctx = crate::fonts::test_context();
         for params in [json!({"x":10,"y":10,"shift":true}), json!({"x":20,"y":20,"alt":true}), json!({"x":30,"y":30})] {
             let (req, _) = ControlRequest::new("ui.move", params);
             assert!(matches!(handle(&mut app, &ctx, &req), Outcome::Done(_)));
@@ -989,7 +1028,7 @@ mod tests {
 
     fn render(app: &mut SolveApp, path: &std::path::Path) -> Vec<u8> {
         let (req, _rx) = ControlRequest::new("ui.render", json!({"path": path.to_string_lossy(), "width": 200, "height": 140}));
-        match handle(app, &egui::Context::default(), &req) {
+        match handle(app, &crate::fonts::test_context(), &req) {
             Outcome::Done(v) => assert_eq!(v["ok"], true, "{v}"),
             Outcome::Screenshot { .. } => panic!("ui.render took a screenshot"),
         }
@@ -1059,7 +1098,7 @@ mod tests {
             params[k.as_str()] = v.clone();
         }
         let (req, _rx) = ControlRequest::new("ui.render", params);
-        match handle(app, &egui::Context::default(), &req) {
+        match handle(app, &crate::fonts::test_context(), &req) {
             Outcome::Done(v) => assert_eq!(v["ok"], true, "{v}"),
             Outcome::Screenshot { .. } => panic!("ui.render took a screenshot"),
         }
@@ -1225,13 +1264,26 @@ mod tests {
     }
 
     #[test]
-    fn engine_batch_is_refused_while_the_agent_cursor_is_shown() {
+    fn engine_batch_runs_while_the_agent_cursor_is_shown() {
         let mut h = crate::scenario::Harness::new();
         assert_eq!(h.call("ui.agent_cursor", json!({"show": true}))["ok"], true);
         let v = batch(&mut h, json!({"commands": [{"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10}}]}));
-        assert_eq!(v["ok"], false, "{v}");
-        assert!(v["error"].as_str().is_some_and(|e| e.starts_with("engine.batch unavailable")), "{v}");
-        assert_eq!(inspect(&mut h)["bodies"].as_array().map(Vec::len), Some(0));
+        assert_eq!(v["ok"], true, "{v}");
+        assert_eq!(v["result"]["completed"], 1, "{v}");
+        assert_eq!(inspect(&mut h)["bodies"].as_array().map(Vec::len), Some(1));
+    }
+
+    /// A failed batch says whether the design really went back (`rolled_back`), not just whether
+    /// it was asked to.
+    #[test]
+    fn engine_batch_reports_whether_it_rolled_back() {
+        let mut h = crate::scenario::Harness::new();
+        let steps = json!([{"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10}}, {"command": "NoSuchCommand"}]);
+        let v = batch(&mut h, json!({"commands": steps.clone()}));
+        assert_eq!((&v["result"]["rolled_back"], &v["result"]["undone"]), (&json!(true), &json!(1)), "{v}");
+        let v = batch(&mut h, json!({"commands": steps, "rollback": false}));
+        assert_eq!((&v["result"]["rolled_back"], &v["result"]["undone"]), (&json!(false), &json!(0)), "{v}");
+        assert_eq!(inspect(&mut h)["bodies"].as_array().map(Vec::len), Some(1));
     }
 
     /// Every step of a batch from an MCP server stays inside the agent's folders (#205), as an
@@ -1321,7 +1373,7 @@ mod tests {
                 params["allow_paths"] = json!([root.to_string_lossy()]);
             }
             let (req, _rx) = ControlRequest::new(method, params);
-            match handle(&mut app, &egui::Context::default(), &req) {
+            match handle(&mut app, &crate::fonts::test_context(), &req) {
                 Outcome::Done(v) => v,
                 Outcome::Screenshot { path } => json!({"ok": true, "screenshot": path}),
             }

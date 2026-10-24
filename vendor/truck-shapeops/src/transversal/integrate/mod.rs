@@ -61,12 +61,40 @@ pub fn meshes<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(solid: &Solid<Point3, C, 
     solid.boundaries().iter().map(|shell| shell.robust_triangulation(tol)).collect()
 }
 
+/// SolidCraft: whether `shell` faces inward (a solid's void, a cut's inverted tool), by the sign
+/// of its volume with each face counted as it is oriented (a face's mesh is its surface's,
+/// whatever the face's orientation).
+fn faces_inward(shell: &MeshedShell) -> Option<bool> {
+    let mut volume = 0.0;
+    for face in shell.face_iter() {
+        let v = face.surface()?.volume();
+        volume += if face.orientation() { v } else { -v };
+    }
+    Some(volume < 0.0)
+}
+
+/// SolidCraft: whether `pt` is inside the closed `shell`, by the faces a ray from it crosses.
+/// For an AND (`and`) each face counts as it is oriented, and a shell facing inward (`inward`,
+/// see [`faces_inward`]) holds what lies outside it: the crossings count 0 there and -1 inside.
+/// An OR keeps truck's count, by the faces' surfaces alone: it folds a solid's voids in as if
+/// they were solids of their own, which is no union with voids whichever way they are counted.
+fn inside_shell(shell: &MeshedShell, pt: Point3, and: bool, inward: bool) -> Option<bool> {
+    let dir = hash::take_one_unit(pt);
+    let mut count = 0;
+    for face in shell.face_iter() {
+        let sign = if face.orientation() || !and { 1 } else { -1 };
+        count += sign * face.surface()?.signed_crossing_faces(pt, dir);
+    }
+    Some(if inward { count >= 0 } else { count >= 1 })
+}
+
 fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     shell0: &Shell<Point3, C, S>,
     meshed0: Option<&MeshedShell>,
     shell1: &Shell<Point3, C, S>,
     tol: f64,
     lineage: &mut Lineage<C, S>,
+    and: bool,
 ) -> Option<[Shell<Point3, C, S>; 2]> {
     nonpositive_tolerance!(tol);
     // SolidCraft: robust meshing (boundaries from earlier operations lie on surfaces only
@@ -86,15 +114,11 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let mut cls1 = crate::tr!(divide_face::divide_faces(shell1, &loops_store1, tol, lineage), "divide faces 1");
     cls1.integrate_by_component();
     let [mut and0, mut or0, unknown0] = cls0.and_or_unknown();
+    let inward1 = and && !unknown0.is_empty() && faces_inward(&poly_shell1)?;
     unknown0.into_iter().try_for_each(|face| {
         // SolidCraft: no panics (wasm can't catch them).
         let pt = face.boundaries().first()?.vertex_iter().next()?.point();
-        let dir = hash::take_one_unit(pt);
-        let count = poly_shell1.iter().try_fold(0, |count, face| {
-            let poly = face.surface()?;
-            Some(count + poly.signed_crossing_faces(pt, dir))
-        })?;
-        if count >= 1 {
+        if inside_shell(&poly_shell1, pt, and, inward1)? {
             and0.push(face);
         } else {
             or0.push(face);
@@ -102,15 +126,11 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         Some(())
     })?;
     let [mut and1, mut or1, unknown1] = cls1.and_or_unknown();
+    let inward0 = and && !unknown1.is_empty() && faces_inward(&poly_shell0)?;
     unknown1.into_iter().try_for_each(|face| {
         // SolidCraft: no panics (wasm can't catch them).
         let pt = face.boundaries().first()?.vertex_iter().next()?.point();
-        let dir = hash::take_one_unit(pt);
-        let count = poly_shell0.iter().try_fold(0, |count, face| {
-            let poly = face.surface()?;
-            Some(count + poly.signed_crossing_faces(pt, dir))
-        })?;
-        if count >= 1 {
+        if inside_shell(&poly_shell0, pt, and, inward0)? {
             and1.push(face);
         } else {
             or1.push(face);
@@ -128,7 +148,7 @@ pub fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> Option<Solid<Point3, C, S>> {
-    boolean(solid0, None, solid1, tol, |[and, _]| and).map(|(solid, _)| solid)
+    boolean(solid0, None, solid1, tol, true).map(|(solid, _)| solid)
 }
 
 /// OR operation between two solids.
@@ -137,7 +157,7 @@ pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> Option<Solid<Point3, C, S>> {
-    boolean(solid0, None, solid1, tol, |[_, or]| or).map(|(solid, _)| solid)
+    boolean(solid0, None, solid1, tol, false).map(|(solid, _)| solid)
 }
 
 /// SolidCraft: AND operation between two solids, with where each face and edge of the result
@@ -149,7 +169,7 @@ pub fn and_with_history<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> Option<(Solid<Point3, C, S>, Option<History>)> {
-    boolean(solid0, None, solid1, tol, |[and, _]| and)
+    boolean(solid0, None, solid1, tol, true)
 }
 
 /// SolidCraft: [`and_with_history`] with `solid0` meshed already ([`meshes`] of it, or of a
@@ -160,7 +180,7 @@ pub fn and_with_history_meshed<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> Option<(Solid<Point3, C, S>, Option<History>)> {
-    boolean(solid0, Some(meshed0), solid1, tol, |[and, _]| and)
+    boolean(solid0, Some(meshed0), solid1, tol, true)
 }
 
 /// SolidCraft: OR operation between two solids, with where each face and edge of the result
@@ -172,28 +192,29 @@ pub fn or_with_history<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> Option<(Solid<Point3, C, S>, Option<History>)> {
-    boolean(solid0, None, solid1, tol, |[_, or]| or)
+    boolean(solid0, None, solid1, tol, false)
 }
 
 /// Combines the operands' first shells, then folds in their other shells one at a time
-/// (`pick` chooses the AND or the OR shell of each pass). The history is `None` when a face or
+/// (`and` chooses the AND or the OR shell of each pass). The history is `None` when a face or
 /// edge of the result was not recorded; the result stands without it.
 fn boolean<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     meshed0: Option<&[MeshedShell]>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
-    pick: fn([Shell<Point3, C, S>; 2]) -> Shell<Point3, C, S>,
+    and: bool,
 ) -> Option<(Solid<Point3, C, S>, Option<History>)> {
+    let pick = |[and_shell, or_shell]: [Shell<Point3, C, S>; 2]| if and { and_shell } else { or_shell };
     let mut lineage = Lineage::new([solid0, solid1]);
     let mut iter0 = solid0.boundaries().iter();
     let mut iter1 = solid1.boundaries().iter();
     let shell0 = iter0.next()?;
     let shell1 = iter1.next()?;
     let meshed0 = meshed0.filter(|m| m.len() == solid0.boundaries().len()).and_then(|m| m.first());
-    let mut shell = pick(crate::tr!(process_one_pair_of_shells(shell0, meshed0, shell1, tol, &mut lineage), "first shells"));
+    let mut shell = pick(crate::tr!(process_one_pair_of_shells(shell0, meshed0, shell1, tol, &mut lineage, and), "first shells"));
     for other in iter0.chain(iter1) {
-        shell = pick(crate::tr!(process_one_pair_of_shells(&shell, None, other, tol, &mut lineage), "another shell"));
+        shell = pick(crate::tr!(process_one_pair_of_shells(&shell, None, other, tol, &mut lineage, and), "another shell"));
     }
     let solid = crate::tr!(Solid::try_new(components_in_order(&shell)).ok(), "result solid");
     let history = lineage.history(&solid);

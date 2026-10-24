@@ -76,7 +76,7 @@ when its runtime uses a different parameterization.
 
 Schema 3 caps 1,024 shells, 1,000,000 combined topology/geometry items, geometry
 nesting at 16, spline degree at 16 and control points per spline dimension at
-4,096. Numbers must be finite and bounded in magnitude by 1e12. Knot order, active
+8,192. Numbers must be finite and bounded in magnitude by 1e12. Knot order, active
 spline domain, multiplicities, rectangular grids, positive rational weights,
 nondegenerate planes, orthonormal frames, unit revolution axes, positive radii,
 valid angular/height ranges and intersection face references are checked before an adapter is called. These are resource and structural guards,

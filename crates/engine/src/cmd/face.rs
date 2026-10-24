@@ -63,14 +63,30 @@ pub(super) fn face_is_planar(s: &Session, p: Vec3) -> Option<bool> {
 /// The point is in the frame of the command's other picks: the component's own when
 /// they were mapped into it, else the world's.
 pub(super) fn face_ref(s: &Session, v: &Value, body: Option<&str>, cmd: &str) -> Result<Vec3> {
+    match face_ref_form(v).map_err(|why| bad(cmd, why))? {
+        FaceRefForm::Point(p) => Ok(p),
+        FaceRefForm::Name(name) => {
+            let st = if crate::frames::mapped() { s.model.state() } else { s.world_state() };
+            solidcraft_doc::naming::named_face_point(&st, body, name).map_err(|why| bad(cmd, why))
+        }
+    }
+}
+
+/// A face reference as given, before it is looked up: see [`face_ref`].
+pub(crate) enum FaceRefForm<'a> {
+    Point(Vec3),
+    Name(&'a str),
+}
+
+/// What [`face_ref`] reads `v` as, without the design: a point, or a name of 1…512 bytes.
+pub(crate) fn face_ref_form(v: &Value) -> std::result::Result<FaceRefForm<'_>, &'static str> {
     if let Some(name) = v.as_str() {
         if name.is_empty() || name.len() > 512 {
-            return Err(bad(cmd, "a face name is 1…512 characters"));
+            return Err("a face name is 1…512 characters");
         }
-        let st = if crate::frames::mapped() { s.model.state() } else { s.world_state() };
-        return solidcraft_doc::naming::named_face_point(&st, body, name).map_err(|why| bad(cmd, why));
+        return Ok(FaceRefForm::Name(name));
     }
-    vec3(v).or_else(|| v.get("point").and_then(vec3)).ok_or_else(|| bad(cmd, "a face is a point [x, y, z] on it, or its name from model.faces"))
+    vec3(v).or_else(|| v.get("point").and_then(vec3)).map(FaceRefForm::Point).ok_or("a face is a point [x, y, z] on it, or its name from model.faces")
 }
 
 /// The body face under a point: (mesh, face index, distance, body).

@@ -316,7 +316,7 @@ impl SheetSettings {
 
 /// The shape of the relief cut where two bends meet at a corner of the base (a rule's
 /// `corner_relief_shape`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReliefShape {
     /// Nothing is cut: the bends end square at the corner.
@@ -418,7 +418,7 @@ impl Document {
 }
 
 /// A flange: a bend along a panel edge and the flat panel past it (flat coordinates).
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SheetFlange {
     /// The flange it hangs off (None = the base panel).
     pub parent: Option<usize>,
@@ -469,7 +469,7 @@ pub struct EdgeFlange {
 }
 
 /// A sheet metal body (see the module docs).
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SheetBody {
     pub body: String,
     pub rule: String,
@@ -483,21 +483,21 @@ pub struct SheetBody {
     pub holes: Vec<Region2>,
     /// Planar machining in flat coordinates, with depths measured from the flat bottom.
     /// Derived from feature history; these records are not a document schema change.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pockets: Vec<SheetPocket>,
     /// Straight bores drilled into a panel along its plane (a hole into a rim), in flat
     /// coordinates, each kept inside its own panel's material so the folded part and its flat
     /// pattern both carry it (#560). Derived from feature history, like `pockets`.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bores: Vec<SheetBore>,
     /// Perforation fields (#732), flat coordinates; their holes are computed on demand and never cut into the B-rep.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub perforations: Vec<SheetPerforation>,
     /// Regions (flat coordinates) that text cut or machined, letters with their counters as
     /// holes: a record of where the sheet's text went, so that its DXF can write the letters on
     /// layers of their own (see [`SheetBody::letters`]). The cut-outs and pockets themselves are
     /// in `holes` and `pockets`. Derived from feature history, like `pockets`.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<Region2>,
     /// Unfolded.
     pub flat: bool,
@@ -513,11 +513,18 @@ pub struct SheetBody {
     /// The base sketch's lines (id, ends in flat coordinates), naming the base panel's edges.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub base_curves: Vec<(String, Vec2, Vec2)>,
+    /// The feature (its name) that changed this body's material without changing its sheet
+    /// model: a fillet or chamfer, a join, a mirror combined into it, any feature that is not
+    /// sheet metal machining. The flat pattern, its DXF and the bend table no longer describe the
+    /// body while it is set, so they are refused. Cleared when a sheet metal feature rebuilds the
+    /// body from the model. Derived from feature history, like `pockets`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub altered_by: Option<String>,
 }
 
 /// A straight round bore of one panel (None = the base), in flat coordinates: a cylinder from
 /// `base` along the unit `axis` for `height`, cut only from that panel's material.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SheetBore {
     pub panel: Option<usize>,
     pub base: Vec3,
@@ -527,16 +534,20 @@ pub struct SheetBore {
 }
 
 /// A perforation field from a `sheet.perforate` feature (#732).
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SheetPerforation {
     pub feature: u64,
     pub diameter: f64,
     pub pitch: f64,
     pub margin: f64,
     pub square: bool,
+    /// The grid runs from the flat's right edge instead of its left: the field of a mirrored
+    /// copy, whose holes are the mirror image of its source's.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub from_right: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SheetPocket {
     pub region: Region2,
     pub z0: f64,
@@ -849,6 +860,20 @@ struct ReturnCorner {
 }
 
 impl SheetBody {
+    /// Whether the flat pattern still describes the body: refused, naming the feature, once a
+    /// feature that is not sheet metal changed the body's material (see `altered_by`). The flat
+    /// pattern, its DXF and the bend table all check it, so none of them makes a part other than
+    /// the one in the design.
+    pub fn flat_matches_body(&self) -> Result<()> {
+        match &self.altered_by {
+            None => Ok(()),
+            Some(feature) => Err(DocError::Invalid(format!(
+                "not supported yet: the flat pattern of `{}` can't include {feature}, which changed the body after its sheet metal features, so the flat pattern, DXF and bend table would not match the part; remove or suppress {feature}, or make that shape with sheet metal features",
+                self.body
+            ))),
+        }
+    }
+
     /// Bend allowance of a flange.
     pub fn allowance(&self, f: &SheetFlange) -> f64 {
         f.angle.abs() * (f.radius + self.k * self.t)
@@ -1971,8 +1996,11 @@ impl SheetBody {
             if y > hi.y - clear + 1e-9 {
                 break;
             }
-            let mut x = lo.x + clear + if !p.square && row % 2 == 1 { p.pitch / 2.0 } else { 0.0 };
-            while x <= hi.x - clear + 1e-9 {
+            let shift = if !p.square && row % 2 == 1 { p.pitch / 2.0 } else { 0.0 };
+            // Steps across the row from its first hole; a mirrored field counts from the right.
+            let mut step = 0.0;
+            while lo.x + clear + shift + step <= hi.x - clear + 1e-9 {
+                let x = if p.from_right { hi.x - clear - shift - step } else { lo.x + clear + shift + step };
                 let c = Vec2::new(x, y);
                 let (i, j) = idx(x, y);
                 let near = grid.get(j * nx + i).map(Vec::as_slice).unwrap_or(&[]);
@@ -1982,7 +2010,7 @@ impl SheetBody {
                 {
                     out.push(c);
                 }
-                x += p.pitch;
+                step += p.pitch;
             }
             row += 1;
         }
@@ -2299,6 +2327,25 @@ impl SheetBody {
                 return Err(DocError::Invalid("pick an edge of the sheet's top or bottom face".into()));
             }
             let d = (b - a).normalized().ok_or_else(|| DocError::Invalid("edge".into()))?;
+            // A bend line is no free edge: the base's or the parent panel's edge where a flange
+            // starts, or the flange panel's edge where its bend ends.
+            let outward = Vec2::new(d.y, -d.x);
+            let on_bend = self.flanges.iter().enumerate().any(|(i, f)| {
+                let (at, facing) = if panel == f.parent {
+                    (f.p, 1.0)
+                } else if panel == Some(i) {
+                    (f.p + f.n * self.allowance(f), -1.0)
+                } else {
+                    return false;
+                };
+                let along = |p: Vec2| p.dot(f.d);
+                outward.dot(f.n) * facing > 0.99
+                    && (a - at).dot(f.n).abs() < 1e-6
+                    && along(a).max(along(b)).min(along(f.p) + f.len) - along(a).min(along(b)).max(along(f.p)) > 1e-6
+            });
+            if on_bend {
+                return Err(DocError::Invalid(format!("{}that edge is the bend line of a flange; pick a free edge of the sheet", on(k))));
+            }
             let (s0, s1) = self
                 .edge_left(panel, a, b, e.pick, &cuts)
                 .ok_or_else(|| DocError::Invalid(format!("{}a cut-out has taken that edge away; pick an edge the sheet still has", on(k))))?;
@@ -2955,22 +3002,22 @@ impl SheetBody {
                         Err(why) => notes.push(format!("no corner relief at {}: {why}", self.shown(k.c))),
                     }
                 }
-                // The reliefs at the two ends of one edge must not overlap: the one planned later
-                // is left out, with a note.
+                // Two reliefs must not overlap. Two corners that share an edge never come here:
+                // each relief reaches exactly `r` along that edge, and `plan_relief` refuses
+                // unless `2r` fits in it. Two corners that do not share one can: the square
+                // relief at a corner of 120° reaches `2r` from it, along the bisector. Two that
+                // would overlap are left out together, each with a note naming the other, so
+                // that which of them is cut does not depend on the order the corners come in.
                 let mut kept: Vec<PlannedRelief> = Vec::with_capacity(planned.len());
-                for p in planned {
-                    let mut clash = None;
-                    for q in &kept {
-                        if convex_overlap(&q.cut, &p.cut) > 1e-9 {
-                            clash = Some(q.corner.c);
-                            break;
-                        }
-                    }
+                for (i, p) in planned.iter().enumerate() {
+                    let clash = planned.iter().enumerate().find(|(j, q)| *j != i && convex_overlap(&q.cut, &p.cut) > 1e-9);
                     match clash {
-                        Some(at) => {
-                            notes.push(format!("no corner relief at {}: it would overlap the relief at {}", self.shown(p.corner.c), self.shown(at)))
-                        }
-                        None => kept.push(p),
+                        Some((_, q)) => notes.push(format!(
+                            "no corner relief at {}: it would overlap the relief at {}",
+                            self.shown(p.corner.c),
+                            self.shown(q.corner.c)
+                        )),
+                        None => kept.push(p.clone()),
                     }
                 }
                 for p in &kept {
@@ -4315,6 +4362,101 @@ impl Letters {
     }
 }
 
+/// A flat point mirrored across the flat frame's y axis (x → −x).
+fn flip_x(p: Vec2) -> Vec2 {
+    Vec2::new(-p.x, p.y)
+}
+
+/// A loop mirrored across the flat frame's y axis, exactly (arcs stay arcs, free-form curves
+/// follow their control points), and run backwards so it keeps its sense: an outer loop stays
+/// counter-clockwise, a hole clockwise.
+fn flip_x_loop(l: &Loop2) -> Loop2 {
+    let segs = l
+        .segs
+        .iter()
+        .map(|s| match *s {
+            Seg2::Arc { center, radius, start, sweep } => {
+                Seg2::Arc { center: flip_x(center), radius, start: std::f64::consts::PI - start, sweep: -sweep }
+            }
+            other => map_controls(&other, flip_x),
+        })
+        .collect();
+    Loop2 { segs }.reversed()
+}
+
+fn flip_x_region(r: &Region2) -> Region2 {
+    Region2 { outer: flip_x_loop(&r.outer), holes: r.holes.iter().map(flip_x_loop).collect() }
+}
+
+impl SheetBody {
+    /// The sheet model of a copy of this body moved by `m` and named `body`: a rigid motion
+    /// moves its frame; a mirror moves its frame too and mirrors everything in the flat, so the
+    /// copy is the opposite hand, with the same thickness side, bends, K-factor and flat
+    /// length. `None` when `m` is not a rigid motion or a mirror (a scaled copy is no sheet).
+    pub fn copied(&self, body: &str, m: &Mat) -> Option<SheetBody> {
+        let axis = |i: usize| m.get(i).map(|c| Vec3::new(c[0], c[1], c[2]));
+        let (x, y, z) = (axis(0)?, axis(1)?, axis(2)?);
+        let unit = |v: Vec3| (v.dot(v) - 1.0).abs() < 1e-6;
+        let isometry = m.iter().flatten().all(|v| v.is_finite())
+            && unit(x)
+            && unit(y)
+            && unit(z)
+            && x.dot(y).abs() < 1e-6
+            && x.dot(z).abs() < 1e-6
+            && y.dot(z).abs() < 1e-6;
+        if !isometry {
+            return None;
+        }
+        let (origin, fx, fy) = (apply_point(m, self.frame.origin), apply_vector(m, self.frame.x), apply_vector(m, self.frame.y));
+        let mut out = self.clone();
+        out.body = body.to_string();
+        if x.cross(y).dot(z) > 0.0 {
+            out.frame = Plane::new(origin, fx, fy)?;
+        } else {
+            // The mirror of flat point (u, v, w) is the point (−u, v, w) of the frame with its x
+            // axis turned round: that frame's normal is the mirrored normal, so the material
+            // stays on the same side of the mirrored base face.
+            out.frame = Plane::new(origin, fx * -1.0, fy)?;
+            out.flip_flat();
+        }
+        Some(out)
+    }
+
+    /// Everything in flat coordinates mirrored across the flat's y axis (x → −x).
+    fn flip_flat(&mut self) {
+        self.base = flip_x_region(&self.base);
+        for f in &mut self.flanges {
+            // The bend line runs the other way, from its far end, so the flange still lies on
+            // the same side of it (`n` turned as `d` is): its ends swap.
+            f.p = flip_x(f.p + f.d * f.len);
+            f.d = Vec2::new(f.d.x, -f.d.y);
+            f.n = flip_x(f.n);
+            f.ext = (f.ext.1, f.ext.0);
+            f.slope = (f.slope.1, f.slope.0);
+            f.tear = (f.tear.1, f.tear.0);
+            if let Some(shape) = &mut f.shape {
+                *shape = shape.iter().rev().map(|p| flip_x(*p)).collect();
+            }
+            if let Some(exact) = &mut f.exact {
+                *exact = flip_x_loop(exact);
+            }
+        }
+        for r in self.holes.iter_mut().chain(self.labels.iter_mut()).chain(self.pockets.iter_mut().map(|p| &mut p.region)) {
+            *r = flip_x_region(r);
+        }
+        for b in &mut self.bores {
+            b.base.x = -b.base.x;
+            b.axis.x = -b.axis.x;
+        }
+        for p in &mut self.perforations {
+            p.from_right = !p.from_right;
+        }
+        for (_, a, b) in &mut self.base_curves {
+            (*a, *b) = (flip_x(*b), flip_x(*a));
+        }
+    }
+}
+
 /// Bounded overlap predicate, including crossing-only cuts whose vertices lie outside a panel.
 pub(crate) fn flat_regions_overlap(a: &Region2, b: &Region2, work: &mut FlatWork) -> Result<bool> {
     let (a, b) = (planar_region(a)?, planar_region(b)?);
@@ -4343,6 +4485,7 @@ pub fn base_flange(body: &str, rule: &str, rv: &RuleValues, plane: Plane, region
         relief_size: rv.corner_relief,
         bend_relief: (rv.relief_width, rv.relief_depth),
         base_curves: Vec::new(),
+        altered_by: None,
     }
 }
 
@@ -4401,6 +4544,7 @@ pub fn contour_flange(body: &str, rule: &str, rv: &RuleValues, plane: &Plane, pt
         relief_size: rv.corner_relief,
         bend_relief: (rv.relief_width, rv.relief_depth),
         base_curves: Vec::new(),
+        altered_by: None,
     };
     let (y0, y1) = if ysign > 0.0 { (0.0, width) } else { (-width, 0.0) };
     // First segment: the base panel.
@@ -5591,6 +5735,54 @@ mod tests {
         let alpha = dirs[1].cross(dirs[0]).atan2(dirs[1].dot(dirs[0])).abs();
         let bisector = (dirs[0] + dirs[1]).normalized().unwrap_or(Vec2::X);
         c + bisector * (s0 / (alpha / 2.0).sin())
+    }
+
+    /// Two corner reliefs that would overlap are both left out. The two corners do not share an
+    /// edge: they are the 120° ones opposite each other in a rhombus, and the square relief at
+    /// each reaches 2r from it along the bisector, so the two reach each other.
+    #[test]
+    fn two_reliefs_that_would_overlap_are_both_left_out() {
+        // A rhombus of 120° and 60° corners, with a flange on each of its four edges. The two
+        // 120° corners are 12 mm apart in the trimmed base; a square relief 8 mm across reaches
+        // 4 mm along the edge it starts on and 8 mm along the bisector, so the two meet.
+        let l = 12.0 + 4.0 * 3.0f64.sqrt();
+        let u = Vec2::from_angle(std::f64::consts::FRAC_PI_3);
+        let pts = [Vec2::new(0.0, 0.0), Vec2::new(l / 2.0, l * u.y), Vec2::new(l, 0.0), Vec2::new(l / 2.0, -l * u.y)];
+        let base = || Region2 { outer: Loop2::polygon(&pts).ccw(), holes: vec![] };
+        let picks = [
+            Vec3::new(l / 4.0, l * u.y / 2.0, 2.0),
+            Vec3::new(l * 0.75, l * u.y / 2.0, 2.0),
+            Vec3::new(l * 0.75, -l * u.y / 2.0, 2.0),
+            Vec3::new(l / 4.0, -l * u.y / 2.0, 2.0),
+        ];
+        let flange = |i: usize| EdgeFlange { pick: picks[i], height: 38.6, angle: 90f64.to_radians() };
+        // The round relief reaches r from its corner and the two are 12 mm apart: it fits at both.
+        for shape in [ReliefShape::Round, ReliefShape::Rectangular] {
+            let what = format!("{shape:?} at two corners opposite each other");
+            let rv = RuleValues { corner_relief_shape: shape, corner_relief: 8.0, ..alu() };
+            // The same four flanges, made in another order: the corners that keep their relief
+            // must not depend on it.
+            for order in [[0, 1, 2, 3], [3, 2, 1, 0]] {
+                let each: Vec<EdgeFlange> = order.iter().map(|&i| flange(i)).collect();
+                let (s, notes) = flanges_each(base(), &rv, &each);
+                if shape == ReliefShape::Round {
+                    assert!(notes.is_empty(), "{what}: {order:?}: {notes:?}");
+                    // A round at each of the four corners.
+                    assert_eq!(s.base.outer.segs.len(), 8, "{what}: {order:?}: {:?}", s.base.outer.segs);
+                    continue;
+                }
+                // The two reliefs that would overlap are both left out, each with a note naming
+                // the other.
+                assert_eq!(notes.len(), 2, "{what}: {order:?}: {notes:?}");
+                for n in &notes {
+                    assert!(n.starts_with("no corner relief at (") && n.contains("it would overlap the relief at ("), "{what}: {notes:?}");
+                }
+                // The two kites at the 60° corners are cut, the ones at the 120° corners are
+                // not: the base keeps four of its edges and gains the two kites.
+                assert_eq!(s.base.outer.segs.len(), 8, "{what}: {order:?}: {:?}", s.base.outer.segs);
+                holds_the_flat_material(&s, &what);
+            }
+        }
     }
 
     /// The corner reliefs at the corners that are not square: a 60° and a 120° one, each of the

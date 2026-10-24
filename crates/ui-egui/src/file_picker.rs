@@ -175,7 +175,7 @@ mod tests {
         if let Some(waker) = answer.waker.borrow_mut().take() {
             waker.wake();
         }
-        tick(app, &egui::Context::default());
+        tick(app, &crate::fonts::test_context());
         // A save the answer started is written on a worker: wait for it.
         crate::save_job::tick(app, true);
         assert!(!app.file_picker_busy());
@@ -310,7 +310,13 @@ mod tests {
             Box::pin(std::future::ready(None))
         }));
         h.app.run("sketch.create", json!({"plane": "XY"})).unwrap();
-        for (command, want) in [("sketch.insert_svg", vec!["svg"]), ("sketch.insert_dxf", vec!["dxf"]), ("file.insert_step", vec![])] {
+        for (command, want) in [
+            ("sketch.insert_svg", vec!["svg"]),
+            ("sketch.insert_dxf", vec!["dxf"]),
+            ("file.insert_step", vec![]),
+            ("canvas.insert", vec!["png", "jpg", "jpeg"]),
+            ("canvas.decal", vec!["png", "jpg", "jpeg"]),
+        ] {
             h.app.start(command);
             tick(&mut h.app, &h.ctx);
             assert_eq!(asked.borrow().last().cloned(), Some(want.iter().map(|e| e.to_string()).collect::<Vec<_>>()), "{command}");

@@ -39,7 +39,11 @@ fn fields(h: &Harness) -> Vec<(&'static str, String)> {
 /// Every field shows its text in its row, as a person sees it.
 fn assert_shown(h: &Harness, fields: &[(&str, String)]) {
     for (label, text) in fields {
-        assert!(h.widget_near(text, label).is_some(), "the {label} row shows {text:?}");
+        let nodes = &h.output.accesskit_update.as_ref().unwrap().nodes;
+        assert!(
+            nodes.iter().any(|(_, n)| n.role() == egui::accesskit::Role::TextInput && n.label() == Some(*label) && n.value() == Some(text)),
+            "the {label} editor shows {text:?}"
+        );
     }
 }
 

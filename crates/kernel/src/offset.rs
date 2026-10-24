@@ -1090,6 +1090,13 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
                     let (o, s, n) = pick(fs);
                     let m2 =
                         move_point(m, &o, &s, &n, size * 1e-6).ok_or_else(|| fail("an edge whose faces don't meet the same way after the move"))?;
+                    // An arc turned round: its ends moved past its middle (next to a face it meets
+                    // tangentially), so the arc through them goes the long way round its circle.
+                    let (a0, c0, a1, c1) =
+                        (from_p3(e.absolute_front().point()), from_p3(e.absolute_back().point()), from_p3(a.point()), from_p3(c.point()));
+                    if (m - a0).cross(c0 - a0).dot((m2 - a1).cross(c1 - a1)) < 0.0 {
+                        return Err(fail("not supported yet: the move is larger than a wall or step is thick (faces would cross)"));
+                    }
                     builder::circle_arc(a, c, p3(m2))
                 }
             };

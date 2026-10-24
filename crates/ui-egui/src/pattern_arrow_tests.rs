@@ -29,6 +29,9 @@ fn a_sketch_pattern_drags_its_second_spacing_square_to_the_first() {
         {"click": {"sketch": [5, 0]}}
     ]))
     .unwrap();
+    // Keep both arrows in the exposed viewport beside the left dialog. The full-bleed
+    // projection otherwise puts Spacing 2 under the dialog's top edge.
+    h.call("ui.camera", json!({"target":[-30,0,0]}));
     h.settle();
     let (Some(a1), Some(a2)) = (handle_at("arrow"), handle_at("arrow2")) else {
         panic!("both arrows: {:?} {:?}", handle_at("arrow"), handle_at("arrow2"));
@@ -36,6 +39,8 @@ fn a_sketch_pattern_drags_its_second_spacing_square_to_the_first() {
     // Looking down on XY, the first direction (sketch x) points right and the second (square to
     // it) up the screen: the arrows share their base, so each lies along its own axis.
     assert!(a1.x > a2.x + 10.0 && (a2.y - a1.y).abs() > 10.0, "arrow {a1:?}, arrow2 {a2:?}");
+    assert!(!crate::shell::covered(&h.app, a1));
+    assert!(!crate::shell::covered(&h.app, a2));
     let (spacing, spacing2) = spacings(&h);
     // Dragging the second arrow further out sets Spacing 2 only.
     h.call("ui.drag", json!({"x0": a2.x, "y0": a2.y, "x1": a2.x, "y1": a2.y - 60.0, "steps": 6}));

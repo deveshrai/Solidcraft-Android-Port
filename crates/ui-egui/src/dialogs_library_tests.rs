@@ -30,6 +30,30 @@ fn catalog_clicked_load_apply_export_and_ok_keep_one_design_undo_step() {
     h.frames(3);
     let undo = h.app.session.undo.len();
     h.step(&json!({"widget":"Load library"})).unwrap();
+    for handle in [
+        "library:path",
+        "library:load",
+        "library:search",
+        "library:entry:0",
+        "library:apply",
+        "library:export",
+        "dialog:button::Open library...",
+        "dialog:button::Load library",
+        "dialog:button::Apply library appearance",
+        "dialog:button::Export design library...",
+    ] {
+        assert!(crate::scenario::handle_at(handle).is_some(), "missing {handle}");
+    }
+    for message in
+        ["Replace existing library file", "Apply your appearance first. Exports assigned appearances and materials created in this design."]
+    {
+        assert!(h.widget(message).is_some(), "missing {message}");
+    }
+    h.step(&json!({"click":{"handle":"library:search"}})).unwrap();
+    h.step(&json!({"text":"no such appearance"})).unwrap();
+    assert!(h.widget("No matching appearance presets.").is_some());
+    h.step(&json!({"key":"A","cmd":true})).unwrap();
+    h.step(&json!({"key":"Backspace"})).unwrap();
     h.step(&json!({"click":{"handle":"library:entry:0"}})).unwrap();
     h.step(&json!({"widget":"Apply library appearance"})).unwrap();
     assert_eq!(h.app.session.doc.appearances.bodies["Body1"].name, "Warm oak colour");
@@ -70,7 +94,7 @@ fn async_library_export_holds_its_document_until_the_answer() {
     let (mut h, token) = appearance_fixture().unwrap();
     let original = h.app.session.doc.clone();
     let path = h.dir.join("delayed-library.json");
-    let ctx = egui::Context::default();
+    let ctx = crate::fonts::test_context();
     let slot: Slot = Default::default();
     save(&mut h.app, &slot);
     save_library(&mut h.app, token, false);
@@ -97,7 +121,7 @@ fn async_library_export_captures_overwrite_consent_and_cancel_writes_nothing() {
     let path = h.dir.join("existing-library.json");
     std::fs::write(&path, b"keep this file").unwrap();
     let original = h.app.session.doc.clone();
-    let ctx = egui::Context::default();
+    let ctx = crate::fonts::test_context();
     let slot: Slot = Default::default();
     save(&mut h.app, &slot);
     save_library(&mut h.app, token.clone(), false);
@@ -123,7 +147,7 @@ fn async_library_open_does_not_replace_a_new_appearance_editor() {
     let path = h.dir.join("source-library.json");
     h.app.run("library.export", json!({"path":path})).unwrap();
     let original = h.app.session.doc.clone();
-    let ctx = egui::Context::default();
+    let ctx = crate::fonts::test_context();
     let slot: Slot = Default::default();
     save(&mut h.app, &slot);
     // Prepare a different editor before the picker holds user commands, then model
@@ -158,7 +182,7 @@ fn delayed_library_export_refuses_an_internally_changed_design_without_overwriti
     let changed = h.app.session.doc.clone();
     let history = (h.app.session.undo.len(), h.app.session.revision);
     *slot.borrow_mut() = Some(Some(path.to_string_lossy().into_owned()));
-    crate::file_picker::tick(&mut h.app, &egui::Context::default());
+    crate::file_picker::tick(&mut h.app, &crate::fonts::test_context());
     assert_eq!(std::fs::read(path).unwrap(), b"keep library");
     assert!(Arc::ptr_eq(&changed, &h.app.session.doc));
     assert_eq!((h.app.session.undo.len(), h.app.session.revision), history);

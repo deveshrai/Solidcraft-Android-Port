@@ -280,8 +280,13 @@ fn modify(sk: &mut Sketch, ci: usize, at: Vec2, remove: bool, points: Option<&[V
         }
     }
     let ids: Vec<String> = made.iter().filter_map(|c| sk.curves.get(*c).map(|c| c.id.clone())).collect();
+    // The removed piece, for previews (`sketch.trim.path`).
+    let removed: Vec<[f64; 2]> = gone
+        .and_then(|k| intervals.get(k))
+        .map(|(a, b, ..)| span(&segs, *a, *b).iter().flat_map(|s| s.polyline(1e-3)).map(|q| [q.x, q.y]).collect())
+        .unwrap_or_default();
     sk.remove_curves(&[ci]);
     let unused: Vec<usize> = cut_pt.iter().map(|x| x.1).filter(|pi| !sk.curves.iter().any(|c| c.kind.uses(*pi))).collect();
     sk.remove_points(&unused);
-    Ok(json!({"curves": ids}))
+    Ok(json!({"curves": ids, "removed": removed}))
 }

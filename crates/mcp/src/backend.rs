@@ -10,7 +10,7 @@ use solidcraft_engine::render::StandardView;
 use solidcraft_engine::view::Guides;
 
 /// Something that answers control-channel methods: `engine.execute`, `engine.commands`,
-/// `document.inspect`, `ui.view`, `ui.render`, `ui.screenshot`.
+/// `document.inspect`, `ui.view`, `ui.render`, `ui.screenshot`, `control.running`.
 pub trait Backend {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String>;
     /// True when a real window is attached (`ui.screenshot` can capture it).
@@ -301,6 +301,8 @@ impl Backend for Headless {
                 }))
             }
             "ui.screenshot" => Err("no window in headless mode; use ui.render".into()),
+            // Calls run here one at a time: none is running while this one is asked.
+            "control.running" => Ok(json!({"running": []})),
             other => Err(format!("unknown method `{other}`")),
         }
     }

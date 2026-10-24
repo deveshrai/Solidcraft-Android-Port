@@ -3,12 +3,13 @@
 //! Picking a hole (its wall or rim) seats the part in it with a rigid joint; without one the part
 //! goes at the origin. The live preview shows it placed.
 
-use egui::{RichText, vec2};
+use crate::ui_kit::{choice_row, text_row};
+use egui::vec2;
 use serde_json::{Value, json};
 use solidcraft_engine::{Sel, Session};
 
 use crate::SolveApp;
-use crate::dialogs::{Kind, combo, row_label};
+use crate::dialogs::{Kind, combo, form_row};
 use crate::selection::{EDGES, FACES, SelInput};
 use crate::theme::Tokens;
 
@@ -122,40 +123,34 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Pt, inputs: &[SelInpu
         }
     };
     if lib.is_empty() {
-        row_label(ui, "");
-        ui.label(RichText::new(crate::i18n::tr_label("the parts library is not available")).color(t.text_dim));
-        ui.end_row();
+        ui.vertical(|ui| {
+            crate::ui_kit::text(ui, crate::i18n::tr_label("the parts library is not available"), crate::ui_kit::Text::Note("parts_unavailable"));
+        });
         return false;
     }
     let names: Vec<String> =
         lib.iter().map(|f| if f.standard.is_empty() { f.name.clone() } else { format!("{} ({})", f.name, f.standard) }).collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    row_label(ui, "Type");
     let before = k.family;
-    combo(ui, "pt_family", &refs, &mut k.family);
-    ui.end_row();
+    choice_row(ui, "Type", "pt_family", &mut k.family, &refs);
     if k.family != before {
         k.size = 0;
         k.length = None;
     }
     let Some(f) = lib.get(k.family) else { return false };
     let sizes: Vec<&str> = f.sizes.iter().map(|s| s.0.as_str()).collect();
-    row_label(ui, "Size");
-    combo(ui, "pt_size", &sizes, &mut k.size);
-    ui.end_row();
+    choice_row(ui, "Size", "pt_size", &mut k.size, &sizes);
     if let Some(ls) = &f.lengths {
         let mut labels = vec!["Default".to_string()];
         labels.extend(ls.iter().map(|l| crate::prefs::show_mm(app, *l, 1)));
         let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
         let mut i = k.length.map_or(0, |x| x + 1);
-        row_label(ui, "Length");
-        combo(ui, "pt_len", &refs, &mut i);
-        k.length = i.checked_sub(1);
-        ui.end_row();
+        form_row(ui, "Length", |ui| {
+            combo(ui, "pt_len", &refs, &mut i);
+            k.length = i.checked_sub(1);
+        });
     }
-    row_label(ui, "Name");
-    ui.add(egui::TextEdit::singleline(&mut k.name).hint_text("automatic"));
-    ui.end_row();
+    text_row(ui, "Name", &mut k.name, "automatic");
     // The part, and its table values.
     let key = (k.family, k.size, k.length);
     let tex_id = egui::Id::new("sc_part_picture");
@@ -172,29 +167,35 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Pt, inputs: &[SelInpu
         });
         k.picture = Some(key);
     }
-    row_label(ui, "");
-    match ui.data(|d| d.get_temp::<egui::TextureHandle>(tex_id)) {
+    ui.vertical(|ui| match ui.data(|d| d.get_temp::<egui::TextureHandle>(tex_id)) {
         Some(tx) => {
-            ui.add(egui::Image::new(&tx).fit_to_exact_size(vec2(180.0, 112.0)).corner_radius(4.0));
+            ui.add(egui::Image::new(&tx).fit_to_exact_size(vec2(180.0, 112.0)).corner_radius(t.radius_sm));
         }
         None => {
-            ui.label(RichText::new(crate::i18n::tr_label("no picture")).color(t.text_dim));
+            crate::ui_kit::text(ui, crate::i18n::tr_label("no picture"), crate::ui_kit::Text::Note("parts_picture"));
         }
-    }
-    ui.end_row();
+    });
     if let Some((_, row)) = f.sizes.get(k.size)
         && let Some(o) = row.as_object()
     {
         for (key, v) in o.iter().filter(|(key, _)| key.as_str() != "size") {
-            row_label(ui, &key.replace('_', " "));
-            ui.label(RichText::new(v.as_f64().map(|x| crate::prefs::show_mm(app, x, 1)).unwrap_or_else(|| v.to_string())).color(t.text_dim));
-            ui.end_row();
+            form_row(ui, &key.replace('_', " "), |ui| {
+                crate::ui_kit::text(
+                    ui,
+                    &v.as_f64().map(|x| crate::prefs::show_mm(app, x, 1)).unwrap_or_else(|| v.to_string()),
+                    crate::ui_kit::Text::Cell,
+                );
+            });
         }
     }
     if inputs.first().is_some_and(|i| i.items.is_empty()) {
-        row_label(ui, "");
-        ui.label(RichText::new(crate::i18n::tr_label("pick a hole to seat it, or OK places it at the origin")).color(t.text_dim));
-        ui.end_row();
+        ui.vertical(|ui| {
+            crate::ui_kit::text(
+                ui,
+                crate::i18n::tr_label("pick a hole to seat it, or OK places it at the origin"),
+                crate::ui_kit::Text::Note("parts_placement"),
+            );
+        });
     }
     false
 }

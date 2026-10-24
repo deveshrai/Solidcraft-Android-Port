@@ -1,6 +1,7 @@
 //! Commands that recompute the history off the window thread (`deferred`): the marker moved,
 //! undo, each computed beside the window and run once in; a marker moved again while one move
-//! computes replaces the move still waiting.
+//! computes replaces the move still waiting. And an agent's control requests (`control_job`,
+//! #1989): its design changes computed beside the window, in order, while the window answers.
 
 use std::time::Duration;
 
@@ -27,7 +28,7 @@ fn block_boss_hole() -> Harness {
 /// Frames until nothing computes or waits (a few seconds at most).
 fn until_settled(h: &mut Harness) {
     for _ in 0..500 {
-        if h.app.deferred.is_none() && h.app.deferred_queue.is_empty() {
+        if h.app.deferred.is_none() && h.app.deferred_queue.is_empty() && h.app.delete_check.is_none() {
             break;
         }
         h.frames(1);
@@ -53,6 +54,32 @@ fn the_marker_moved_computes_off_the_window_thread_then_moves() {
     h.app.run_heavy("timeline.roll_to", json!({})).unwrap();
     until_settled(&mut h);
     assert_eq!(marker(&h), None);
+    let hole = std::f64::consts::PI * 4.0 * 15.0;
+    let v = h.app.run("inspect.measure", json!({})).unwrap()["total"]["volume_mm3"].as_f64().unwrap();
+    assert!((v - (12500.0 - hole)).abs() < 1.0, "{v}");
+}
+
+/// The command runs for real with what was evaluated off the window thread: nothing is
+/// evaluated twice, even once the evaluation cache no longer holds it (a large design's states
+/// are past its budget, and the window thread evaluated the whole command again).
+#[test]
+fn a_command_computed_off_the_thread_is_not_evaluated_again() {
+    let mut h = block_boss_hole();
+    h.app.run_heavy("timeline.roll_to", json!({"position": 1})).unwrap();
+    until_settled(&mut h);
+    h.app.session.model.cache = Default::default();
+    h.app.run_heavy("timeline.roll_to", json!({})).unwrap();
+    for _ in 0..500 {
+        if h.app.deferred.as_mut().is_some_and(crate::deferred::Deferred::finished) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // What it evaluated is gone from the cache.
+    h.app.session.model.cache = Default::default();
+    until_settled(&mut h);
+    assert_eq!(marker(&h), None);
+    assert_eq!((h.app.session.model.last_recomputed, h.app.session.model.last_restored), (0, 2), "the boss and the hole as evaluated off the thread");
     let hole = std::f64::consts::PI * 4.0 * 15.0;
     let v = h.app.run("inspect.measure", json!({})).unwrap()["total"]["volume_mm3"].as_f64().unwrap();
     assert!((v - (12500.0 - hole)).abs() < 1.0, "{v}");
@@ -97,4 +124,383 @@ fn a_design_changed_while_a_move_computes_is_computed_again() {
     until_settled(&mut h);
     assert!(h.app.session.revision > revision, "the move ran after the change");
     assert_eq!(marker(&h), Some(2));
+}
+
+/// A control request for the app, and where its reply lands.
+fn ask(tx: &std::sync::mpsc::Sender<crate::ControlRequest>, method: &str, params: serde_json::Value) -> std::sync::mpsc::Receiver<serde_json::Value> {
+    let (req, reply) = crate::ControlRequest::new(method, params);
+    tx.send(req).unwrap();
+    reply
+}
+
+/// The block with its boss and hole, driven over the control channel.
+fn agent_harness() -> (Harness, std::sync::mpsc::Sender<crate::ControlRequest>) {
+    let mut h = block_boss_hole();
+    h.app.preferences.agent_off_thread = true;
+    let (tx, rx) = std::sync::mpsc::channel();
+    h.app.control_rx = Some(rx);
+    (h, tx)
+}
+
+/// Frames until `reply` lands (a few seconds at most).
+fn reply_to(h: &mut Harness, reply: &std::sync::mpsc::Receiver<serde_json::Value>) -> serde_json::Value {
+    for _ in 0..500 {
+        if let Ok(v) = reply.try_recv() {
+            return v;
+        }
+        h.frames(1);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("no reply");
+}
+
+fn second_hole() -> serde_json::Value {
+    json!({"command": "solid.cylinder", "params": {"base": [50, 10, -1], "axis": [0, 0, 1], "radius": 3, "height": 20, "operation": "cut"}})
+}
+
+/// #1989: an agent's design change computes off the window thread. The window keeps answering
+/// (`ui.*`, inspection) while it computes and shows which command it is; the agent's next
+/// design change waits its turn; each lands as its own undo step with its usual reply.
+#[test]
+fn an_agent_design_change_computes_off_the_window_thread() {
+    let (mut h, tx) = agent_harness();
+    let features = h.app.session.doc.features.len();
+    let undo = h.app.session.undo.len();
+    let hole = ask(&tx, "engine.execute", second_hole());
+    let view = ask(&tx, "ui.inspect", json!({}));
+    let inspect = ask(&tx, "document.inspect", json!({}));
+    let boss = ask(
+        &tx,
+        "engine.execute",
+        json!({"command": "solid.box", "params": {"corner": [40, 5, 10], "length": 5, "width": 5, "height": 5, "operation": "join"}}),
+    );
+    h.frames(1);
+    assert!(h.app.agent_computing().is_some_and(|(_, label)| !label.is_empty()), "the window says the agent's command computes");
+    assert!(view.try_recv().is_ok_and(|v| v["ok"] == true), "ui.* answered while it computes");
+    assert!(boss.try_recv().is_err(), "the next design change waits its turn");
+    assert_eq!(h.app.session.doc.features.len(), features, "nothing applied yet");
+    // The inspection reads a copy of the design as it was when asked, off the window thread.
+    let seen = reply_to(&mut h, &inspect);
+    assert_eq!(seen["result"]["timeline"].as_array().map(Vec::len), Some(features), "the design as it was: {seen}");
+    let r = reply_to(&mut h, &hole);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = reply_to(&mut h, &boss);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.session.doc.features.len(), features + 2);
+    assert_eq!(h.app.session.undo.len(), undo + 2, "one undo step each");
+    assert!(h.app.agent_computing().is_none());
+    // In the order they were asked for: undo takes the boss, the hole stays.
+    h.app.run("edit.undo", json!({})).unwrap();
+    let holes = std::f64::consts::PI * (4.0 * 15.0 + 9.0 * 10.0);
+    let v = h.app.run("inspect.measure", json!({})).unwrap()["total"]["volume_mm3"].as_f64().unwrap();
+    assert!((v - (12500.0 - holes)).abs() < 1.0, "{v}");
+}
+
+/// A person's edit while the agent's command computes goes first; the agent's command is
+/// computed again for the design as it is and lands after it, never in between.
+#[test]
+fn a_persons_edit_meanwhile_goes_first_and_the_agents_lands_after() {
+    let (mut h, tx) = agent_harness();
+    let features = h.app.session.doc.features.len();
+    let hole = ask(&tx, "engine.execute", second_hole());
+    h.frames(1);
+    assert!(h.app.agent_computing().is_some());
+    h.app.run("solid.box", json!({"corner": [40, 5, 10], "length": 5, "width": 5, "height": 5, "operation": "join"})).unwrap();
+    let r = reply_to(&mut h, &hole);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.session.doc.features.len(), features + 2, "both kept");
+    // Undo takes the agent's hole first: it came last.
+    h.app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.app.session.doc.features.len(), features + 1);
+    let boss = 12500.0 + 125.0 - std::f64::consts::PI * 4.0 * 15.0;
+    let v = h.app.run("inspect.measure", json!({})).unwrap()["total"]["volume_mm3"].as_f64().unwrap();
+    assert!((v - boss).abs() < 1.0, "the person's boss stays: {v}");
+}
+
+/// A design replaced while the agent's command computes (another tab, a new design) is not
+/// where it lands: it is refused, saying so, and nothing is applied.
+#[test]
+fn an_agent_command_is_refused_when_its_design_was_replaced() {
+    let (mut h, tx) = agent_harness();
+    let hole = ask(&tx, "engine.execute", second_hole());
+    h.frames(1);
+    assert!(h.app.agent_computing().is_some());
+    h.app.run("file.new", json!({})).unwrap();
+    let r = reply_to(&mut h, &hole);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("replaced") && e.contains("nothing was applied")), "{r}");
+    assert!(h.app.session.doc.features.is_empty(), "nothing went into the new design");
+}
+
+/// Stop answers the agent at once, applies nothing, and lets the requests behind it go on.
+#[test]
+fn stopping_an_agent_command_applies_nothing_and_goes_on() {
+    let (mut h, tx) = agent_harness();
+    let features = h.app.session.doc.features.len();
+    let hole = ask(&tx, "engine.execute", second_hole());
+    let boss = ask(
+        &tx,
+        "engine.execute",
+        json!({"command": "solid.box", "params": {"corner": [40, 5, 10], "length": 5, "width": 5, "height": 5, "operation": "join"}}),
+    );
+    h.frames(1);
+    assert!(h.app.agent_computing().is_some());
+    h.app.stop_agent_command();
+    let r = hole.try_recv().expect("answered at once");
+    assert!(r["ok"] == false && r["stopped"] == true, "{r}");
+    let r = reply_to(&mut h, &boss);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.session.doc.features.len(), features + 1, "only the boss");
+}
+
+/// A batch computes off the window thread too, with the reply a batch run here gives.
+#[test]
+fn an_agent_batch_computes_off_the_window_thread() {
+    let (mut h, tx) = agent_harness();
+    let features = h.app.session.doc.features.len();
+    let steps = json!({"commands": [second_hole(), {"command": "solid.box", "params": {"corner": [40, 5, 10], "length": 5, "width": 5, "height": 5, "operation": "join"}}]});
+    let batch = ask(&tx, "engine.batch", steps);
+    h.frames(1);
+    assert!(h.app.agent_computing().is_some(), "computing");
+    assert_eq!(h.app.session.doc.features.len(), features);
+    let r = reply_to(&mut h, &batch);
+    assert_eq!((&r["ok"], &r["result"]["completed"], &r["result"]["undone"]), (&json!(true), &json!(2), &json!(0)), "{r}");
+    assert_eq!(h.app.session.doc.features.len(), features + 2);
+}
+
+/// An export changes nothing in the design: it runs on a copy and answers from there, the file
+/// written; a design change asked for meanwhile does not wait for it.
+#[test]
+fn an_agent_export_runs_on_a_copy() {
+    let (mut h, tx) = agent_harness();
+    let dir = std::env::temp_dir().join(format!("sc-agent-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("part.stl").to_string_lossy().to_string();
+    let export = ask(&tx, "engine.execute", json!({"command": "file.export", "params": {"path": path}}));
+    let r = reply_to(&mut h, &export);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(std::fs::metadata(&path).is_ok_and(|m| m.len() > 0), "written");
+    assert!(h.app.session.log.iter().any(|l| l.contains("Export")), "echoed as when it runs here: {:?}", h.app.session.log);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #4604: measuring the whole design (an inspection measures every body) reads a copy off the
+/// window thread, preference or not: on a large assembly it took a minute, the window answered
+/// nothing meanwhile and was closed as not responding. The window answers `ui.*` while it
+/// measures, and the measure comes back as when it runs here.
+#[test]
+fn a_measure_reads_a_copy_off_the_window_thread_preference_or_not() {
+    let (mut h, tx) = agent_harness();
+    h.app.preferences.agent_off_thread = false;
+    let here = h.app.run("inspect.measure", json!({})).unwrap();
+    let log = h.app.session.log.len();
+    let measure = ask(&tx, "engine.execute", json!({"command": "inspect.measure", "params": {}}));
+    let inspect = ask(&tx, "document.inspect", json!({"measure": true}));
+    let command = ask(&tx, "command", json!({"command": "document.inspect", "params": {"measure": true}}));
+    let view = ask(&tx, "ui.inspect", json!({}));
+    h.frames(1);
+    assert!(view.try_recv().is_ok_and(|v| v["ok"] == true), "ui.* answered meanwhile");
+    assert_eq!(h.app.control_answering.len(), 3, "all three read a copy");
+    let r = reply_to(&mut h, &measure);
+    assert_eq!(r["result"]["total"], here["total"], "{r}");
+    for reply in [inspect, command] {
+        let r = reply_to(&mut h, &reply);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(r["result"]["timeline"].is_array(), "{r}");
+    }
+    assert!(h.app.control_answering.is_empty());
+    assert_eq!(h.app.session.log.len(), log, "a reading leaves no echo: {:?}", h.app.session.log);
+}
+
+/// A clearance or interference check of every pair of bodies reads a copy off the window thread
+/// too: on an assembly of 150 bodies it computed for minutes with the window not responding. The
+/// answers are the ones running it here gives.
+#[test]
+fn a_clearance_check_reads_a_copy_off_the_window_thread() {
+    let (mut h, tx) = agent_harness();
+    h.app.preferences.agent_off_thread = false;
+    // The answers but their timing.
+    let untimed = |mut v: serde_json::Value| {
+        if let Some(o) = v.as_object_mut() {
+            o.remove("ms");
+        }
+        v
+    };
+    let clearance_here = untimed(h.app.run("inspect.clearance", json!({})).unwrap());
+    let interference_here = untimed(h.app.run("inspect.interference", json!({})).unwrap());
+    let clearance = ask(&tx, "engine.execute", json!({"command": "inspect.clearance", "params": {}}));
+    let interference = ask(&tx, "engine.execute", json!({"command": "inspect.interference", "params": {}}));
+    let view = ask(&tx, "ui.inspect", json!({}));
+    h.frames(1);
+    assert!(view.try_recv().is_ok_and(|v| v["ok"] == true), "ui.* answered meanwhile");
+    assert_eq!(h.app.control_answering.len(), 2, "both read a copy");
+    let r = reply_to(&mut h, &clearance);
+    assert_eq!(untimed(r["result"].clone()), clearance_here, "{r}");
+    let r = reply_to(&mut h, &interference);
+    assert_eq!(untimed(r["result"].clone()), interference_here, "{r}");
+    assert!(h.app.control_answering.is_empty());
+}
+
+/// With the preference off (Preferences > AI, the default) an agent's design change runs on the
+/// window thread, as before: answered in the frame it arrives.
+#[test]
+fn with_the_preference_off_an_agent_command_runs_at_once() {
+    let (mut h, tx) = agent_harness();
+    h.app.preferences.agent_off_thread = false;
+    let features = h.app.session.doc.features.len();
+    let hole = ask(&tx, "engine.execute", second_hole());
+    h.frames(1);
+    assert!(h.app.agent_computing().is_none());
+    assert!(hole.try_recv().is_ok_and(|r| r["ok"] == true), "answered in the same frame");
+    assert_eq!(h.app.session.doc.features.len(), features + 1);
+}
+
+/// #1989: with the agent cursor shown, the pointer acts out the agent's design change while it
+/// computes off the window thread. Meanwhile the window answers `ui.*` and inspection (it used to
+/// answer nothing at all until the command had run: a client polling the window saw it frozen),
+/// and the next design change waits its turn.
+#[test]
+fn the_window_answers_while_the_agent_cursor_acts_out_a_design_change() {
+    let (mut h, tx) = agent_harness();
+    h.app.ui.agent_cursor.show = true;
+    h.frames(2);
+    let features = h.app.session.doc.features.len();
+    let hole = ask(&tx, "engine.execute", second_hole());
+    h.frames(1);
+    assert!(h.app.agent.busy(), "the pointer acts it out");
+    let view = ask(&tx, "ui.inspect", json!({}));
+    let inspect = ask(&tx, "document.inspect", json!({}));
+    let boss = ask(
+        &tx,
+        "engine.execute",
+        json!({"command": "solid.box", "params": {"corner": [40, 5, 10], "length": 5, "width": 5, "height": 5, "operation": "join"}}),
+    );
+    h.frames(1);
+    assert!(h.app.agent.busy());
+    assert!(view.try_recv().is_ok_and(|v| v["ok"] == true), "ui.* answered while the pointer acts out the command");
+    assert!(boss.try_recv().is_err(), "the next design change waits its turn");
+    assert_eq!(h.app.session.doc.features.len(), features, "nothing applied yet");
+    assert!(reply_to(&mut h, &inspect)["ok"] == true, "inspection answered too, from a copy");
+    let r = reply_to(&mut h, &hole);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = reply_to(&mut h, &boss);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.session.doc.features.len(), features + 2, "both, in order");
+}
+
+/// #1989: the run on the window thread reuses what was computed ahead, even when the evaluation
+/// cache dropped it meanwhile (a design with large bodies keeps only a few states there): it
+/// computes nothing again, so the window waits only for the bookkeeping. A parameter that drives
+/// the whole timeline, changed by the agent with the cursor off and with it shown.
+#[test]
+fn the_window_thread_run_reuses_what_was_computed_ahead() {
+    for cursor in [false, true] {
+        let mut h = Harness::new();
+        h.app.home.open = false;
+        h.app.run("parameters.add", json!({"name": "len", "expression": "60 mm"})).unwrap();
+        for (id, p) in [
+            ("solid.box", json!({"length": "len", "width": 20, "height": 10})),
+            ("solid.box", json!({"corner": ["len / 2", 5, 10], "length": 10, "width": 10, "height": 5, "operation": "join"})),
+            ("solid.cylinder", json!({"base": ["len / 2 + 5", 10, -1], "axis": [0, 0, 1], "radius": 2, "height": 20, "operation": "cut"})),
+        ] {
+            h.app.run(id, p).unwrap();
+        }
+        h.app.apply_off_thread = Some(Duration::ZERO);
+        h.app.preferences.agent_off_thread = true;
+        h.app.ui.agent_cursor.show = cursor;
+        let (tx, rx) = std::sync::mpsc::channel();
+        h.app.control_rx = Some(rx);
+        h.frames(2);
+        let recomputed = h.app.session.model.recomputed;
+        let change = ask(&tx, "engine.execute", json!({"command": "parameters.change", "params": {"name": "len", "expression": "70 mm"}}));
+        let mut reply = None;
+        for _ in 0..500 {
+            // The cache drops everything the evaluation ahead puts there.
+            for _ in 0..2 {
+                *h.app.session.model.cache.lock().unwrap() = Default::default();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            h.frames(1);
+            if let Ok(v) = change.try_recv() {
+                reply = Some(v);
+                break;
+            }
+        }
+        let r = reply.expect("answered");
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(h.app.session.model.recomputed, recomputed, "cursor {cursor}: nothing computed again on the window thread");
+        let v = h.app.run("inspect.measure", json!({})).unwrap()["total"]["volume_mm3"].as_f64().unwrap();
+        let want = 70.0 * 200.0 + 500.0 - std::f64::consts::PI * 4.0 * 15.0;
+        assert!((v - want).abs() < 1.0, "the design as changed: {v}");
+    }
+}
+
+fn feature_ids(h: &Harness) -> Vec<u64> {
+    h.app.session.doc.features.iter().map(|f| f.id).collect()
+}
+
+/// Volume of the block with the hole through it, once the boss is deleted.
+fn block_with_hole() -> f64 {
+    12000.0 - std::f64::consts::PI * 4.0 * 10.0
+}
+
+fn volume(h: &mut Harness) -> f64 {
+    h.app.run("inspect.measure", json!({})).unwrap()["total"]["volume_mm3"].as_f64().unwrap()
+}
+
+/// The timeline's Delete checks what the delete breaks off the window thread (#2678): the design
+/// is as it was while it checks, and the feature goes once the check is in.
+#[test]
+fn the_timelines_delete_checks_off_the_window_thread() {
+    let mut h = block_boss_hole();
+    let boss = feature_ids(&h)[1];
+    crate::timeline::delete_features(&mut h.app, vec![boss]);
+    assert!(h.app.computing_since().is_some(), "checking");
+    assert!(h.app.session.doc.feature(boss).is_some(), "the design is as it was while it checks");
+    until_settled(&mut h);
+    assert!(h.app.session.doc.feature(boss).is_none(), "deleted once the check is in");
+    assert!(h.app.dialog.is_none(), "nothing breaks, so nothing to confirm");
+    assert!((volume(&mut h) - block_with_hole()).abs() < 1.0);
+}
+
+/// Delete on the selection (the Delete key) runs its dry run off the window thread too.
+#[test]
+fn delete_on_the_selection_checks_off_the_window_thread() {
+    let mut h = block_boss_hole();
+    let boss = feature_ids(&h)[1];
+    h.app.session.selection = vec![solidcraft_engine::Sel::Feature { id: boss }];
+    let params = crate::delete::selection_params(&h.app);
+    crate::delete::request(&mut h.app, params);
+    assert!(h.app.computing_since().is_some(), "checking");
+    assert!(h.app.session.doc.feature(boss).is_some());
+    until_settled(&mut h);
+    assert!(h.app.session.doc.feature(boss).is_none());
+    assert!(h.app.menu.confirm.is_none());
+    assert!((volume(&mut h) - block_with_hole()).abs() < 1.0);
+}
+
+/// A design changed while its delete is checked is checked again before anything is deleted, and
+/// a second Delete meanwhile is left out.
+#[test]
+fn a_design_changed_while_a_delete_is_checked_is_checked_again() {
+    let mut h = block_boss_hole();
+    let ids = feature_ids(&h);
+    crate::timeline::delete_features(&mut h.app, vec![ids[1]]);
+    crate::timeline::delete_features(&mut h.app, vec![ids[2]]);
+    h.app.run("solid.box", json!({"corner": [100, 0, 0], "length": 10, "width": 10, "height": 10})).unwrap();
+    until_settled(&mut h);
+    assert!(h.app.session.doc.feature(ids[1]).is_none(), "the boss is deleted");
+    assert!(h.app.session.doc.feature(ids[2]).is_some(), "the second Delete was left out");
+    assert!((volume(&mut h) - (block_with_hole() + 1000.0)).abs() < 1.0, "the box added meanwhile stays");
+}
+
+/// Without a wait (headless use, tests) the check runs in place, as before.
+#[test]
+fn without_a_wait_the_delete_checks_in_place() {
+    let mut h = block_boss_hole();
+    h.app.apply_off_thread = None;
+    let boss = feature_ids(&h)[1];
+    crate::timeline::delete_features(&mut h.app, vec![boss]);
+    assert!(h.app.delete_check.is_none());
+    assert!(h.app.session.doc.feature(boss).is_none());
 }

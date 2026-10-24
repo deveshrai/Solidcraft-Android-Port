@@ -53,6 +53,63 @@ fn rid(p: Option<&Param>, what: &str) -> R<u64> {
 /// A contractible outer loop whose winding opposes the surface's parameter normal.
 /// Samples follow the wire through periodic seams; a loop that winds around a surface is
 /// not a disk in parameter space and must retain the file's sense.
+/// The point of a cone (a surface revolved from a line that meets its axis) when `ring`, a
+/// face's only loop, goes once round the axis without touching it: the face then reaches the
+/// point. `None` for any other surface or loop.
+fn enclosed_apex(surface: &mt::Surface, ring: &mt::Wire, tol: f64) -> Option<mt::Point3> {
+    use mt::Transform as _;
+    let mt::Surface::RevolutedCurve(proc) = surface else { return None };
+    let rc = proc.entity();
+    let mt::Curve::Line(line) = rc.entity_curve() else { return None };
+    let (o, axis) = (rc.origin(), rc.axis().normalize());
+    // The rotation applied to the revolved surface, applied to its axis and profile too.
+    let m = proc.transform();
+    let (o, axis) = (m.transform_point(o), m.transform_vector(axis).normalize());
+    let (p0, p1) = (m.transform_point(line.0), m.transform_point(line.1));
+    let radius = |p: mt::Point3| (p - o).cross(axis).magnitude();
+    let (r0, r1) = (radius(p0), radius(p1));
+    if !((r0 - r1).abs() > 1e-9 * (r0 + r1)) {
+        return None;
+    }
+    let apex = p0 + (p1 - p0) * (r0 / (r0 - r1));
+    if !(radius(apex) <= tol.max(1e-9) * 10.0) {
+        return None;
+    }
+    // Once round the axis, staying clear of it.
+    let x = (p0 - o) - axis * (p0 - o).dot(axis);
+    let x = if x.magnitude() > tol { x.normalize() } else { return None };
+    let y = axis.cross(x);
+    let mut turned = 0.0;
+    let mut last: Option<f64> = None;
+    let mut first: Option<f64> = None;
+    for edge in ring.edge_iter() {
+        let c = edge.oriented_curve();
+        let (t0, t1) = c.range_tuple();
+        for k in 0..16 {
+            let q = c.subs(t0 + (t1 - t0) * f64::from(k) / 16.0);
+            if radius(q) <= tol {
+                return None;
+            }
+            let d = q - o;
+            let ang = d.dot(y).atan2(d.dot(x));
+            if let Some(l) = last {
+                let mut step = ang - l;
+                step -= (step / std::f64::consts::TAU).round() * std::f64::consts::TAU;
+                turned += step;
+            } else {
+                first = Some(ang);
+            }
+            last = Some(ang);
+        }
+    }
+    if let (Some(l), Some(f)) = (last, first) {
+        let mut step = f - l;
+        step -= (step / std::f64::consts::TAU).round() * std::f64::consts::TAU;
+        turned += step;
+    }
+    ((turned.abs() - std::f64::consts::TAU).abs() < 0.1).then_some(apex)
+}
+
 fn reversed_outer(surface: &mt::Surface, wire: &mt::Wire, tol: f64) -> bool {
     if let mt::Surface::RevolutedCurve(proc) = surface {
         let rc = proc.entity();
@@ -137,8 +194,9 @@ impl Builder {
         let sense = p.get(4).and_then(Param::as_bool).unwrap_or(true);
         let g = geom::curve(cx, rid(p.get(3), "edge geometry")?, 0)?;
         let closed = vs_id == ve_id;
-        let pieces = guard("step edge", || geom::edge_pieces(&g, vs.point(), ve.point(), sense, closed, cx.tol).map_err(crate::KernelError::Failed))
-            .map_err(|e| e.to_string())?;
+        let pieces =
+            guard("step edge", || geom::edge_pieces(&g, vs.point(), ve.point(), sense, closed, cx.tol, cx.snap).map_err(crate::KernelError::Failed))
+                .map_err(|e| e.to_string())?;
         let n = pieces.len();
         let mut out = Vec::with_capacity(n);
         let mut cur = vs.clone();
@@ -321,6 +379,35 @@ impl Builder {
             surface = guard("step surface orientation", || geom::surface(cx, sid, &extent, &seam, !sense, 0).map_err(crate::KernelError::Failed))
                 .map_err(|e| e.to_string())?;
         }
+        // A cone face bounded only by a ring round its axis (no vertex at the point, or a
+        // VERTEX_LOOP there, which has no edges) covers the cone up to its point. Its surface
+        // was spanned over the ring alone, a sliver at the base; it is spanned to the apex,
+        // and the ring is joined to the apex by a seam line out and back, as a cone with a
+        // seam is written.
+        let (mut wires, mut surface) = (wires, surface);
+        if e.name() != "FACE"
+            && seam.is_empty()
+            && let [ring] = wires.as_slice()
+            && let Some(apex) = enclosed_apex(&surface, ring, cx.tol)
+            && let Some(first) = ring.edge_iter().next()
+        {
+            let v = first.front().clone();
+            let a = mt::Vertex::new(apex);
+            let line = mt::Edge::new_unchecked(&v, &a, mt::Curve::Line(mt::Line(v.point(), apex)));
+            let mut to_apex = extent.clone();
+            to_apex.push(apex);
+            let seam_line = [v.point(), apex];
+            let sid = rid(p.get(2), "face geometry")?;
+            let sense = p.get(3).and_then(Param::as_bool).unwrap_or(true);
+            let spanned =
+                guard("step cone to its point", || geom::surface(cx, sid, &to_apex, &seam_line, sense, 0).map_err(crate::KernelError::Failed))
+                    .map_err(|e| e.to_string())?;
+            let mut edges: Vec<mt::Edge> = ring.edge_iter().cloned().collect();
+            edges.push(line.clone());
+            edges.push(line.inverse());
+            wires = vec![edges.into()];
+            surface = spanned;
+        }
         // Loops on a surface of revolution start away from the axis: a pole (cone apex, sphere
         // pole) has no definite rotation parameter, and the mesher takes the first point's
         // parameter as the anchor for the rest of the loop.
@@ -417,7 +504,7 @@ impl Builder {
             origin = vec![file_face; patches.len()];
             out = patches;
         }
-        let out = super::split::split_bands(out, &mut origin, failed);
+        let out = super::split::split_bands(out, &mut origin, failed, cx.tol);
         Ok((out.into(), closed, read, origin))
     }
 }
@@ -554,6 +641,23 @@ pub(crate) fn read_item(cx: &Ctx, id: u64) -> R<BrepOut> {
     });
     if checked.is_err() {
         closed = false;
+    }
+    // A void's faces face into the cavity, out of the material: it encloses volume of the
+    // opposite sign to the outer shell. The ORIENTED_CLOSED_SHELL flag alone doesn't say so:
+    // some exporters write .F. over a shell already facing into the cavity (#3730), others .T.
+    // A void enclosing volume of the outer shell's sign is turned inside out.
+    if e.name() == "BREP_WITH_VOIDS"
+        && checked.is_ok()
+        && let Some((outer, voids)) = shells.split_first_mut()
+        && let Some(outside) = crate::body::shell_volume(outer)
+    {
+        for void in voids {
+            if crate::body::shell_volume(void).is_some_and(|v| v * outside > 0.0) {
+                for face in void.face_iter_mut() {
+                    face.invert();
+                }
+            }
+        }
     }
     Ok(BrepOut { solid: mt::Solid::new_unchecked(shells), failed, closed, file_faces, face_origin })
 }

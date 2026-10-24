@@ -9,7 +9,7 @@ aliases = tomllib.load(open(d + '/aliases.toml', 'rb')).get('alias', {})
 def themed(svg, theme, icon, family, size):
     _, accent = icon_palette.resolve(palette, aliases, icon)
     return icon_palette.themed(svg, palette, theme, accent, namespace='preview-' + family + '-' + icon + '-' + theme + '-' + str(size))
-h = '<meta charset=utf-8><style>body{margin:0;font:10px sans-serif}.p{padding:8px}.light{background:#fff;color:#222}.dark{background:#1e2530;color:#ddd}.c{display:inline-block;width:92px;text-align:center;margin:3px 2px;vertical-align:top}.s{display:flex;gap:6px;justify-content:center;align-items:center;margin-top:2px}h3{margin:4px}</style>'
+h = '<meta charset=utf-8><style>body{margin:0;font:10px sans-serif}.p{padding:8px}.light{background:#f6f7f9;color:#262a32}.dark{background:#272b34;color:#dee2e8}.c{display:inline-block;width:92px;text-align:center;margin:3px 2px;vertical-align:top}.s{display:flex;gap:6px;justify-content:center;align-items:center;margin-top:2px}h3{margin:4px}</style>'
 for theme in ('light', 'dark'):
     for fam in sorted(os.listdir(d + '/svg')):
         h += '<div class="p %s"><h3>%s - %s</h3>' % (theme, fam, theme)

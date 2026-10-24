@@ -101,7 +101,7 @@ pub(crate) fn point(cx: &Ctx, id: u64) -> R<mt::Point3> {
     Ok(mt::Point3::new(g(0)?, g(1)?, g(2)?) * cx.len)
 }
 
-fn direction(cx: &Ctx, id: u64) -> R<mt::Vector3> {
+pub(super) fn direction(cx: &Ctx, id: u64) -> R<mt::Vector3> {
     let e = entity(cx, id)?;
     if e.name() != "DIRECTION" {
         return Err(format!("#{id}: expected DIRECTION, found {}", e.name()));
@@ -176,7 +176,32 @@ fn knot_vec(mults: Option<&Param>, knots: Option<&Param>, expected: usize) -> R<
     if m.len() > expected || m.iter().try_fold(0usize, |a, v| a.checked_add(*v)) != Some(expected) {
         return Err("knot multiplicities do not match the control points".into());
     }
-    mt::KnotVec::from_single_multi(k, m).map_err(|e| format!("knot vector: {e}"))
+    mt::KnotVec::from_single_multi(spanning_one(k), m).map_err(|e| format!("knot vector: {e}"))
+}
+
+/// Shortest parameter range a spline is read with.
+const MIN_KNOT_RANGE: f64 = 1.0;
+
+/// `knots` stretched, when they span less than [`MIN_KNOT_RANGE`], to span exactly that from the
+/// same first knot. A STEP writer may parameterize a spline over any range (some write a few
+/// millionths, as if in metres of a part drawn in millimetres), and the kernel tells parameters
+/// apart only to a fixed tolerance (1e-6): over such a range it took distinct knots for one, and
+/// trimming an edge to its vertices dropped a control point. Stretching the knots changes the
+/// parameters, never the curve (every point is where it was), and nothing read from the file
+/// refers to them: edges are trimmed by their vertices.
+fn spanning_one(knots: Vec<f64>) -> Vec<f64> {
+    let (Some(&first), Some(&last)) = (knots.first(), knots.last()) else { return knots };
+    let range = last - first;
+    if !(range > 0.0 && range < MIN_KNOT_RANGE) {
+        return knots;
+    }
+    let scale = MIN_KNOT_RANGE / range;
+    let mut out: Vec<f64> = knots.iter().map(|k| first + (k - first) * scale).collect();
+    // The last knot exactly at the end of the range (the product can miss it by a rounding).
+    if let Some(k) = out.last_mut() {
+        *k = first + MIN_KNOT_RANGE;
+    }
+    out
 }
 
 fn generated_knots(kind: &str, n_ctrl: usize, degree: usize) -> R<mt::KnotVec> {
@@ -539,15 +564,16 @@ fn sub_curve<C: Cut + BoundedCurve + Clone>(c: &C, a: f64, b: f64) -> C {
     out
 }
 
-/// Pieces of a spline edge from `ps` to `pe` (two pieces for a closed edge).
-fn spline_pieces<C>(c: &C, ps: mt::Point3, pe: mt::Point3, sense: bool, closed: bool, tol: f64) -> R<Vec<C>>
+/// Pieces of a spline edge from `ps` to `pe` (two pieces for a closed edge). The vertices may
+/// be up to `snap` off the curve; `tol` decides whether the curve closes on itself.
+fn spline_pieces<C>(c: &C, ps: mt::Point3, pe: mt::Point3, sense: bool, closed: bool, tol: f64, snap: f64) -> R<Vec<C>>
 where
     C: ParametricCurve<Point = mt::Point3> + BoundedCurve + SearchNearestParameter<mt::D1, Point = mt::Point3> + Cut + Clone + Invertible,
 {
     let (t0, t1) = c.range_tuple();
     let (ts, ds) = nearest_param(c, ps).ok_or("spline evaluation failed")?;
     let (te, de) = nearest_param(c, pe).ok_or("spline evaluation failed")?;
-    if ds > tol || de > tol {
+    if !(ds <= snap && de <= snap) {
         return Err(format!("edge vertices are {:.3e} mm off their curve", ds.max(de)));
     }
     let span = t1 - t0;
@@ -589,9 +615,51 @@ where
     Ok(pieces)
 }
 
+/// Moves one end of a spline piece (`back`: its end, else its start) onto its vertex `p` by
+/// the control point that end sits on, so the piece meets the vertex exactly and keeps its
+/// shape away from that end. A piece whose end is not a control point (an unclamped spline) is
+/// left as it is.
+fn pin_end(c: &mut mt::Curve, p: mt::Point3, back: bool) {
+    let end = if back { c.back() } else { c.front() };
+    let d = p - end;
+    if !(d.magnitude2() > 0.0) {
+        return;
+    }
+    let at_end = |q: mt::Point3| q.distance(end) <= mt::TOLERANCE;
+    match c {
+        mt::Curve::BSplineCurve(b) => {
+            let cp = if back { b.control_points_mut().last() } else { b.control_points_mut().next() };
+            if let Some(q) = cp.filter(|q| at_end(**q)) {
+                *q += d;
+            }
+        }
+        mt::Curve::NurbsCurve(n) => {
+            let cp = if back { n.control_points_mut().last() } else { n.control_points_mut().next() };
+            if let Some(q) = cp.filter(|q| q.w != 0.0 && at_end(mt::Point3::from_homogeneous(**q))) {
+                *q = (mt::Point3::from_homogeneous(*q) + d).to_homogeneous() * q.w;
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Kernel curves for an edge from `ps` to `pe`: one piece, or two for a closed edge (so no
-/// kernel edge starts and ends at the same vertex).
-pub(crate) fn edge_pieces(g: &CurveGeo, ps: mt::Point3, pe: mt::Point3, sense: bool, closed: bool, tol: f64) -> R<Vec<mt::Curve>> {
+/// kernel edge starts and ends at the same vertex). A spline or open-conic edge's ends are
+/// moved onto vertices up to `snap` off its curve, so the pieces meet the vertices exactly.
+pub(crate) fn edge_pieces(g: &CurveGeo, ps: mt::Point3, pe: mt::Point3, sense: bool, closed: bool, tol: f64, snap: f64) -> R<Vec<mt::Curve>> {
+    let mut pieces = curve_pieces(g, ps, pe, sense, closed, tol, snap)?;
+    if matches!(g, CurveGeo::BSpline(_) | CurveGeo::Nurbs(_) | CurveGeo::Hyperbola { .. } | CurveGeo::Parabola { .. }) {
+        if let Some(c) = pieces.first_mut() {
+            pin_end(c, ps, false);
+        }
+        if let Some(c) = pieces.last_mut() {
+            pin_end(c, pe, true);
+        }
+    }
+    Ok(pieces)
+}
+
+fn curve_pieces(g: &CurveGeo, ps: mt::Point3, pe: mt::Point3, sense: bool, closed: bool, tol: f64, snap: f64) -> R<Vec<mt::Curve>> {
     match g {
         CurveGeo::Line { .. } => {
             if closed {
@@ -628,15 +696,15 @@ pub(crate) fn edge_pieces(g: &CurveGeo, ps: mt::Point3, pe: mt::Point3, sense: b
             }
             // The curve is open, so the edge is the parameters between its vertices: rising
             // for the same sense, falling for the opposite one.
-            let (ts, te) = (open_conic_param(g, ps, tol)?, open_conic_param(g, pe, tol)?);
+            let (ts, te) = (open_conic_param(g, ps, snap)?, open_conic_param(g, pe, snap)?);
             let scale = 1.0 + ts.abs().max(te.abs());
             if (te - ts).abs() <= 1e-9 * scale {
                 return Err("degenerate conic edge".into());
             }
             Ok(vec![open_conic_curve(g, ts, te)?])
         }
-        CurveGeo::BSpline(c) => Ok(spline_pieces(c, ps, pe, sense, closed, tol)?.into_iter().map(mt::Curve::BSplineCurve).collect()),
-        CurveGeo::Nurbs(c) => Ok(spline_pieces(c, ps, pe, sense, closed, tol)?.into_iter().map(mt::Curve::NurbsCurve).collect()),
+        CurveGeo::BSpline(c) => Ok(spline_pieces(c, ps, pe, sense, closed, tol, snap)?.into_iter().map(mt::Curve::BSplineCurve).collect()),
+        CurveGeo::Nurbs(c) => Ok(spline_pieces(c, ps, pe, sense, closed, tol, snap)?.into_iter().map(mt::Curve::NurbsCurve).collect()),
     }
 }
 
@@ -1126,7 +1194,24 @@ pub(crate) fn surface(cx: &Ctx, id: u64, extent: &[mt::Point3], seam: &[mt::Poin
             let g = curve(cx, p.get(1).and_then(Param::as_ref_id).ok_or("extrusion without profile")?, depth + 1)?;
             let (_, v) = ent_of(cx, p.get(2), "extrusion vector")?;
             let d = direction(cx, v.params().get(1).and_then(Param::as_ref_id).ok_or("VECTOR without direction")?)?;
-            let nurbs: mt::NurbsCurve<mt::Vector4> = match bounded_curve(&g, extent)? {
+            let profile = match &g {
+                CurveGeo::Conic { f, a, b } if d.dot(f.z).abs() > 1e-12 => {
+                    // Keep the closed profile's parameter seam outside the trim. Otherwise a
+                    // tooth tip crossing it can mesh as almost the whole extruded ellipse.
+                    let dz = d.dot(f.z);
+                    let angle = |p: &mt::Point3| {
+                        let q = p - f.o;
+                        let q = q - d * (q.dot(f.z) / dz);
+                        (q.dot(f.y) / b).atan2(q.dot(f.x) / a)
+                    };
+                    let start = common_angle(seam.iter().map(angle))
+                        .or_else(|| largest_gap(&extent.iter().map(angle).collect::<Vec<_>>()).map(|(mid, _)| mid))
+                        .unwrap_or(0.0);
+                    mt::Curve::NurbsCurve(conic_arc(f, *a, *b, start, TAU))
+                }
+                _ => bounded_curve(&g, extent)?,
+            };
+            let nurbs: mt::NurbsCurve<mt::Vector4> = match profile {
                 mt::Curve::Line(l) => mt::BSplineCurve::new(mt::KnotVec::bezier_knot(1), vec![l.0, l.1]).into(),
                 mt::Curve::BSplineCurve(c) => c.into(),
                 mt::Curve::NurbsCurve(c) => c,
