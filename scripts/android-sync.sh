@@ -2,6 +2,7 @@
 # Bring the Android port up to date with upstream SolidCraft, check it and build the APK.
 #
 #   scripts/android-sync.sh                 fetch upstream, merge upstream/main, check, build the APK
+#   scripts/android-sync.sh --to v0.21.0    merge an upstream release tag instead of upstream/main
 #   scripts/android-sync.sh --no-build      the same without the APK
 #   scripts/android-sync.sh --check-only    no fetch or merge: check the tree as it is (and build)
 #   scripts/android-sync.sh --revendor X.Y.Z
@@ -22,12 +23,14 @@ NDK_TARGET="aarch64-linux-android"
 build=1
 merge=1
 revendor=""
+to=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-build) build=0 ;;
         --check-only) merge=0 ;;
+        --to) to="${2:?--to needs an upstream tag or commit}"; shift ;;
         --revendor) revendor="${2:?--revendor needs a winit version}"; merge=0; shift ;;
-        -h | --help) sed -n '2,13p' "$0"; exit 0 ;;
+        -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -52,13 +55,16 @@ if [ "$merge" = 1 ]; then
     git diff --quiet && git diff --cached --quiet || fail "uncommitted changes: commit or stash them first"
     git remote get-url "$UPSTREAM_REMOTE" >/dev/null 2>&1 \
         || fail "no '$UPSTREAM_REMOTE' remote (git remote add upstream https://github.com/tangency-labs/solidcraft)"
-    step "Fetching $UPSTREAM_REMOTE/$UPSTREAM_BRANCH"
-    git fetch "$UPSTREAM_REMOTE" "$UPSTREAM_BRANCH"
-    new=$(git rev-list --count "HEAD..$UPSTREAM_REMOTE/$UPSTREAM_BRANCH")
-    echo "$new new upstream commit(s)"
+    step "Fetching $UPSTREAM_REMOTE"
+    git fetch --tags "$UPSTREAM_REMOTE" "$UPSTREAM_BRANCH"
+    # A release tag (upstream cuts releases on their own line, not always on main) or main.
+    target="${to:-$UPSTREAM_REMOTE/$UPSTREAM_BRANCH}"
+    git rev-parse -q --verify "$target^{commit}" >/dev/null || fail "no upstream '$target' (tags: git tag -l 'v*')"
+    new=$(git rev-list --count "HEAD..$target")
+    echo "$new new upstream commit(s) in $target"
     if [ "$new" -gt 0 ]; then
-        step "Merging $UPSTREAM_REMOTE/$UPSTREAM_BRANCH"
-        if ! git merge --no-edit "$UPSTREAM_REMOTE/$UPSTREAM_BRANCH"; then
+        step "Merging $target"
+        if ! git merge --no-edit -m "Merge upstream $target" "$target"; then
             echo
             git diff --name-only --diff-filter=U | sed 's/^/  conflict: /'
             fail "merge conflicts: resolve them (docs/android-sync.md, 'Conflicts'), git commit, then run scripts/android-sync.sh --check-only"
