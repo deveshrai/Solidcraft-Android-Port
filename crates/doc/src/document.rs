@@ -738,6 +738,39 @@ pub enum FeatureKind {
         length: Option<Expr>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         modeled: bool,
+        /// Model the thread as exact helical B-rep (smooth helicoid faces screwed into the face,
+        /// the rest of the body untouched) instead of a faceted cut. The groove starts
+        /// `start_offset` after the threaded length's start and finishes `end_offset` before its
+        /// end. Implies `modeled`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        helical: bool,
+        /// A custom thread: this pitch on the face as it is, whatever its diameter, instead of
+        /// an ISO designation. Implies `helical`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Pitch")]
+        pitch: Option<Expr>,
+        /// Radial depth of a helical thread; `None` = the basic depth for its pitch and angle
+        /// (an ISO thread: down to its minor diameter, or out to its major one in a hole).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Thread depth")]
+        depth: Option<Expr>,
+        /// Included flank angle of a custom thread; `None` = 60°.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(angle = "Thread angle")]
+        angle: Option<Expr>,
+        /// How far a helical thread's flanks and root move into the material, for the mating
+        /// part's clearance; `None` = none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Clearance")]
+        clearance: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Start offset")]
+        start_offset: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "End offset")]
+        end_offset: Option<Expr>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        left_handed: bool,
     },
     /// Ruled loft through profiles of several sketches, in order.
     Loft {

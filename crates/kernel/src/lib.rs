@@ -143,6 +143,7 @@ mod tangent_cylinders;
 mod tess;
 #[cfg(test)]
 mod thin_face_tests;
+mod thread_brep;
 #[cfg(test)]
 mod thread_display_tests;
 #[cfg(test)]
@@ -218,6 +219,7 @@ pub use surfaces::{
     stitch, sweep_sheet, sweep_sheet_points, sweep_sheet_points_with, sweep_sheet_with, thicken, unstitch,
 };
 pub use sweep_path::{RailFit, SweepControl, SweepOrientation, sweep_path, sweep_path_with};
+pub use thread_brep::{GrooveSection, HelicalThread, helical_thread};
 pub use topo::{CylinderFace, cylinder_end_at, cylinder_face, cylinder_face_at};
 pub use topo::{TopoCounts, merged_topology, seam_flags};
 pub use tspline::tspline_sheet;

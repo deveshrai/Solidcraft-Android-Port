@@ -186,7 +186,7 @@ fn check_form(command: &str, labels: &[&str]) {
 fn control_role(command: &str, label: &str) -> Option<egui::accesskit::Role> {
     use egui::accesskit::Role;
     Some(match label {
-        "Type" if matches!(command, "sheet.flange" | "sheet.hem" | "solid.revolve" | "solid.emboss") => return None,
+        "Type" if matches!(command, "sheet.flange" | "sheet.hem" | "solid.revolve" | "solid.emboss" | "solid.thread") => return None,
         "Direction" => return None, // segmented buttons, labelled by each choice
         "Continuity" | "Corners" | "Cells" | "Profile" => return None,
         "Operation" if command == "solid.mirror" => return None,
@@ -235,7 +235,7 @@ form_case!(remove, "solid.remove", []);
 form_case!(path_pattern, "solid.pattern.path", ["Type", "Object Type", "Quantity", "Spacing"]);
 form_case!(pipe, "solid.pipe", ["Diameter", "Wall"]);
 form_case!(stock, "solid.bounding_solid", ["Margin"]);
-form_case!(thread, "solid.thread", ["Profile", "Size", "Pitch", "Designation"]);
+form_case!(thread, "solid.thread", ["Type", "Size", "Pitch", "Designation"]);
 form_case!(primitive_box, "solid.box", ["length", "width", "height", "Operation"]);
 form_case!(cylinder, "solid.cylinder", ["diameter", "height", "Operation"]);
 form_case!(sphere, "solid.sphere", ["diameter", "Operation"]);

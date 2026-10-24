@@ -62,3 +62,101 @@ fn a_long_thread_cuts_without_a_deep_tree() {
     let v0 = PI * r * r * len;
     assert!(v < v0 * 0.95 && v > v0 * 0.6, "{v} of {v0}");
 }
+
+fn helical(pitch: f64, depth: f64, from: f64, to: f64) -> crate::HelicalThread {
+    crate::HelicalThread { pitch, depth, angle: PI / 3.0, clearance: 0.0, from, to, left_handed: false }
+}
+
+/// Removed volume of a helical groove: its section times its centroid's path (Pappus).
+fn groove_volume(t: &crate::HelicalThread, radius: f64, internal: bool) -> f64 {
+    let s = t.section().unwrap();
+    let into = if internal { 1.0 } else { -1.0 };
+    let area = s.deep * (s.mouth + s.root) / 2.0;
+    let centroid = radius + into * s.deep * (s.mouth + 2.0 * s.root) / (3.0 * (s.mouth + s.root));
+    area * centroid * 2.0 * PI * t.turns().unwrap()
+}
+
+/// An exact helical thread on a shaft: the cylinder keeps its surface, trimmed by the groove's
+/// mouth, and five faces are added (three helicoid walls, two end caps). It is a sound solid,
+/// it meshes for display, and it removes the groove's Pappus volume.
+#[test]
+fn helical_brep_thread_on_a_shaft() {
+    let shaft = cylinder(Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0), 4.0, 20.0).unwrap();
+    let at = Vec3::new(4.0, 0.0, 10.0);
+    let cyl = crate::cylinder_face_at(&shaft, at).unwrap();
+    let (s0, s1) = (cyl.start.min(cyl.end), cyl.start.max(cyl.end));
+    let t = helical(1.25, 0.68, s0 + 2.0, s1 - 2.0);
+    let b = crate::helical_thread(&shaft, at, &cyl, &t).unwrap();
+    assert!(b.validity().is_empty(), "{:?}", b.validity());
+    assert_eq!(b.face_count(), shaft.face_count() + 4, "the two halves of the cylinder are one face, and five groove faces");
+    let removed = shaft.tessellate(1e-3).unwrap().measure().volume - b.tessellate(1e-3).unwrap().measure().volume;
+    let want = groove_volume(&t, 4.0, false);
+    assert!((removed - want).abs() < 0.01 * want, "{removed} vs {want}");
+    let plan = b.display_plan(0.01).unwrap();
+    assert!(!plan.faces.is_empty());
+    // Still a cylinder of the shaft's radius where the thread is not.
+    assert!(crate::cylinder_face_at(&b, Vec3::new(4.0, 0.0, 0.5)).is_some());
+}
+
+/// The same groove in a nut's bore runs outwards into the wall; left-handed it turns the
+/// other way, and a clearance takes more material away.
+#[test]
+fn helical_brep_thread_in_a_bore_with_clearance() {
+    let block = crate::box_solid(Vec3::new(-8.0, -8.0, 0.0), Vec3::new(8.0, 8.0, 10.0)).unwrap();
+    let bore = cylinder(Vec3::new(0.0, 0.0, -1.0), Vec3::new(0.0, 0.0, 1.0), 3.4, 12.0).unwrap();
+    let nut = crate::boolean(&block, &bore, BoolOp::Cut).unwrap().unwrap();
+    let at = Vec3::new(-3.4, 0.0, 5.0);
+    let cyl = crate::cylinder_face_at(&nut, at).unwrap();
+    assert!(cyl.internal);
+    let (s0, s1) = (cyl.start.min(cyl.end), cyl.start.max(cyl.end));
+    let v0 = nut.tessellate(1e-3).unwrap().measure().volume;
+    let mut last = 0.0;
+    for (clearance, left_handed) in [(0.0, false), (0.08, true)] {
+        let t = crate::HelicalThread { clearance, left_handed, ..helical(1.25, 0.68, s0 + 1.0, s1 - 1.0) };
+        let b = crate::helical_thread(&nut, at, &cyl, &t).unwrap();
+        assert!(b.validity().is_empty(), "{:?}", b.validity());
+        let removed = v0 - b.tessellate(1e-3).unwrap().measure().volume;
+        let want = groove_volume(&t, 3.4, true);
+        assert!((removed - want).abs() < 0.01 * want, "{removed} vs {want}");
+        assert!(removed > last);
+        last = removed;
+    }
+}
+
+/// What can't be a thread is refused with a reason, never a broken body.
+#[test]
+fn helical_brep_thread_refusals() {
+    let shaft = cylinder(Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0), 4.0, 20.0).unwrap();
+    let at = Vec3::new(4.0, 0.0, 10.0);
+    let cyl = crate::cylinder_face_at(&shaft, at).unwrap();
+    let (s0, s1) = (cyl.start.min(cyl.end), cyl.start.max(cyl.end));
+    for t in [
+        helical(1.25, 0.68, s0, s1),
+        helical(1.25, 3.0, s0 + 2.0, s1 - 2.0),
+        helical(1.25, 0.68, s0 + 2.0, s0 + 2.5),
+        helical(f64::NAN, 0.68, s0 + 2.0, s1 - 2.0),
+        crate::HelicalThread { clearance: 0.5, ..helical(1.25, 0.68, s0 + 2.0, s1 - 2.0) },
+        crate::HelicalThread { angle: 0.0, ..helical(1.25, 0.68, s0 + 2.0, s1 - 2.0) },
+    ] {
+        assert!(crate::helical_thread(&shaft, at, &cyl, &t).is_err(), "{t:?}");
+    }
+    // A tube: the groove would break through its wall.
+    let tube =
+        crate::boolean(&shaft, &cylinder(Vec3::new(0.0, 0.0, -1.0), Vec3::new(0.0, 0.0, 1.0), 3.6, 22.0).unwrap(), BoolOp::Cut).unwrap().unwrap();
+    let cyl = crate::cylinder_face_at(&tube, at).unwrap();
+    assert!(crate::helical_thread(&tube, at, &cyl, &helical(1.25, 0.68, s0 + 2.0, s1 - 2.0)).is_err());
+}
+
+/// A clearance on a large shaft: the material check samples well inside the material, not
+/// just under the surface where the check mesh's facets can miss it (seen on a Ø33.25 shaft).
+#[test]
+fn helical_brep_thread_with_clearance_on_a_large_shaft() {
+    let shaft = cylinder(Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0), 16.625, 20.0).unwrap();
+    let at = Vec3::new(16.625, 0.0, 10.0);
+    let cyl = crate::cylinder_face_at(&shaft, at).unwrap();
+    let (s0, s1) = (cyl.start.min(cyl.end), cyl.start.max(cyl.end));
+    let depth = crate::HelicalThread::basic_depth(1.25, PI / 3.0, 0.1);
+    let t = crate::HelicalThread { clearance: 0.1, ..helical(1.25, depth, s0 + 2.0, s1 - 4.0) };
+    let b = crate::helical_thread(&shaft, at, &cyl, &t).unwrap();
+    assert!(b.validity().is_empty(), "{:?}", b.validity());
+}

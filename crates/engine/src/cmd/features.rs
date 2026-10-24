@@ -92,7 +92,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("solid.thread", "Thread", thread)
         .at("SOLID", "CREATE")
         .icon("thread")
-        .params("face: [x,y,z] on a cylindrical face; designation?: ISO metric (\"M8\", \"M8x1\"; default: the size that fits); length?: expr (default: the whole face); modeled?: bool (default false). Cosmetic: the model is unchanged, model.threads lists it. Modeled: cuts the thread profile into the body; a shaft thicker than the thread is first turned down to its major diameter over the threaded length"),
+        .params("face: [x,y,z] on a cylindrical face; designation?: ISO metric (\"M8\", \"M8x1\"; default: the size that fits); length?: expr (default: the whole face); modeled?: bool (default false). Cosmetic: the model is unchanged, model.threads lists it. Modeled: cuts the thread profile into the body (faceted); a shaft thicker than the thread is first turned down to its major diameter over the threaded length. helical?: bool: model it as exact helical B-rep instead (smooth helicoid faces, the rest of the body untouched; the face must be the ISO major diameter for a shaft, any hole up to it). pitch?: expr: a custom helical thread of this pitch on the face as it is, whatever its diameter (no designation). Helical only: depth?: expr (default: the basic depth, 5/16 pitch / tan(angle/2)); angle?: expr (included flank angle, default 60 deg); clearance?: expr (flanks and root moved this far into the material, default 0); start_offset?, end_offset?: expr (the groove starts this far after the threaded length's start, nearest the picked point, and ends this far before its end; default half a pitch; must be positive); left_handed?: bool"),
     CommandSpec::new("solid.shell", "Shell", shell)
         .at("SOLID", "MODIFY")
         .icon("shell")
@@ -2302,8 +2302,41 @@ fn thread(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(l) = &length {
         check_expr(s, l, Kind::Length, cmd, "length")?;
     }
-    let modeled = p.get("modeled").and_then(Value::as_bool).unwrap_or(false);
-    let v = add_feature(s, p, FeatureKind::Thread { face: FacePick(face), designation, length, modeled })?;
+    let checked = |key: &str, kind: Kind| -> Result<Option<Expr>> {
+        let e = expr(p, key);
+        if let Some(x) = &e {
+            check_expr(s, x, kind, cmd, key)?;
+        }
+        Ok(e)
+    };
+    let pitch = checked("pitch", Kind::Length)?;
+    let depth = checked("depth", Kind::Length)?;
+    let angle = checked("angle", Kind::Angle)?;
+    let clearance = checked("clearance", Kind::Length)?;
+    let start_offset = checked("start_offset", Kind::Length)?;
+    let end_offset = checked("end_offset", Kind::Length)?;
+    let left_handed = p.get("left_handed").and_then(Value::as_bool).unwrap_or(false);
+    // A custom pitch is always helical, and helical is always modelled.
+    let helical = p.get("helical").and_then(Value::as_bool).unwrap_or(false) || pitch.is_some();
+    let modeled = helical || p.get("modeled").and_then(Value::as_bool).unwrap_or(false);
+    if !helical && (depth.is_some() || angle.is_some() || clearance.is_some() || start_offset.is_some() || end_offset.is_some() || left_handed) {
+        return Err(bad(cmd, "depth, angle, clearance, offsets and left_handed are for helical threads: set `helical: true` or a `pitch`"));
+    }
+    let kind = FeatureKind::Thread {
+        face: FacePick(face),
+        designation: if pitch.is_some() { None } else { designation },
+        length,
+        modeled,
+        helical,
+        pitch,
+        depth,
+        angle,
+        clearance,
+        start_offset,
+        end_offset,
+        left_handed,
+    };
+    let v = add_feature(s, p, kind)?;
     let st = s.model.state();
     let t = v.get("feature").and_then(Value::as_u64).and_then(|id| st.threads.iter().find(|t| t.feature == id).cloned());
     Ok(json!({"feature": v.get("feature"), "name": v.get("name"), "thread": t}))

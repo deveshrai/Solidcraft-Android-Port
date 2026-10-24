@@ -348,3 +348,105 @@ fn fillet_beside_a_modelled_thread_finishes() {
     let volume_after = volume(&mut s, "Screw");
     assert!(volume_after < volume_before && volume_after > volume_before * 0.99, "{volume_before} -> {volume_after}");
 }
+
+/// The removed volume of a helical B-rep groove (Pappus), from the thread the document made.
+fn helical_groove(s: &Session, at: Vec3, h: &solidcraft_doc::HelicalInputs) -> f64 {
+    let st = s.model.state();
+    let (_, cyl, t) = solidcraft_doc::helical_thread_on(&st, at, h).unwrap();
+    let g = t.section().unwrap();
+    let into = if cyl.internal { 1.0 } else { -1.0 };
+    let centroid = cyl.radius + into * g.deep * (g.mouth + 2.0 * g.root) / (3.0 * (g.mouth + g.root));
+    g.deep * (g.mouth + g.root) / 2.0 * centroid * 2.0 * PI * t.turns().unwrap()
+}
+
+fn custom(pitch: f64) -> solidcraft_doc::HelicalInputs<'static> {
+    solidcraft_doc::HelicalInputs {
+        designation: None,
+        length: None,
+        pitch: Some(pitch),
+        depth: None,
+        angle: None,
+        clearance: None,
+        start_offset: None,
+        end_offset: None,
+        left_handed: false,
+    }
+}
+
+/// A custom helical thread on a shaft of no standard size (Ø33.25, pitch 1.25, tangency-labs
+/// #4577): the shaft keeps its diameter, the thread is a handful of smooth faces, not a facet
+/// soup, and the body stays a sound solid.
+#[test]
+fn custom_helical_thread_on_a_non_standard_shaft() {
+    let mut s = Session::default();
+    run(&mut s, "solid.cylinder", json!({"radius": 33.25 / 2.0, "height": 20, "body_name": "Shaft"}));
+    let faces = s.model.state().body("Shaft").unwrap().body.face_count();
+    let before = volume(&mut s, "Shaft");
+    let at = Vec3::new(33.25 / 2.0, 0.0, 10.0);
+    let want = helical_groove(&s, at, &custom(1.25));
+    run(&mut s, "solid.thread", json!({"face": [33.25 / 2.0, 0, 10], "pitch": "1.25 mm"}));
+    let st = s.model.state();
+    let body = &st.body("Shaft").unwrap().body;
+    assert!(body.validity().is_empty(), "{:?}", body.validity());
+    assert!(body.face_count() <= faces + 5, "{} faces", body.face_count());
+    let got = before - volume(&mut s, "Shaft");
+    assert!((got - want).abs() < want * 0.01, "removed {got}, groove {want}");
+    let f = s.doc.features.last().unwrap();
+    assert!(matches!(&f.kind, solidcraft_doc::FeatureKind::Thread { modeled: true, helical: true, designation: None, .. }), "{:?}", f.kind);
+}
+
+/// Internal and external helical threads with clearance on one body each, two threads on the
+/// same body (a second thread failed on a faceted body, #2038), and a hole drilled at the
+/// nominal size takes a custom thread as it is (#5994). Saved and reopened, the threads come
+/// back, and a parameter drives the pitch.
+#[test]
+fn helical_threads_with_clearance_two_on_one_body_and_reopened() {
+    let mut s = Session::default();
+    run(&mut s, "parameters.change", json!({"name": "p", "expression": "1.25 mm"}));
+    run(&mut s, "solid.box", json!({"length": 40, "width": 20, "height": 10, "body_name": "Plate"}));
+    for x in [10.0, 30.0] {
+        run(&mut s, "solid.hole", json!({"position": [x, 10, 10], "diameter": 8}));
+    }
+    let before = volume(&mut s, "Plate");
+    let mut want = 0.0;
+    for x in [6.0, 26.0] {
+        let at = Vec3::new(x, 10.0, 5.0);
+        want += helical_groove(&s, at, &solidcraft_doc::HelicalInputs { clearance: Some(0.1), ..custom(1.25) });
+        run(&mut s, "solid.thread", json!({"face": [x, 10, 5], "pitch": "p", "clearance": "0.1 mm"}));
+    }
+    let got = before - volume(&mut s, "Plate");
+    assert!((got - want).abs() < want * 0.01, "removed {got}, grooves {want}");
+    assert!(s.model.state().body("Plate").unwrap().body.validity().is_empty());
+
+    let saved = s.doc.to_json();
+    let mut reopened = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());
+    let v = volume(&mut reopened, "Plate");
+    assert!((v - (before - got)).abs() < want * 0.001, "{v} vs {}", before - got);
+    // The pitch follows the parameter: a coarser one is a different (deeper, wider) groove.
+    run(&mut reopened, "parameters.change", json!({"name": "p", "expression": "2 mm"}));
+    assert!((volume(&mut reopened, "Plate") - v).abs() > 1.0);
+    assert!(reopened.model.state().body("Plate").unwrap().body.validity().is_empty());
+}
+
+/// An ISO designation as helical B-rep: an M8 on an 8 mm shaft and in its 6.75 mm tap hole;
+/// a shaft thicker than the thread is refused with the way out (the faceted method turns it).
+#[test]
+fn iso_helical_threads_and_their_refusals() {
+    let mut s = Session::default();
+    run(&mut s, "solid.cylinder", json!({"radius": 4, "height": 16, "body_name": "Bolt"}));
+    run(&mut s, "solid.thread", json!({"face": [4, 0, 8], "designation": "M8", "helical": true, "end_offset": "2 mm"}));
+    assert!(s.model.state().body("Bolt").unwrap().body.validity().is_empty());
+    run(&mut s, "solid.box", json!({"length": 16, "width": 16, "height": 8, "body_name": "Nut", "corner": [20, -8, 0]}));
+    run(&mut s, "solid.hole", json!({"position": [28, 0, 8], "thread": "M8"}));
+    run(&mut s, "solid.thread", json!({"face": [28.0 - 3.375, 0, 4], "designation": "M8", "helical": true}));
+    assert!(s.model.state().body("Nut").unwrap().body.validity().is_empty());
+
+    let mut s = Session::default();
+    run(&mut s, "solid.cylinder", json!({"radius": 5, "height": 16, "body_name": "Bolt"}));
+    let e = s.execute("solid.thread", &json!({"face": [5, 0, 8], "designation": "M8", "helical": true})).unwrap_err().to_string();
+    assert!(e.contains("faceted") && e.contains("custom"), "{e}");
+    for bad in [json!({"face": [5, 0, 8], "pitch": "1 mm", "start_offset": "0 mm"}), json!({"face": [5, 0, 8], "pitch": "1 mm", "depth": "3 mm"})] {
+        assert!(s.execute("solid.thread", &bad).is_err(), "{bad}");
+    }
+    assert!(s.execute("solid.thread", &json!({"face": [5, 0, 8], "clearance": "0.1 mm"})).is_err(), "clearance needs a helical thread");
+}
