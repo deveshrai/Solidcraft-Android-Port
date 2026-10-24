@@ -3,7 +3,8 @@
 > top: the same CAD app on Android tablets and phones, with mouse and keyboard, touch, and files
 > through Android's file picker. APKs are on the
 > [releases page](https://github.com/deveshrai/Solidcraft-Android-Port/releases); how to use it:
-> [docs/android-touch.md](docs/android-touch.md); how it works and how to build it:
+> [docs/android-touch.md](docs/android-touch.md); helical B-rep, custom and clearance threads:
+> [docs/android-threads.md](docs/android-threads.md); how it works and how to build it:
 > [docs/android.md](docs/android.md); how it follows upstream:
 > [docs/android-sync.md](docs/android-sync.md). Everything below is upstream's README.
 

@@ -80,15 +80,21 @@ impl HelicalThread {
         let mouth = p / 2.0 + d * tan + 2.0 * c / cos;
         let deep = d + c;
         let root = mouth - 2.0 * deep * tan;
-        if root < p * 0.01 {
-            let most = (p * 0.49 + 2.0 * c * (1.0 / cos - tan)) / tan;
+        // The deepest groove that still has a root (the flanks not meeting) and a crest (the
+        // groove narrower than the pitch): with a clearance the crest is usually the tighter.
+        let rooted = (p * 0.49 + 2.0 * c * (1.0 / cos - tan)) / tan;
+        let crested = (p * 0.48 - 2.0 * c / cos) / tan;
+        let most = rooted.min(crested);
+        if root < p * 0.01 || mouth > p * 0.98 {
+            if most <= 1e-4 {
+                return Err(KernelError::Invalid(format!(
+                    "a {c:.3} mm clearance leaves no thread at a {p:.3} mm pitch: make the clearance smaller or the pitch coarser"
+                )));
+            }
+            // The limit that binds: the one the deepest fitting groove reaches first.
+            let why = if crested < rooted { "no crest is left between the turns" } else { "the flanks meet before the root" };
             return Err(KernelError::Invalid(format!(
-                "a {d:.3} mm deep thread does not fit this pitch and angle: the flanks meet before the root (at most {most:.3} mm deep)"
-            )));
-        }
-        if mouth > p * 0.98 {
-            return Err(KernelError::Invalid(format!(
-                "no crest is left between the turns (the groove is {mouth:.3} mm wide at a {p:.3} mm pitch): make the thread shallower or the clearance smaller"
+                "a {d:.3} mm deep thread does not fit this pitch, angle and clearance: {why} (at most {most:.3} mm deep)"
             )));
         }
         Ok(GrooveSection { mouth, root, deep })

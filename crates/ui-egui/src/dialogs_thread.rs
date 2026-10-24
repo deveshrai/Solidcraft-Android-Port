@@ -131,7 +131,7 @@ pub struct HelixDraft {
     pub end_offset: String,
     pub left_handed: bool,
     /// The last summary worked out, and what it was worked out from.
-    pub summary: Option<(String, Result<[String; 2], String>)>,
+    pub summary: Option<(String, Result<[String; 3], String>)>,
 }
 
 impl HelixDraft {
@@ -204,7 +204,7 @@ impl HelixDraft {
         at: Option<solidcraft_engine::geom::Vec3>,
         designation: &str,
         length: &str,
-    ) -> Option<Result<[String; 2], String>> {
+    ) -> Option<Result<[String; 3], String>> {
         let at = at?;
         let key = format!(
             "{at:?}|{designation}|{length}|{self:?}",
@@ -221,7 +221,7 @@ impl HelixDraft {
             let text = text.trim();
             if text.is_empty() { Ok(None) } else { doc.eval(text, kind).map(Some).map_err(|e| e.to_string()) }
         };
-        let result = (|| -> Result<[String; 2], String> {
+        let result = (|| -> Result<[String; 3], String> {
             let h = solidcraft_engine::doc::HelicalInputs {
                 designation: (!self.custom && !designation.trim().is_empty()).then_some(designation.trim()),
                 length: value(length, length_kind)?,
@@ -241,7 +241,7 @@ impl HelixDraft {
                 return Err("too short for a thread at this pitch: shorten the offsets or use a finer pitch".into());
             }
             let side = if cyl.internal { "internal" } else { "external" };
-            Ok([format!("{turns:.1} ({side})"), format!("{:.2} × {:.2} mm, crest {:.2}", g.mouth, g.deep, t.pitch - g.mouth)])
+            Ok([format!("{turns:.1} ({side})"), format!("{:.2} × {:.2} mm", g.mouth, g.deep), format!("{:.2} mm", t.pitch - g.mouth)])
         })();
         self.summary = Some((key, result.clone()));
         Some(result)
@@ -270,15 +270,16 @@ pub(crate) fn helical_rows(
             crate::ui_kit::checkbox_grid(ui, &mut [("Left-handed", &mut helix.left_handed)], 2);
         }
         match helix.summary(app, at, designation, length) {
-            Some(Ok([turns, groove])) => {
+            Some(Ok([turns, groove, crest])) => {
                 form_row(ui, "Turns", |ui| ui.label(turns));
-                form_row(ui, "Groove", |ui| ui.label(groove.clone()).on_hover_text(tr("width at the face × depth, and the flat left between turns")));
+                form_row(ui, "Groove", |ui| ui.label(groove).on_hover_text(tr("width at the face × depth")));
+                form_row(ui, "Crest", |ui| ui.label(crest).on_hover_text(tr("the flat left on the face between turns")));
             }
             Some(Err(why)) => {
-                form_row(ui, "Result", |ui| {
-                    ui.add(egui::Label::new(egui::RichText::new(why.clone()).color(crate::theme::Tokens::get().warning)).truncate())
-                        .on_hover_text(why);
-                });
+                // The whole reason, wrapped: a touch screen has no hover to show a cut-off one.
+                let why = why.strip_prefix("invalid input: ").unwrap_or(&why).to_string();
+                let t = crate::theme::Tokens::get();
+                ui.add(egui::Label::new(egui::RichText::new(why).size(t.font_small).color(t.warning)).wrap());
             }
             None => {}
         }
@@ -665,7 +666,22 @@ mod contribution_tests {
         }
         let Some(Kind::Thread { helix, .. }) = h.app.dialog.as_ref().map(|d| &d.kind) else { panic!("thread") };
         let summary = helix.summary.as_ref().map(|(_, r)| r.clone());
-        assert!(matches!(&summary, Some(Ok([turns, groove])) if turns.contains("external") && groove.contains("crest")), "{summary:?}");
+        assert!(
+            matches!(&summary, Some(Ok([turns, groove, crest])) if turns.contains("external") && groove.contains('×') && crest.ends_with("mm")),
+            "{summary:?}"
+        );
+        // Too deep for the pitch: the reason is shown in full, and the dialog cannot apply.
+        if let Some(Kind::Thread { helix, .. }) = h.app.dialog.as_mut().map(|d| &mut d.kind) {
+            helix.depth = "3 mm".into();
+        }
+        h.frames(3);
+        let Some(Kind::Thread { helix, .. }) = h.app.dialog.as_ref().map(|d| &d.kind) else { panic!("thread") };
+        assert!(matches!(&helix.summary, Some((_, Err(why))) if why.contains("deep")), "{:?}", helix.summary);
+        assert_eq!(crate::scenario::count_of("dialog:ok:enabled"), Some(0.0));
+        if let Some(Kind::Thread { helix, .. }) = h.app.dialog.as_mut().map(|d| &mut d.kind) {
+            helix.depth.clear();
+        }
+        h.frames(3);
         let commands = apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
         let p = &commands[0].1;
         assert_eq!((p["pitch"].as_str(), p["helical"].as_bool(), p.get("designation")), (Some("1.5 mm"), Some(true), None), "{p}");

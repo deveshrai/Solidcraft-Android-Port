@@ -3593,6 +3593,13 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             if helix.custom && helix.pitch.trim().is_empty() {
                 return Err("enter the custom thread's pitch".into());
             }
+            // The readouts' refusal holds OK back at once, before any preview has run.
+            let modeled = d.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false);
+            if helix.is_helical(modeled)
+                && let Some((_, Err(why))) = &helix.summary
+            {
+                return Err(why.clone());
+            }
             put(&mut p, &[("length", length)]);
             helix.params(d.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false), &mut p);
             ("solid.thread", p)

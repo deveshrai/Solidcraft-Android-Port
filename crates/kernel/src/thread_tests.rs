@@ -160,3 +160,16 @@ fn helical_brep_thread_with_clearance_on_a_large_shaft() {
     let b = crate::helical_thread(&shaft, at, &cyl, &t).unwrap();
     assert!(b.validity().is_empty(), "{:?}", b.validity());
 }
+
+/// The largest depth a refusal names fits: with a clearance the crest, not the root, limits it.
+#[test]
+fn helical_brep_thread_refusal_names_a_depth_that_fits() {
+    for clearance in [0.0, 0.15] {
+        let t = crate::HelicalThread { clearance, ..helical(1.25, 1.5, 0.0, 10.0) };
+        let e = t.section().unwrap_err().to_string();
+        let most: f64 = e.split("at most ").nth(1).and_then(|r| r.split(' ').next()).unwrap().parse().unwrap();
+        assert!(crate::HelicalThread { depth: most * 0.999, ..t }.section().is_ok(), "{e}");
+        assert!(crate::HelicalThread { depth: most * 1.02, ..t }.section().is_err(), "{e}");
+    }
+    assert!(crate::HelicalThread { clearance: 0.6, ..helical(1.25, 0.5, 0.0, 10.0) }.section().unwrap_err().to_string().contains("clearance"));
+}

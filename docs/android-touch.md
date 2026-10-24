@@ -122,9 +122,11 @@ unfolding keeps the app and the design.
 
 ## Limits
 
-- **Modelled threads** cut a faceted groove (flat triangles to within 0.5% of the pitch), as on the
-  desktop; the threaded body's curved faces become facets too. On the Fold an M20 × 20 mm thread
-  took under a second. A cosmetic thread (Modeled off) keeps the body exact.
+- **Modelled threads** with **Geometry: Faceted** cut a faceted groove (flat triangles to within
+  0.5% of the pitch), as on the desktop; the threaded body's curved faces become facets too. On
+  the Fold an M20 × 20 mm thread took under a second. **Helical B-rep** threads keep the body exact,
+  and **Custom** threads take any diameter and a clearance: see [android-threads.md](android-threads.md).
+  A cosmetic thread (Modeled off) keeps the body exact.
 
   ![A modelled thread close up](screenshots/android/18-modelled-thread.jpg)
 
