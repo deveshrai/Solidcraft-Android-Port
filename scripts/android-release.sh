@@ -3,8 +3,9 @@
 #
 #   scripts/android-release.sh                 release SolidCraft's version (Cargo.toml): tag
 #                                              v<version>-android, APK SolidCraft-<version>-android-arm64.apk
-#   scripts/android-release.sh --revision N    a port-only release of the same SolidCraft version
-#                                              (fixes to the port): v<version>-android.N
+#   scripts/android-release.sh --revision a    a port-only release of the same SolidCraft version
+#                                              (fixes to the port): 0.21.0a, then b, c…; tag
+#                                              v<version><letter>-android
 #   scripts/android-release.sh --dry-run       build the APK and write the notes, publish nothing
 #
 # Needs the GitHub CLI logged in (gh auth login) and the commit pushed to `origin`.
@@ -17,7 +18,14 @@ revision=0
 dry=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --revision) revision="${2:?--revision needs a number}"; shift ;;
+        --revision)
+            r="${2:?--revision needs a letter (a, b, …) or a number (1, 2, …)}"
+            case "$r" in
+                [a-z]) revision=$(( $(printf '%d' "'$r") - 96 )) ;;
+                [0-9] | [12][0-9]) revision="$r" ;;
+                *) echo "--revision: a letter a…z or a number 1…26" >&2; exit 2 ;;
+            esac
+            shift ;;
         --dry-run) dry=1 ;;
         -h | --help) sed -n '2,11p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -32,10 +40,10 @@ export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 
 version=$(sed -n 's/^version = "\([0-9.]*\)"$/\1/p' Cargo.toml | head -1)
 [ -n "$version" ] || fail "no version in Cargo.toml"
-name="$version"
-[ "$revision" -gt 0 ] && name="$version-android.$revision"
-tag="v$version-android"
-[ "$revision" -gt 0 ] && tag="v$name"
+letter=""
+[ "$revision" -gt 0 ] && letter=$(printf "\\$(printf '%03o' $((96 + revision)))")
+name="$version$letter"
+tag="v$name-android"
 apk_name="SolidCraft-$name-android-arm64.apk"
 out="target/android-release"
 
@@ -43,7 +51,7 @@ if [ "$dry" = 0 ]; then
     command -v gh >/dev/null || fail "the GitHub CLI is not installed (https://cli.github.com)"
     gh auth status >/dev/null 2>&1 || fail "the GitHub CLI is not logged in: gh auth login"
     git diff --quiet && git diff --cached --quiet || fail "uncommitted changes: commit them first"
-    git rev-parse -q --verify "refs/tags/$tag" >/dev/null && fail "tag $tag exists: for a port-only release use --revision N"
+    git rev-parse -q --verify "refs/tags/$tag" >/dev/null && fail "tag $tag exists: for a port-only release use --revision a (then b, c…)"
     git fetch -q origin
     [ "$(git rev-parse HEAD)" = "$(git rev-parse '@{upstream}' 2>/dev/null || echo none)" ] \
         || fail "HEAD is not pushed (git push origin HEAD), or the branch tracks no origin branch"
@@ -70,7 +78,7 @@ else
 fi
 notes="$out/notes-$name.md"
 cat > "$notes" <<EOF
-SolidCraft $version for Android${revision:+$( [ "$revision" -gt 0 ] && echo " (port revision $revision)")}.
+SolidCraft $name for Android$( [ "$revision" -gt 0 ] && echo " (SolidCraft $version, port release $letter)").
 
 Built from upstream [SolidCraft](https://github.com/tangency-labs/solidcraft) ${base_line:-$version} with the Android port on top.
 

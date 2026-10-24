@@ -14,13 +14,16 @@ val cargoProfile: String = findProperty("solidcraft.cargoProfile") as String? ?:
 
 // The version is SolidCraft's own (the workspace Cargo.toml's), so the APK follows upstream.
 // A port-only release of the same SolidCraft version raises -Psolidcraft.portRevision (1, 2, …),
-// which becomes "-android.N" in the name and the last two digits of the version code.
+// which becomes a letter after the version (0.21.0a, 0.21.0b, …) and the last two digits of the
+// version code.
 val solidcraftVersion: String = Regex("""(?m)^version = "(\d+)\.(\d+)\.(\d+)"""")
     .find(repo.resolve("Cargo.toml").readText())?.groupValues?.get(0)?.substringAfter('"')?.removeSuffix("\"")
     ?: error("no version in ${repo.resolve("Cargo.toml")}")
-val portRevision: Int = (findProperty("solidcraft.portRevision") as String?)?.toInt() ?: 0
+val portRevision: Int = ((findProperty("solidcraft.portRevision") as String?)?.toInt() ?: 0).also {
+    require(it in 0..26) { "solidcraft.portRevision: 0 (none) or 1…26 (a…z)" }
+}
 val versionParts: List<Int> = solidcraftVersion.split(".").map { it.toInt() }
-val appVersionName: String = if (portRevision > 0) "$solidcraftVersion-android.$portRevision" else solidcraftVersion
+val appVersionName: String = if (portRevision > 0) "$solidcraftVersion${'a' + (portRevision - 1)}" else solidcraftVersion
 // 0.16.2 (revision 0) → 160200: major·10⁶ + minor·10⁴ + patch·10² + revision, always rising.
 val appVersionCode: Int = versionParts[0] * 1_000_000 + versionParts[1] * 10_000 + versionParts[2] * 100 + portRevision
 

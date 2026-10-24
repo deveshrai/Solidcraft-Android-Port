@@ -75,10 +75,10 @@ It builds the arm64 release APK, checks its version, tags the commit `v<version>
 release with `SolidCraft-<version>-android-arm64.apk` and notes naming the upstream commit it is
 built on.
 
-A release of fixes to the port with SolidCraft's version unchanged takes a revision:
-`scripts/android-release.sh --revision 1` makes version `<version>-android.1`, tag
-`v<version>-android.1`. The version code (what Android compares for updates) is
-`major·10⁶ + minor·10⁴ + patch·10² + revision`: 0.16.2 is 160200, its revision 1 is 160201, and
+A release of fixes to the port with SolidCraft's version unchanged takes a letter until the next
+upstream version: `scripts/android-release.sh --revision a` makes version `0.21.0a`, tag
+`v0.21.0a-android`, then `--revision b` makes `0.21.0b`, and so on (z at most). The version code (what Android compares for updates) is
+`major·10⁶ + minor·10⁴ + patch·10² + revision`: 0.16.2 is 160200, 0.16.2a is 160201, and
 every later SolidCraft version is higher. Releases are signed with the debug key for now (see
 [android.md, "Not there yet"](android.md#not-there-yet)); keep signing with the same key, or
 Android refuses to update an installed copy.
