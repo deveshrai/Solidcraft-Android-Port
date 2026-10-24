@@ -4,6 +4,8 @@ An Android port of SolidCraft: the same application as the desktop and browser b
 (`SolveApp` in `crates/ui-egui`), on Android phones and tablets, with mouse and keyboard,
 touch, and opening, saving, importing and exporting through Android's document pickers.
 
+**Using the app** (touch, mouse and keyboard, files, foldables): [android-touch.md](android-touch.md).
+
 This port lives in [deveshrai/Solidcraft-Android-Port](https://github.com/deveshrai/Solidcraft-Android-Port)
 and follows upstream [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft);
 [android-sync.md](android-sync.md) is how it is kept up to date.

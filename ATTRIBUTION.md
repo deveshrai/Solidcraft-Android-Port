@@ -28,6 +28,24 @@ Editable drawing code, native projects and shipped exports are collected under `
 | docs/screenshots/class-a-blend.png | SolidCraft contributors | screenshot of SolidCraft itself: two boxes bridged by `surface.blend` (a 40x10 sheet, `solidcraft-cli snapshot` of plan/evidence script ev_blend) | MIT OR Apache-2.0 |
 | docs/screenshots/class-a-crown.png | SolidCraft contributors | screenshot of SolidCraft itself: a patch crowned with `surface.patch crown=0.3` over a saddle rim (`solidcraft-cli snapshot`) | MIT OR Apache-2.0 |
 | docs/screenshots/class-a-boundary.png | SolidCraft contributors | screenshot of SolidCraft itself: a patch through two sketch lines built by `surface.boundary` with `crown: 0.4` (`solidcraft-cli snapshot`) | MIT OR Apache-2.0 |
+| docs/screenshots/android/01-sketch-on-plane.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): a new sketch on the XY plane, picked by tapping it | MIT OR Apache-2.0 |
+| docs/screenshots/android/02-rectangle-two-taps.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): a rectangle drawn with two taps, constraints added | MIT OR Apache-2.0 |
+| docs/screenshots/android/03-extrude-dialog.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): the Extrude dialog with the sketch profile picked | MIT OR Apache-2.0 |
+| docs/screenshots/android/04-extruded-block.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): the extruded block in the home view | MIT OR Apache-2.0 |
+| docs/screenshots/android/05-touch-orbit.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): one finger orbiting the view | MIT OR Apache-2.0 |
+| docs/screenshots/android/06-touch-pinch.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): a two-finger pinch zooming in | MIT OR Apache-2.0 |
+| docs/screenshots/android/07-touch-pan.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): two fingers panning the view | MIT OR Apache-2.0 |
+| docs/screenshots/android/08-fillet-finger-drag.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): a fillet radius dragged by finger on its arrow | MIT OR Apache-2.0 |
+| docs/screenshots/android/09-filleted.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): the block after the fillet | MIT OR Apache-2.0 |
+| docs/screenshots/android/10-mouse-select-edge.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): an edge selected with a USB mouse | MIT OR Apache-2.0 |
+| docs/screenshots/android/11-command-search.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): command search typed on a keyboard | MIT OR Apache-2.0 |
+| docs/screenshots/android/12-on-screen-keyboard.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): command search typed on Android's on-screen keyboard | MIT OR Apache-2.0 |
+| docs/screenshots/android/13-file-menu.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): the File menu: open, insert, save and export | MIT OR Apache-2.0 |
+| docs/screenshots/android/14-step-and-stl-inserted.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): a STEP part and an STL mesh inserted beside the block | MIT OR Apache-2.0 |
+| docs/screenshots/android/15-portrait.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): the app in portrait | MIT OR Apache-2.0 |
+| docs/screenshots/android/16-cover-screen.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): the app on a foldable's cover screen | MIT OR Apache-2.0 |
+| docs/screenshots/android/17-cover-create-menu.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): the Create menu on the cover screen | MIT OR Apache-2.0 |
+| docs/screenshots/android/18-modelled-thread.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): a modelled M20 thread, close up | MIT OR Apache-2.0 |
 | docs/screenshots/sample-plate.png | SolidCraft contributors | screenshot of SolidCraft itself (`solidcraft --sample`) | MIT OR Apache-2.0 |
 | assets/samples/exports/0.png | SolidCraft contributors | original Sample Plate from `crates/engine/src/sample.rs`, exported by the SolidCraft thumbnail renderer | MIT OR Apache-2.0 |
 | assets/samples/exports/1.png | SolidCraft contributors | original Sheet Metal Bracket from `crates/engine/src/sample.rs`, exported by the SolidCraft thumbnail renderer | MIT OR Apache-2.0 |
