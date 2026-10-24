@@ -19,14 +19,16 @@ JSON commands read on stdin; this writes those commands to a file that is stream
     tools/virtual-input.py /tmp/ui.jsonl lift 2            # lift that many fingers
     tools/virtual-input.py /tmp/ui.jsonl delay 100         # wait (ms) before the next command
 
-Screen pixels for `touch` assume a 2560x1600 display (the Pixel Tablet AVD); change
-SCREEN below for another one. Development tool only; nothing here ships in the app.
+Screen pixels for `touch` are the display's: 2560x1600 (the Pixel Tablet AVD) unless
+VIRTUAL_INPUT_SCREEN says otherwise (`VIRTUAL_INPUT_SCREEN=2448x1848`, from `adb shell wm size`),
+set the same at `register` and after. Development tool only; nothing here ships in the app.
 """
 
 import json
+import os
 import sys
 
-SCREEN = (2560, 1600)
+SCREEN = tuple(int(n) for n in os.environ.get("VIRTUAL_INPUT_SCREEN", "2560x1600").lower().split("x", 1))
 MOUSE, KEYBOARD, TOUCH = 1, 2, 3
 SYN = ["EV_SYN", "SYN_REPORT", 0]
 KEYS = [f"KEY_{c}" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"] + [

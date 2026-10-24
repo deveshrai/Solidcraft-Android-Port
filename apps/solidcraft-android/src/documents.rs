@@ -71,6 +71,8 @@ pub struct Documents {
     active: Instant,
     /// Errors to show in the status bar.
     messages: Vec<String>,
+    /// Back was pressed and is not handled yet.
+    back: bool,
 }
 
 /// The activity, as a reference that lives as long as the app. The activity glue only hands it out
@@ -99,8 +101,16 @@ impl Documents {
         if let Err(e) = std::fs::create_dir_all(&dir) {
             log::error!("documents: {}: {e}", dir.display());
         }
-        let mut docs =
-            Documents { activity, dir, links: Vec::new(), pick: None, checked: Instant::now(), active: Instant::now(), messages: Vec::new() };
+        let mut docs = Documents {
+            activity,
+            dir,
+            links: Vec::new(),
+            pick: None,
+            checked: Instant::now(),
+            active: Instant::now(),
+            messages: Vec::new(),
+            back: false,
+        };
         docs.load_links();
         Some(docs)
     }
@@ -237,6 +247,7 @@ impl Documents {
         match field(0) {
             "picked" => self.picked(field(1), field(2)),
             "cancelled" => self.answer(None),
+            "back" => self.back = true,
             "opened" => {
                 let path = PathBuf::from(field(1));
                 if let Some(l) = self.links.iter_mut().find(|l| l.path == path) {
@@ -341,6 +352,19 @@ impl Documents {
         for (uri, path) in out {
             self.call("copy out", |env, activity| copy(env, activity, &uri, &path, true));
         }
+    }
+
+    /// Whether Back was pressed since the last call.
+    pub fn take_back(&mut self) -> bool {
+        std::mem::take(&mut self.back)
+    }
+
+    /// Put the app in the background, as Home does.
+    pub fn to_background(&self) {
+        self.call("toBackground", |env, activity| {
+            env.call_method(activity, jni_str!("toBackground"), jni_sig!("()V"), &[])?;
+            Ok(())
+        });
     }
 
     /// Copy out what is still settling now (the app is closing).

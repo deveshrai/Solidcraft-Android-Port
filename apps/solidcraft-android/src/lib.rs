@@ -35,6 +35,20 @@ mod android {
         frames: u32,
         /// The document pickers and the local copies of documents.
         documents: Option<Rc<RefCell<Documents>>>,
+        /// Back closes what is open: Escape goes into the next frame's input.
+        escape: bool,
+    }
+
+    /// Whether Escape has something to close: a dialog, a tool, a sketch being edited, a menu or
+    /// popup, or a field with the keyboard.
+    fn escape_closes(app: &SolveApp, ctx: &egui::Context) -> bool {
+        app.dialog.is_some()
+            || app.tool.is_some()
+            || app.session.active_sketch.is_some()
+            || app.ui.palette_open
+            || app.viewport.context_menu.is_some()
+            || egui::Popup::is_any_open(ctx)
+            || ctx.memory(|m| m.focused().is_some())
     }
 
     impl eframe::App for Shell {
@@ -51,10 +65,30 @@ mod android {
             // Before the app's logic, which takes a picker's answer this frame.
             if let Some(d) = &self.documents {
                 d.borrow_mut().tick(&mut self.app, ctx);
+                // Back: close what is open, as Escape; with nothing open, leave as Home does.
+                if d.borrow_mut().take_back() {
+                    if escape_closes(&self.app, ctx) {
+                        self.escape = true;
+                        ctx.request_repaint();
+                    } else {
+                        d.borrow().to_background();
+                    }
+                }
             }
             self.app.logic(ctx);
         }
         fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+            if std::mem::take(&mut self.escape) {
+                for pressed in [true, false] {
+                    raw.events.push(egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+            }
             self.app.raw_input_hook(raw);
         }
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -158,12 +192,18 @@ mod android {
                         info.backend, info.name, info.driver
                     ));
                 }
-                Ok(Box::new(Shell { app, frames: 0, documents }))
+                Ok(Box::new(Shell { app, frames: 0, documents, escape: false }))
             }),
         );
         if let Err(e) = result {
             log::error!("SolidCraft could not start: {e}");
         }
+        // The system destroyed the activity, and the app has shut down (designs saved, document
+        // copies flushed). winit's event loop can only be made once per process, so a new
+        // activity in this process could never start: end the process, and the next launch
+        // starts a fresh one.
+        log::info!("the activity ended; exiting");
+        std::process::exit(0);
     }
 }
 

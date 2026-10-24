@@ -5,6 +5,9 @@ import android.content.ContentResolver;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.window.OnBackInvokedDispatcher;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 
@@ -27,7 +30,11 @@ import java.util.regex.Pattern;
  *
  * Rust calls pickOpen/pickSave/copyTo and polls takeResult for what came of them; each result is
  * {kind, ...}: {"picked", uri, name}, {"cancelled"}, {"opened", path}, {"copied", path},
- * {"error", message}.
+ * {"error", message}, {"back"}.
+ *
+ * Back (the gesture or the key) never finishes the activity: it is handed to Rust as {"back"},
+ * which closes what is open (as Escape) or asks for toBackground(). Finishing the activity would
+ * end the app's one event loop, which can't start again in the same process.
  */
 public class SolidCraftActivity extends NativeActivity {
     private static final int OPEN = 1;
@@ -36,6 +43,27 @@ public class SolidCraftActivity extends NativeActivity {
     /** Copies run here, one at a time and in order, off the UI thread. */
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final ConcurrentLinkedQueue<String[]> results = new ConcurrentLinkedQueue<>();
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        if (Build.VERSION.SDK_INT >= 33) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> results.add(new String[] {"back"}));
+        }
+    }
+
+    /** Back before Android 13 (from 13 on, the callback registered in onCreate takes it). */
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        results.add(new String[] {"back"});
+    }
+
+    /** Leave the app as Home does, keeping it and its designs as they are. */
+    public void toBackground() {
+        runOnUiThread(() -> moveTaskToBack(true));
+    }
     /** The name the last save asked for. */
     private volatile String saveName;
 
