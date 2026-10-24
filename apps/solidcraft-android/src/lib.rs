@@ -22,8 +22,9 @@ mod android {
 
     use crate::documents::Documents;
 
-    /// The viewport's depth and stencil buffers, as on the desktop: a 24-bit depth buffer is the
-    /// one every Android GPU has.
+    /// The viewport scene's depth and stencil buffers and anti-aliasing, as on the desktop: a
+    /// 24-bit depth buffer is the one every Android GPU has. The scene draws offscreen with them;
+    /// the window's pass (egui's) has no depth and one sample.
     const DEPTH_BITS: u8 = 24;
     const STENCIL_BITS: u8 = 8;
     const MSAA: u16 = 4;
@@ -94,6 +95,18 @@ mod android {
         }
     }
 
+    /// The viewport scene's sample count: `samples` clamped by the backend's policy (GLES renders
+    /// 1x), or the largest the device has up to the default when it can't do that many. As the
+    /// desktop app's `scene_samples`.
+    fn scene_samples(backend: eframe::wgpu::Backend, samples: u32, supported: &[u32]) -> u32 {
+        let requested = eframe::egui_wgpu::effective_msaa_samples(backend, samples.max(1));
+        if requested <= 1 || supported.is_empty() || supported.contains(&requested) {
+            requested
+        } else {
+            supported.iter().copied().filter(|&n| n <= solidcraft_ui_egui::prefs::Prefs::default().msaa).max().unwrap_or(1)
+        }
+    }
+
     pub fn run(app: AndroidApp) {
         android_logger::init_once(android_logger::Config::default().with_max_level(log::LevelFilter::Info).with_tag("SolidCraft"));
         // The app's own folder: crash reports and eframe's settings live there.
@@ -111,9 +124,9 @@ mod android {
         solidcraft_engine::crash::phase("window");
         let options = eframe::NativeOptions {
             android_app: Some(app),
-            depth_buffer: DEPTH_BITS,
-            stencil_buffer: STENCIL_BITS,
-            multisampling: MSAA,
+            depth_buffer: 0,
+            stencil_buffer: 0,
+            multisampling: 1,
             persistence_path: data.as_ref().map(|d| d.join("app.ron")),
             ..Default::default()
         };
@@ -122,7 +135,10 @@ mod android {
             options,
             Box::new(|cc| {
                 solidcraft_engine::crash::phase("app setup");
-                solidcraft_ui_egui::fonts::setup_fonts(&cc.egui_ctx);
+                // The bundled faces at once; the system's CJK, Hangul and Thai fallbacks are found on
+                // a thread, so the first frame doesn't wait for them.
+                solidcraft_ui_egui::fonts::setup_bundled_fonts(&cc.egui_ctx);
+                solidcraft_ui_egui::fonts::load_system_fonts_in_background(&cc.egui_ctx);
                 // No updates or agent services: the host has none to offer.
                 let documents = data.as_deref().and_then(|d| Documents::new(d, activity)).map(|d| Rc::new(RefCell::new(d)));
                 let mut app = SolveApp::new(Session::default(), services(documents.as_ref()));
@@ -131,14 +147,15 @@ mod android {
                 }
                 if let Some(rs) = &cc.wgpu_render_state {
                     let info = rs.adapter.get_info();
-                    log::info!("graphics: {:?} {} ({}), MSAA {}x", info.backend, info.name, info.driver, rs.msaa_samples);
+                    let samples = scene_samples(info.backend, u32::from(MSAA), &rs.msaa_supported);
+                    log::info!("graphics: {:?} {} ({}), MSAA {samples}x", info.backend, info.name, info.driver);
                     solidcraft_engine::crash::phase("viewport pipelines (shader compile)");
-                    app.set_wgpu(rs, DEPTH_BITS, STENCIL_BITS, rs.msaa_samples);
+                    app.set_wgpu_split(rs, DEPTH_BITS, STENCIL_BITS, samples);
                     solidcraft_ui_egui::gpu::install_picture_renderer(rs);
                     solidcraft_ui_egui::prefs::check_msaa(&mut app, u32::from(MSAA));
                     solidcraft_engine::crash::set_environment(&format!(
-                        "Renderer: {:?} {} ({}), MSAA {}x",
-                        info.backend, info.name, info.driver, rs.msaa_samples
+                        "Renderer: {:?} {} ({}), MSAA {samples}x",
+                        info.backend, info.name, info.driver
                     ));
                 }
                 Ok(Box::new(Shell { app, frames: 0, documents }))

@@ -4261,7 +4261,7 @@ version = "0.21.0"
 
 [[package]]
 name = "solidcraft-android"
-version = "0.16.2"
+version = "0.21.0"
 dependencies = [
  "android_logger",
  "eframe",

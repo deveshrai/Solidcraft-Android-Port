@@ -451,6 +451,8 @@ const HANGUL_FONT_CANDIDATES: &[&str] = &[
     // Linux: Nanum Gothic (Noto Sans CJK already covers Hangul)
     "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
     "/usr/share/fonts/nanum/NanumGothic.ttf",
+    // Android: Noto Sans CJK, which covers Hangul
+    "/system/fonts/NotoSansCJK-Regular.ttc",
 ];
 
 /// Thai fonts, appended last: none of the Latin or CJK faces draw Thai, so without one Thai text
@@ -477,6 +479,8 @@ const THAI_FONT_CANDIDATES: &[&str] = &[
     "/usr/share/fonts/truetype/tlwg/Garuda.ttf",
     "/usr/share/fonts/opentype/tlwg/Garuda.otf",
     "/usr/share/fonts/tlwg/Loma.otf",
+    // Android: Noto Sans Thai
+    "/system/fonts/NotoSansThai-Regular.ttf",
 ];
 
 /// Fonts covering simplified Chinese, appended after the CJK fallback so Chinese renders even
@@ -501,6 +505,8 @@ const CHINESE_FONT_CANDIDATES: &[&str] = &[
     "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+    // Android: Noto Sans CJK
+    "/system/fonts/NotoSansCJK-Regular.ttc",
 ];
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -821,6 +827,8 @@ fn chinese_font_dirs() -> Vec<std::path::PathBuf> {
             dirs.push(std::path::PathBuf::from(home).join(".fonts"));
         }
     }
+    #[cfg(target_os = "android")]
+    dirs.extend([std::path::PathBuf::from("/system/fonts")]);
     dirs
 }
 

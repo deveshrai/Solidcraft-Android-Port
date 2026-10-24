@@ -21,7 +21,7 @@ Tested on an Android 16 tablet emulator (Pixel Tablet, arm64, Vulkan through Mol
 
 | Area | What works |
 |------|------------|
-| Rendering | The full UI and the viewport on Vulkan (GLES 3 where a device has no Vulkan), 4x MSAA, fullscreen |
+| Rendering | The full UI and the viewport on Vulkan (GLES 3 where a device has no Vulkan), fullscreen; the scene draws offscreen with 4x MSAA (1x on GLES) and the UI pass at 1x, as on the desktop |
 | Modelling | The kernel runs on the device: sketches, features, the timeline, every workspace |
 | Mouse | Hover highlighting, click to select, the navigation preset's buttons (default Fusion: middle drag pans, Shift+middle and right drag orbit), the wheel zooms to the cursor, the right-click menu |
 | Keyboard | Shortcuts with and without modifiers (tested: Ctrl+Z, Ctrl+S, Ctrl+O, E, Esc, S to search), typing into fields |
@@ -206,7 +206,7 @@ these docs). Upstream files changed, and why:
 | `Cargo.lock` | The Android crate's dependencies (`jni`, `android_logger`) and the patched winit |
 | `crates/ui-egui/Cargo.toml` | `arboard` (clipboard pictures and file lists) only off Android: it has no Android backend |
 | `crates/ui-egui/src/agent_chat/paste.rs`, `mod.rs` | On Android a paste in the agent chat is text only (no picture or file list) |
-| `crates/ui-egui/src/fonts.rs` | The CJK font search also looks in Android's `/system/fonts` |
+| `crates/ui-egui/src/fonts.rs` | Android's system fonts as fallbacks: the CJK search also looks in `/system/fonts`, and Noto Sans CJK and Noto Sans Thai are candidates for the Chinese, Hangul and Thai fallbacks |
 | `crates/ui-egui/src/navigation.rs` | Touch: one finger orbits, two pan, pinch zooms; a lifted finger's click picks where it was |
 | `crates/ui-egui/src/viewport.rs` | `touch_gesture` state; tests for the touch gestures and the tap |
 | `xtask/src/layers.rs` | `solidcraft-android` registered as an app (exempt from layering, like the web app) |
