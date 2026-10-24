@@ -59,9 +59,15 @@ echo "$badging"
 grep -q "versionName='$name'" <<<"$badging" || fail "the APK's versionName is not $name"
 ls -l "$out/$apk_name"
 
-# The upstream commit this is built on: the newest one both histories share.
-base=$(git merge-base HEAD upstream/main 2>/dev/null || true)
-base_line="${base:+[\`${base:0:8}\`](https://github.com/tangency-labs/solidcraft/commit/$base)}"
+# The upstream commit this is built on: upstream's own release tag when it is merged (releases
+# are cut on their own line, off main), else the newest commit shared with upstream/main.
+if git merge-base --is-ancestor "v$version" HEAD 2>/dev/null; then
+    base=$(git rev-parse "v$version^{commit}")
+    base_line="[v$version](https://github.com/tangency-labs/solidcraft/releases/tag/v$version) ([\`${base:0:8}\`](https://github.com/tangency-labs/solidcraft/commit/$base))"
+else
+    base=$(git merge-base HEAD upstream/main 2>/dev/null || true)
+    base_line="${base:+[\`${base:0:8}\`](https://github.com/tangency-labs/solidcraft/commit/$base)}"
+fi
 notes="$out/notes-$name.md"
 cat > "$notes" <<EOF
 SolidCraft $version for Android${revision:+$( [ "$revision" -gt 0 ] && echo " (port revision $revision)")}.
