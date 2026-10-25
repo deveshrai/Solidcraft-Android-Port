@@ -84,9 +84,9 @@ Built from upstream [SolidCraft](https://github.com/tangency-labs/solidcraft) ${
 
 **Install:** download \`$apk_name\` on an Android 8.0+ phone or tablet (arm64) and open it, allowing installs from that source; or \`adb install -r $apk_name\`. Signed with a development key: uninstall a build from elsewhere first if Android refuses to update it.
 
-**Works:** the full SolidCraft app (sketches, features, the timeline) on Vulkan or GLES; mouse and keyboard as on the desktop (hover, selection, navigation buttons, wheel, right-click menu, shortcuts); touch (one finger orbits, tap selects, two fingers pan, pinch zooms); open, save, import and export through Android's file picker (STEP and STL tested; the other formats take the same path).
+**Works:** the full SolidCraft app (sketches, features, the timeline, the Render workspace) on Vulkan or GLES; mouse and keyboard as on the desktop (hover, selection, navigation buttons, wheel, right-click menu, shortcuts); touch (one finger orbits, tap selects, two fingers pan, pinch zooms, a finger drags a dialog's arrows); Back closes what is open; open, save, import and export through Android's file picker (STEP, STL, 3MF and OBJ tested); the on-screen keyboard for typing. Port-only: helical B-rep, custom and clearance threads ([docs/android-threads.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/$tag/docs/android-threads.md)); designs with them are a newer file format than upstream's release reads.
 
-**Not yet:** the on-screen keyboard (use a hardware keyboard for text), a phone-sized layout (best on a tablet), autosave recovery. Details: [docs/android.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/$tag/docs/android.md).
+**Not yet:** the on-screen keyboard covers the lower half of the screen (the app doesn't move above it), a phone-sized layout (best on a tablet or a foldable's inner screen), autosave recovery. How to use it: [docs/android-touch.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/$tag/docs/android-touch.md); details: [docs/android.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/$tag/docs/android.md).
 EOF
 echo "notes: $notes"
 
