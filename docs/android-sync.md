@@ -48,7 +48,7 @@ git push origin HEAD
 ```
 
 To follow an upstream **release** rather than `main`, merge its tag: upstream cuts releases on
-their own line (v0.21.0 is not on `main`), so `scripts/android-sync.sh --to v0.21.0` merges
+their own line (v0.22.0 is not on `main`), so `scripts/android-sync.sh --to v0.22.0` merges
 exactly that release and the APK gets its version. Merging `main` later is fine; both are merges.
 
 Options: `--to <tag>` (merge that upstream tag), `--no-build` (no APK), `--check-only` (no fetch or merge: check the tree as it is),
@@ -94,12 +94,23 @@ code"](android.md#changes-to-upstream-code)), so conflicts are rare and usually 
   `git checkout --theirs Cargo.lock && cargo update -p winit --offline || cargo update -p winit`.
 - `Cargo.toml`, `.gitignore`, `AGENTS.md`, `ATTRIBUTION.md`, `vendor/README.md`, `docs/building.md`:
   keep both sides (upstream's change and our added lines).
+- The thread feature's files (`crates/doc/src/eval.rs`, `document.rs`, `crates/engine/src/cmd/features.rs`,
+  `crates/ui-egui/src/dialogs_thread.rs`, `dialogs.rs`, `dialogs_all_tests.rs`): upstream works on
+  threads and holes too. Keep upstream's change and the port's helical parts (`thread_face`,
+  `thread_span`, `helical_thread_on`, the `helical` branch of `FeatureKind::Thread`'s evaluation,
+  the dialog's Type/Geometry rows). Merging v0.22.0, upstream's tapped-hole catalogues turned
+  `thread_on` into `thread_on_impl`; the port's version keeps that and calls `thread_face` and
+  `thread_span`. Then `cargo test -p solidcraft-kernel helical`, `-p solidcraft-engine thread`.
 - `crates/ui-egui/src/navigation.rs` / `viewport.rs`: upstream changed the camera input or the
   viewport state; keep upstream's change and re-apply the touch parts (the `touching`/`touch`
   block, `touch_orbit`, the `lifted`/`over` test for `inside`, the `touch_gesture` field). The
   touch tests say whether they still work.
 
 Then `git add` the files, `git commit`, and `scripts/android-sync.sh --check-only`.
+
+Upstream's releases fold their pending design-format changes into a new `v<N>/` folder. The
+port's `crates/doc/src/format/pending/helical-threads.rs` stays pending (never fold it here):
+it is what makes upstream refuse a port design instead of losing its helical threads.
 
 ### winit
 

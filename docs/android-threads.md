@@ -15,7 +15,7 @@ The classic ISO metric thread, cosmetic or faceted, works exactly as before and 
 default. The new geometry is an option next to it.
 
 Screenshots are from the Pixel Tablet emulator (Android 16, 2560 × 1600) running SolidCraft
-0.21.0 with these changes. Using the app in general: [android-touch.md](android-touch.md).
+0.21.0 with these changes; the same dialog is in the 0.22.0 port. Using the app in general: [android-touch.md](android-touch.md).
 
 - [What changed](#what-changed)
 - [Faceted and helical threads](#faceted-and-helical-threads)

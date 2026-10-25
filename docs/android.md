@@ -30,6 +30,7 @@ Tested on an Android 16 tablet emulator (Pixel Tablet, arm64, Vulkan through Mol
 | Mouse | Hover highlighting, click to select, the navigation preset's buttons (default Fusion: middle drag pans, Shift+middle and right drag orbit), the wheel zooms to the cursor, the right-click menu |
 | Keyboard | Shortcuts with and without modifiers (tested: Ctrl+Z, Ctrl+S, Ctrl+O, E, Esc, S to search), typing into fields |
 | Touch | One finger orbits, a tap selects, two fingers pan, a pinch zooms about the fingers; a finger drags a dialog's arrows (Extrude distance, Fillet radius…) |
+| Threads | Port-only: modelled threads as exact helical B-rep, custom pitch on any diameter, clearance, offsets, left-handed ([android-threads.md](android-threads.md)); the faceted and cosmetic ISO threads are unchanged |
 | Back | Closes the open dialog, menu, tool, sketch or keyboard, as Escape; with nothing open, the app goes to the background as Home does, designs kept |
 | Tested devices | Pixel Tablet emulator (Android 16); Galaxy Z Fold (SM-F971B, Android 17, Adreno 840): inner screen, landscape and portrait |
 | Files | Open, Open Recent, Save, Save As, Insert STEP/Mesh/Design, Save as mesh (STL, 3MF…), Export STEP/OBJ/DXF/URDF/JSON, from and to any documents provider (device, SD card, Drive…) |
@@ -215,6 +216,12 @@ these docs). Upstream files changed, and why:
 | `crates/ui-egui/src/fonts.rs` | Android's system fonts as fallbacks: the CJK search also looks in `/system/fonts`, and Noto Sans CJK and Noto Sans Thai are candidates for the Chinese, Hangul and Thai fallbacks |
 | `crates/ui-egui/src/navigation.rs` | Touch: one finger orbits, two pan, pinch zooms; a lifted finger's click picks where it was |
 | `crates/ui-egui/src/viewport.rs` | `touch_gesture` state; tests for the touch gestures and the tap |
+| `crates/kernel/src/thread_brep.rs` (new), `crates/kernel/src/lib.rs` | Port-only feature: the helical B-rep thread (`helical_thread`, `HelicalThread`) |
+| `crates/doc/src/document.rs`, `eval.rs`, `lib.rs` | The Thread feature's helical fields; `helical_thread_on`; `thread_face`/`thread_span` split out of the thread lookup |
+| `crates/doc/src/format/pending/helical-threads.rs` (new) | The helical fields as a pending design-format change (below) |
+| `crates/engine/src/cmd/features.rs` | `solid.thread`'s helical parameters |
+| `crates/ui-egui/src/dialogs_thread.rs`, `dialogs.rs`, `dialogs_dense.rs` | The Thread dialog's Type, Geometry and Helical B-rep section |
+| `crates/*/src/thread_tests.rs`, `dialogs_all_tests.rs` | Tests for the helical threads; the Thread dialog's first row is now Type |
 | `xtask/src/layers.rs` | `solidcraft-android` registered as an app (exempt from layering, like the web app) |
 | `xtask/src/assets.rs` | The asset check skips Gradle's `build/` output |
 | `AGENTS.md` | The Android crate's two `unsafe` exceptions added to the list |
@@ -222,8 +229,18 @@ these docs). Upstream files changed, and why:
 | `docs/building.md` | How to build the APK |
 | `.gitignore` | Local `continue-*.sh` session scripts |
 
-All of them keep the desktop and browser builds as they were: the Android code paths are behind
-`cfg(target_os = "android")`, and the touch changes act only on touch input.
+The Android changes keep the desktop and browser builds as they were: the Android code paths are
+behind `cfg(target_os = "android")`, and the touch changes act only on touch input. The thread
+changes are a feature in the shared crates, so they are in every build made from this repository;
+the faceted and cosmetic threads behave as upstream's.
+
+**Design files.** The helical thread fields are a pending design-format change, so the port
+writes one format number past upstream's release (36 while upstream's is 35) with
+`"format_pending": ["helical-threads"]`. The port opens every upstream design. Upstream's
+releases refuse a design saved by the port ("saved by a newer SolidCraft") rather than opening
+it and quietly rebuilding its helical threads as faceted ones; designs to share with desktop
+SolidCraft are best exported as STEP. Deleting that one file would make the port's designs open
+upstream again, at the cost of that silent change.
 
 ## Testing
 
