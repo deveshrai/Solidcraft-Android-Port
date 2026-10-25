@@ -5,10 +5,12 @@ desktop SolidCraft; this covers what is different on a phone or tablet. Building
 works: [android.md](android.md).
 
 Screenshots are from a Galaxy Z Fold (inner screen, landscape, unless noted) running
-SolidCraft 0.21.0a.
+SolidCraft 0.21.0a; the Threads and Render screenshots are from 0.22.0a.
 
 - [Touch](#touch)
 - [Modelling by touch](#modelling-by-touch)
+- [Threads](#threads)
+- [Rendering](#rendering)
 - [Mouse and keyboard](#mouse-and-keyboard)
 - [Typing values](#typing-values)
 - [Files](#files)
@@ -64,6 +66,45 @@ A block with a rounded edge, by finger only:
    ![The filleted block](screenshots/android/09-filleted.jpg)
 
 Commands not on the ribbon are a search away: tap **Search commands** (top right) and type.
+
+## Threads
+
+**Create ▾ › Thread**, then tap the cylindrical face (a shaft, or the inside of a hole). The size
+that fits is filled in (M20 on a 20 mm shaft). Off **Modeled** it is a cosmetic thread, drawn
+but not cut; with **Modeled** on, **Geometry** chooses how the groove is made:
+
+- **Faceted**: the original method, a groove of flat triangles; the body's curved faces become
+  facets too.
+- **Helical B-rep** (this port): a few exact, smooth helical faces; the rest of the body stays
+  exact, so fillets, a second thread and STEP export all keep working. It starts and ends half a
+  pitch in from the face's ends. An M20 × 20 mm took under two seconds on the Fold.
+
+![A helical B-rep M20 thread](screenshots/android/19-helical-thread.jpg)
+
+**Type: Custom** threads any shaft or hole as it is, whatever its diameter: type a **Pitch** (and
+optionally a **Thread depth**, **Thread angle** or **Left-handed**). For parts that screw
+together, **Clearance** moves the flanks and root into the material, typically 0.1–0.2 mm for a
+3D print. Tap OK rather than pressing Enter in a field: Enter applies the dialog straight away.
+To change a thread later, double-tap it in the **History** bar.
+
+| Custom thread, clearance being set | The result |
+|---|---|
+| ![Editing a custom thread's clearance](screenshots/android/20-custom-thread-clearance.jpg) | ![A custom thread with clearance](screenshots/android/21-custom-thread-result.jpg) |
+
+Everything about threads (each field, the groove's shape, the readouts, refusals and the
+`solid.thread` script parameters): [android-threads.md](android-threads.md).
+
+A design with a helical thread is saved in a newer file format than upstream SolidCraft's
+release reads; desktop SolidCraft asks to be updated instead of opening it. Export STEP to take
+such a part to other software.
+
+## Rendering
+
+**Workspace ▾ › Render** (top left) opens SolidCraft's Render workspace: studio lighting,
+materials and image export, with a live preview. **Start Render** makes the image and **Export
+completed image** saves it through the file picker. **Return to Design** goes back.
+
+![The Render workspace](screenshots/android/22-render-workspace.jpg)
 
 ## Mouse and keyboard
 
@@ -122,11 +163,10 @@ unfolding keeps the app and the design.
 
 ## Limits
 
-- **Modelled threads** with **Geometry: Faceted** cut a faceted groove (flat triangles to within
-  0.5% of the pitch), as on the desktop; the threaded body's curved faces become facets too. On
-  the Fold an M20 × 20 mm thread took under a second. **Helical B-rep** threads keep the body exact,
-  and **Custom** threads take any diameter and a clearance: see [android-threads.md](android-threads.md).
-  A cosmetic thread (Modeled off) keeps the body exact.
+- **Faceted threads** (Geometry: Faceted) cut a groove of flat triangles (within 0.5% of the
+  pitch), as on the desktop, and the threaded body's curved faces become facets too; on the Fold
+  an M20 × 20 mm took under a second. Choose **Helical B-rep** ([Threads](#threads)) to keep the
+  body exact.
 
   ![A modelled thread close up](screenshots/android/18-modelled-thread.jpg)
 
