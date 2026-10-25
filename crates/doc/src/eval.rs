@@ -393,18 +393,123 @@ pub fn suggested_thread(st: &ModelState, p: Vec3) -> Result<String> {
     thread_on(st, 0, p, None, None, false).map(|t| t.designation)
 }
 
-/// A cosmetic thread on the cylindrical face at `p`. A `turned` (modelled) thread also fits a
-/// shaft thicker than it, which it turns down to its major diameter first.
-fn thread_on(st: &ModelState, feature: u64, p: Vec3, designation: Option<&str>, length: Option<f64>, turned: bool) -> Result<ThreadInfo> {
-    let (body, cyl) = st
-        .bodies
+/// The body and cylindrical face a thread at `p` goes on.
+fn thread_face(st: &ModelState, p: Vec3) -> Result<(String, kernel::CylinderFace)> {
+    st.bodies
         .iter()
         .filter_map(|b| kernel::cylinder_face_at(&b.body, p).map(|c| (b.name.clone(), c)))
         .min_by(|a, b| {
             let dist = |c: &kernel::CylinderFace| ((p - c.axis_point - c.axis * (p - c.axis_point).dot(c.axis)).len() - c.radius).abs();
             dist(&a.1).total_cmp(&dist(&b.1))
         })
-        .ok_or_else(|| DocError::Invalid("no cylindrical face there to thread".into()))?;
+        .ok_or_else(|| DocError::Invalid("no cylindrical face there to thread".into()))
+}
+
+/// The threaded part of `cyl` along its axis, `length` from the end of the face nearest `p`
+/// (the whole face without one), and whether that end is the face's `start`.
+fn thread_span(cyl: &kernel::CylinderFace, p: Vec3, length: Option<f64>) -> Result<(f64, f64, bool)> {
+    let s = (p - cyl.axis_point).dot(cyl.axis);
+    let (mut a, mut b) = (cyl.start, cyl.end);
+    let from_start = (s - a).abs() <= (b - s).abs();
+    if let Some(l) = length {
+        if !(l > 0.0) {
+            return Err(DocError::Invalid("thread length must be positive".into()));
+        }
+        if from_start {
+            b = (a + l).min(b);
+        } else {
+            a = (b - l).max(a);
+        }
+    }
+    Ok((a, b, from_start))
+}
+
+/// The dimensions of a helical thread feature, read from its expressions.
+pub struct HelicalInputs<'a> {
+    pub designation: Option<&'a str>,
+    pub length: Option<f64>,
+    pub pitch: Option<f64>,
+    pub depth: Option<f64>,
+    pub angle: Option<f64>,
+    pub clearance: Option<f64>,
+    pub start_offset: Option<f64>,
+    pub end_offset: Option<f64>,
+    pub left_handed: bool,
+}
+
+/// A helical B-rep thread on the face at `p`: a custom pitch on the face as it is, or an ISO
+/// metric designation (its pitch, and the depth from the face to its root or major diameter).
+/// Returns the body's name, the face, and the groove.
+pub fn helical_thread_on(st: &ModelState, p: Vec3, h: &HelicalInputs) -> Result<(String, kernel::CylinderFace, kernel::HelicalThread)> {
+    let (body, cyl) = thread_face(st, p)?;
+    let (a, b, from_start) = thread_span(&cyl, p, h.length)?;
+    let angle = h.angle.unwrap_or(std::f64::consts::PI / 3.0);
+    let clearance = h.clearance.unwrap_or(0.0);
+    let r = cyl.radius;
+    let (pitch, depth) = match h.pitch {
+        Some(pitch) => (pitch, h.depth.unwrap_or_else(|| kernel::HelicalThread::basic_depth(pitch, angle, clearance))),
+        None => {
+            let dia = 2.0 * r;
+            let (major, pitch) = match h.designation {
+                Some(s) => parse_metric_thread(s).ok_or_else(|| DocError::Invalid(format!("unknown thread `{s}` (ISO metric, like M8 or M8x1)")))?,
+                None => thread_for(dia, cyl.internal).ok_or_else(|| DocError::Invalid(format!("no metric thread fits a {dia:.2} mm cylinder")))?,
+            };
+            let m = format_thread(major, pitch);
+            let fit = |depth: f64| depth.min(kernel::HelicalThread::basic_depth(pitch, angle, clearance));
+            let depth = match h.depth {
+                Some(d) => d,
+                None if cyl.internal => {
+                    // Out to the major diameter, where the bolt's crests sit.
+                    let d = major / 2.0 - r;
+                    if !(d > pitch * 0.1) {
+                        return Err(DocError::Invalid(format!(
+                            "this {} mm hole is too wide for an {m} thread; drill {} mm for {m}, or use a custom thread on the hole as it is",
+                            show_mm(dia),
+                            show_mm(major - pitch)
+                        )));
+                    }
+                    fit(d)
+                }
+                None => {
+                    // The shaft is the major diameter: down to the basic root.
+                    if (dia - major).abs() > 0.02 * major {
+                        return Err(DocError::Invalid(format!(
+                            "a helical {m} thread needs a {} mm shaft (this one is {} mm); the faceted method turns a thicker shaft down, or use a custom thread on the shaft as it is",
+                            show_mm(major),
+                            show_mm(dia)
+                        )));
+                    }
+                    fit(5.0 * pitch * 3f64.sqrt() / 16.0)
+                }
+            };
+            (pitch, depth)
+        }
+    };
+    if !(pitch.is_finite() && pitch > 0.0) {
+        return Err(DocError::Invalid("the pitch must be positive".into()));
+    }
+    // A thread starts after the face's end and finishes before the other: by default half a
+    // pitch in from each.
+    let gap = |o: Option<f64>| -> Result<f64> {
+        let o = o.unwrap_or(pitch / 2.0);
+        if !(o.is_finite() && o > 0.0) {
+            return Err(DocError::Invalid("a helical thread's start and end offsets must be positive: it starts after the face's end".into()));
+        }
+        Ok(o)
+    };
+    let (near, far) = (gap(h.start_offset)?, gap(h.end_offset)?);
+    let (from, to) = if from_start { (a + near, b - far) } else { (a + far, b - near) };
+    if !(to > from) {
+        return Err(DocError::Invalid("the start and end offsets leave nothing of the face to thread".into()));
+    }
+    let t = kernel::HelicalThread { pitch, depth, angle, clearance, from, to, left_handed: h.left_handed };
+    Ok((body, cyl, t))
+}
+
+/// A cosmetic thread on the cylindrical face at `p`. A `turned` (modelled) thread also fits a
+/// shaft thicker than it, which it turns down to its major diameter first.
+fn thread_on(st: &ModelState, feature: u64, p: Vec3, designation: Option<&str>, length: Option<f64>, turned: bool) -> Result<ThreadInfo> {
+    let (body, cyl) = thread_face(st, p)?;
     let dia = cyl.radius * 2.0;
     let (major, pitch) = match designation {
         Some(s) => parse_metric_thread(s).ok_or_else(|| DocError::Invalid(format!("unknown thread `{s}` (ISO metric, like M8 or M8x1)")))?,
@@ -422,19 +527,7 @@ fn thread_on(st: &ModelState, feature: u64, p: Vec3, designation: Option<&str>, 
             if cyl.internal { "hole" } else { "shaft" }
         )));
     }
-    // From the end of the face nearest the point.
-    let s = (p - cyl.axis_point).dot(cyl.axis);
-    let (mut a, mut b) = (cyl.start, cyl.end);
-    if let Some(l) = length {
-        if !(l > 0.0) {
-            return Err(DocError::Invalid("thread length must be positive".into()));
-        }
-        if (s - a).abs() <= (b - s).abs() {
-            b = (a + l).min(b);
-        } else {
-            a = (b - l).max(a);
-        }
-    }
+    let (a, b, _) = thread_span(&cyl, p, length)?;
     Ok(ThreadInfo {
         feature,
         body,
@@ -5999,11 +6092,47 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             }
             Ok(())
         }
-        FeatureKind::Thread { face, designation, length, modeled } => {
+        FeatureKind::Thread {
+            face,
+            designation,
+            length,
+            modeled,
+            helical,
+            pitch,
+            depth,
+            angle,
+            clearance,
+            start_offset,
+            end_offset,
+            left_handed,
+        } => {
             let l = match length {
                 Some(e) => Some(val(vals, e, Kind::Length)?),
                 None => None,
             };
+            if *helical || pitch.is_some() {
+                let opt = |e: &Option<crate::expr::Expr>, k: Kind| -> Result<Option<f64>> { e.as_ref().map(|e| val(vals, e, k)).transpose() };
+                let h = HelicalInputs {
+                    designation: designation.as_deref(),
+                    length: l,
+                    pitch: opt(pitch, Kind::Length)?,
+                    depth: opt(depth, Kind::Length)?,
+                    angle: opt(angle, Kind::Angle)?,
+                    clearance: opt(clearance, Kind::Length)?,
+                    start_offset: opt(start_offset, Kind::Length)?,
+                    end_offset: opt(end_offset, Kind::Length)?,
+                    left_handed: *left_handed,
+                };
+                let (name, cyl, t) = helical_thread_on(st, face.0, &h)?;
+                let i = st.bodies.iter().position(|b| b.name == name).ok_or_else(|| DocError::Invalid("threaded body".into()))?;
+                let Some(mb) = st.bodies.get(i).cloned() else { return Err(DocError::Invalid("body".into())) };
+                let input = mb.traced();
+                let nb = Traced::step(kernel::helical_thread(&input.body, face.0, &cyl, &t)?, &[&input]);
+                if let Some(slot) = st.bodies.get_mut(i) {
+                    *slot = ModelBody::traced_new(mb.name, nb, mb.feature);
+                }
+                return Ok(());
+            }
             let t = thread_on(st, f.id, face.0, designation.as_deref(), l, *modeled)?;
             if !*modeled {
                 st.threads.push(t);

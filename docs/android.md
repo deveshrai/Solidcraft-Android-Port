@@ -6,6 +6,8 @@ touch, and opening, saving, importing and exporting through Android's document p
 
 **Using the app** (touch, mouse and keyboard, files, foldables): [android-touch.md](android-touch.md).
 
+**Threads** (helical B-rep, custom threads, clearance): [android-threads.md](android-threads.md).
+
 This port lives in [deveshrai/Solidcraft-Android-Port](https://github.com/deveshrai/Solidcraft-Android-Port)
 and follows upstream [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft);
 [android-sync.md](android-sync.md) is how it is kept up to date.

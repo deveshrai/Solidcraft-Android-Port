@@ -717,12 +717,12 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
         Kind::OffsetFaces { distance } => {
             enter |= expr_row(ui, "Distance", distance);
         }
-        Kind::Thread { designation, length, suggested, of } => {
+        Kind::Thread { designation, length, suggested, of, helix } => {
             let mut full = length.trim().is_empty();
             let was_full = full;
             let mut modeled = d.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false);
             let before = modeled;
-            let (submitted, reset) = crate::dialogs_thread::rows(ui, designation, suggested, &mut modeled, &mut full);
+            let (submitted, reset) = crate::dialogs_thread::rows(ui, designation, suggested, &mut modeled, &mut full, helix);
             if modeled != before {
                 d.extra.insert("modeled".into(), json!(modeled));
             }
@@ -735,6 +735,13 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
             }
             if !full {
                 enter |= expr_row(ui, "Length", length);
+            }
+            if helix.is_helical(modeled) {
+                let at = d.inputs.first().and_then(|i| i.items.first()).and_then(|sel| match sel {
+                    solidcraft_engine::Sel::Face { point, .. } => Some(*point),
+                    _ => None,
+                });
+                enter |= crate::dialogs_thread::helical_rows(ui, app, helix, at, designation, length);
             }
         }
         Kind::Loft { operation, rail_fit } => {

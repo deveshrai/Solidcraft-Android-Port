@@ -239,6 +239,8 @@ crate::dialog_descriptor::dialog_descriptors! {
                 suggested: Option<String>,
                 /// The picks used for the suggestion, so an unchanged dialog does no geometry work.
                 of: Vec<Sel>,
+                /// Custom and helical B-rep options.
+                helix: crate::dialogs_thread::HelixDraft,
             },
             /// A rib (one wall along open curves) or a web (a wall per curve).
             Rib {
@@ -696,7 +698,7 @@ impl Dialog {
                 vec![SelInput::new("Body to split", BODIES, false), SelInput::new("Splitting tool", PLANES | FACES | AXES, false)],
             ),
             "solid.thread" => Dialog::new(
-                Kind::Thread { designation: String::new(), length: String::new(), suggested: None, of: Vec::new() },
+                Kind::Thread { designation: String::new(), length: String::new(), suggested: None, of: Vec::new(), helix: Default::default() },
                 vec![SelInput::new("Cylindrical face", FACES, false)],
             ),
             "material.assign" => Dialog::new(Kind::Material { index: 1 }, vec![SelInput::new("Bodies", BODIES, true)]),
@@ -936,7 +938,9 @@ impl Dialog {
             Kind::Plastic(k) => return k.previews(),
             Kind::Part(_) | Kind::PartSize(_) => return true,
             // Web previews run synchronously; a modelled thread can take seconds.
-            Kind::Thread { .. } => return !cfg!(target_arch = "wasm32") && self.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false),
+            Kind::Thread { helix, .. } => {
+                return !cfg!(target_arch = "wasm32") && (helix.custom || self.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false));
+            }
             _ => {}
         }
         matches!(
@@ -3580,13 +3584,24 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             need(0, "planar faces")?;
             ("solid.offset_face", json!({"faces": face_points(0)}))
         }
-        Kind::Thread { designation, length, suggested, .. } => {
+        Kind::Thread { designation, length, suggested, helix, .. } => {
             need(0, "a cylindrical face")?;
             let mut p = json!({"face": face_points(0).into_iter().next().unwrap_or(Value::Null)});
-            if !designation.trim().is_empty() && suggested.as_deref() != Some(designation.as_str()) {
+            if !helix.custom && !designation.trim().is_empty() && suggested.as_deref() != Some(designation.as_str()) {
                 p["designation"] = json!(designation.trim());
             }
+            if helix.custom && helix.pitch.trim().is_empty() {
+                return Err("enter the custom thread's pitch".into());
+            }
+            // The readouts' refusal holds OK back at once, before any preview has run.
+            let modeled = d.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false);
+            if helix.is_helical(modeled)
+                && let Some((_, Err(why))) = &helix.summary
+            {
+                return Err(why.clone());
+            }
             put(&mut p, &[("length", length)]);
+            helix.params(d.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false), &mut p);
             ("solid.thread", p)
         }
         Kind::Material { index } => {
@@ -4770,7 +4785,20 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             }
             d
         }
-        FeatureKind::Thread { face, designation, length, modeled } => {
+        FeatureKind::Thread {
+            face,
+            designation,
+            length,
+            modeled,
+            helical,
+            pitch,
+            depth,
+            angle,
+            clearance,
+            start_offset,
+            end_offset,
+            left_handed,
+        } => {
             let mut d = start("solid.thread")?;
             if *modeled {
                 d.extra.insert("modeled".into(), json!(true));
@@ -4780,6 +4808,16 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                 length: length.as_deref().map(str::to_string).unwrap_or_default(),
                 suggested: None,
                 of: Vec::new(),
+                helix: crate::dialogs_thread::HelixDraft::restore(
+                    *helical,
+                    pitch.as_deref(),
+                    depth.as_deref(),
+                    angle.as_deref(),
+                    clearance.as_deref(),
+                    start_offset.as_deref(),
+                    end_offset.as_deref(),
+                    *left_handed,
+                ),
             };
             if let Some(inp) = d.inputs.first_mut() {
                 inp.items = face_sel(s, face.0).into_iter().collect();
