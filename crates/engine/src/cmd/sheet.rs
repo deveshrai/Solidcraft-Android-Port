@@ -405,16 +405,7 @@ fn rules(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut rule =
         s.doc.sheet.rules.iter().find(|r| r.name == name).cloned().unwrap_or_else(|| SheetRule { name: name.clone(), ..s.doc.sheet_rule(None) });
-    for (k, slot) in [
-        ("thickness", &mut rule.thickness),
-        ("k_factor", &mut rule.k_factor),
-        ("bend_radius", &mut rule.bend_radius),
-        ("relief_width", &mut rule.relief_width),
-        ("relief_depth", &mut rule.relief_depth),
-        ("corner_relief", &mut rule.corner_relief),
-        ("hem_gap", &mut rule.hem_gap),
-        ("gap", &mut rule.gap),
-    ] {
+    for (k, slot) in rule.fields_mut() {
         if let Some(e) = expr(p, k) {
             *slot = e.into();
         }

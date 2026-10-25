@@ -124,7 +124,7 @@ fn rotated_component_bend_picks_follow_connected_panels() {
     let mut sizes = Vec::new();
     for rotated in [false, true] {
         let mut s = Session::default();
-        let component = run(&mut s, "component.create", json!({"name": "Bent part"}));
+        let component = run(&mut s, "component.create", json!({"name": "Bent part", "grounded": false}));
         rule(&mut s, "Test", 2.0, 0.5, 1.0, 0.5);
         let corners = bent_section(&mut s, &[(0.0, 0.0), (60.0, 0.0), (60.0, 40.0), (90.0, 40.0)], 2.0, 1.0, 100.0);
         // The remote bend is picked on its tangent edge, where it meets the web.
@@ -145,7 +145,7 @@ fn rotated_component_bend_picks_follow_connected_panels() {
 #[test]
 fn rotated_component_disconnected_bend_reports_world_point() {
     let mut s = Session::default();
-    let component = run(&mut s, "component.create", json!({"name": "Bent part"}));
+    let component = run(&mut s, "component.create", json!({"name": "Bent part", "grounded": false}));
     rule(&mut s, "Test", 2.0, 0.5, 1.0, 0.5);
     section(&mut s, &[(0.0, 0.0), (60.0, 0.0), (60.0, 40.0), (90.0, 40.0)], 2.0, 100.0);
     run(&mut s, "occurrence.move", json!({"occurrence": component["occurrence"], "axis": [1, 0, 0], "angle": "90 deg"}));

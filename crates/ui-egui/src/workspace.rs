@@ -246,7 +246,7 @@ pub const SECTIONS: &[Section] = &[
     },
     // Sketch dimensions are driven by parameters, so they are one click away while sketching.
     Section { tab: "SKETCH", panel: "CONFIGURE", promoted: 2, ids: CONFIGURE },
-    Section { tab: "SKETCH", panel: "FINISH SKETCH", promoted: 1, ids: &["sketch.finish"] },
+    Section { tab: "SKETCH", panel: "FINISH SKETCH", promoted: 2, ids: &["sketch.finish", "sketch.cancel"] },
     // New Sketch leads the tab, as on MODEL: a sheet part starts from a sketch (#3250).
     Section { tab: "SHEET METAL", panel: "SKETCH", promoted: 1, ids: &["sketch.create"] },
     Section {
@@ -259,13 +259,86 @@ pub const SECTIONS: &[Section] = &[
     Section { tab: "SHEET METAL", panel: "OUTPUT", promoted: 2, ids: &["sheet.export_dxf", "sheet.export_bend_table"] },
     Section { tab: "SHEET METAL", panel: "RULES", promoted: 1, ids: &["sheet.manage_rules"] },
     Section { tab: "SHEET METAL", panel: "CONFIGURE", promoted: 2, ids: CONFIGURE },
-    Section { tab: "RENDER", panel: "SCENE", promoted: 2, ids: &["render.scene"] },
-    Section { tab: "RENDER", panel: "IMAGE", promoted: 1, ids: &["render.start"] },
+    // One Render tab with task-ordered groups; only implemented registry commands.
+    // The shared ribbon owns pins, search, section menus and responsive overflow.
+    Section {
+        tab: "RENDER",
+        panel: "SCENE",
+        promoted: 2,
+        ids: &[
+            "render.preset.resolve",
+            "render.settings.get",
+            "render.scene",
+            "render.preset.apply",
+            "render.settings.set",
+            "render.shot.duplicate",
+            "render.shot.rename",
+            "render.shot.remove",
+        ],
+    },
+    Section {
+        tab: "RENDER",
+        panel: "APPEARANCE",
+        promoted: 3,
+        ids: &[
+            "render.library.appearance.apply",
+            "render.library.surface.bind",
+            "render.aging.describe",
+            "render.library.surface.prepare",
+            "render.library.surface.unbind",
+            "render.library.physical.prepare",
+        ],
+    },
+    Section { tab: "RENDER", panel: "LIGHTING", promoted: 2, ids: &["render.library.studio.prepare", "render.library.studio.apply"] },
+    Section {
+        tab: "RENDER",
+        panel: "ENVIRONMENT",
+        promoted: 2,
+        ids: &[
+            "render.library.environment.apply",
+            "render.stage.backdrop",
+            "render.stage.ground",
+            "render.stage.clear",
+            "render.hdr.inspect",
+            "render.settings.capture_hdr",
+        ],
+    },
+    Section { tab: "RENDER", panel: "CAMERA", promoted: 2, ids: &["render.camera.get", "render.camera.fit", "render.settings.apply"] },
+    Section {
+        tab: "RENDER",
+        panel: "IMAGE",
+        promoted: 3,
+        ids: &[
+            "render.start",
+            "render.preflight",
+            "render.effects.describe",
+            "render.cancel",
+            "render.export",
+            "render.result.regrade",
+            "render.quality.prepare",
+            "render.status",
+            "render.backends",
+        ],
+    },
 ];
 
 /// Compact source labels for painted big buttons only. Menus, search and tooltips
 /// retain the engine label. Route these through `tr_label`, like other UI labels.
 pub const RIBBON_LABELS: &[(&str, &str)] = &[
+    ("render.aging.describe", "Aging"),
+    ("render.effects.describe", "Effects"),
+    ("render.camera.fit", "Frame"),
+    ("render.camera.get", "Camera"),
+    ("render.preset.resolve", "Studios"),
+    ("render.settings.get", "Shots"),
+    ("render.library.appearance.apply", "Materials"),
+    ("render.library.surface.bind", "Surface Maps"),
+    ("render.library.studio.prepare", "Light Rigs"),
+    ("render.library.studio.apply", "Edit Lights"),
+    ("render.library.environment.apply", "HDR Library"),
+    ("render.stage.backdrop", "Backgrounds"),
+    ("render.settings.apply", "Saved Camera"),
+    ("render.preflight", "Check"),
     ("appearance.assign", "Appearance"),
     ("component.capture_position", "Capture Pos."),
     ("component.create", "New Comp."),
@@ -301,6 +374,7 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("sheet.export_dxf", "Export DXF"),
     ("sheet.flat_pattern", "Flat Pattern"),
     ("sheet.manage_rules", "Sheet Rules"),
+    ("sketch.cancel", "Cancel"),
     ("sketch.circle.center", "Circle"),
     ("sketch.constraint.coincident", "Coincident"),
     ("sketch.constraint.horizontal_vertical", "Horiz./Vert."),
@@ -465,8 +539,23 @@ pub fn sync_context(app: &mut crate::SolveApp) {
     }
     let context = app.session.active_sketch.map(|id| format!("sketch:{id}")).or_else(|| sheet_body(app).map(|body| format!("sheet:{body}")));
     if app.ui.ribbon_context != context {
+        let was_sketch = app.ui.ribbon_context.as_deref().is_some_and(|c| c.starts_with("sketch:"));
+        let back = if app.session.active_sketch.is_some() {
+            // Remember the tab the sketch was started from (#3250).
+            if !was_sketch && app.ui.tab != "SKETCH" {
+                app.ui.sketch_return_tab = Some(app.ui.tab.clone());
+            }
+            None
+        } else if was_sketch {
+            app.ui.sketch_return_tab.take()
+        } else {
+            None
+        };
         app.ui.tab = if app.session.active_sketch.is_some() {
             "SKETCH"
+        } else if let Some(back) = back.as_deref().filter(|t| *t != "SKETCH" && visible_tabs(app).contains(t)) {
+            // Finishing a sketch goes back to the tab it came from (#3250).
+            visible_tabs(app).into_iter().find(|t| t == &back).unwrap_or("MODEL")
         } else if context.is_some() {
             "SHEET METAL"
         } else {

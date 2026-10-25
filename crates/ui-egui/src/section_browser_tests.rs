@@ -173,3 +173,32 @@ fn the_hatch_option_carries_through_the_section() {
     let d = h.app.dialog.as_ref().map(|d| &d.kind);
     assert!(matches!(d, Some(crate::dialogs::Kind::Section { hatch: false, .. })), "{d:?}");
 }
+
+/// With a section on and no plane picked, the dialog says OK turns the section off: Cancel keeps
+/// it and OK removes it. With no section on, OK still asks for a plane (#2410).
+#[test]
+fn ok_with_no_plane_picked_turns_the_section_off() {
+    let mut h = harness();
+    h.app.run("solid.box", json!({"length":40,"width":30,"height":20})).unwrap();
+    h.app.run("inspect.section", json!({"plane": "XZ", "offset": 10})).unwrap();
+    h.app.session.selection.clear();
+    h.app.start("inspect.section");
+    h.frames(3);
+    assert!(section_dialog(&h).2.is_empty(), "no plane picked");
+    assert!(crate::scenario::handle_at("dialog:hint:section_off").is_some(), "the dialog says OK turns the section off");
+    h.step(&json!({"widget":"Cancel"})).unwrap();
+    h.frames(3);
+    assert!(h.app.dialog.is_none() && h.app.session.section.is_some(), "Cancel keeps the section");
+
+    h.app.start("inspect.section");
+    ok(&mut h);
+    assert_eq!(h.app.session.section, None, "OK with no plane picked turns the section off");
+    assert!(crate::scenario::handle_at("row:Section Analysis").is_none(), "the browser no longer lists it");
+
+    h.app.start("inspect.section");
+    h.frames(3);
+    assert!(crate::scenario::handle_at("dialog:hint:section_off").is_none(), "no section to turn off");
+    h.step(&json!({"widget":"OK"})).unwrap();
+    h.frames(3);
+    assert_eq!(h.app.dialog.as_ref().and_then(|d| d.error.as_deref()), Some("select a plane or planar face first"));
+}

@@ -149,7 +149,7 @@ fn shown_as(hit: &Hit, sel: &Sel) -> Sel {
 /// Sort key: in a sketch its own points and curves come first; then by kind.
 fn rank(s: &Sel, sketching: bool) -> (u8, u8) {
     let kind = match s {
-        Sel::SketchPoint { .. } | Sel::ExternalSketchPoint { .. } => 0,
+        Sel::SketchPoint { .. } | Sel::SketchMidpoint { .. } | Sel::ExternalSketchPoint { .. } => 0,
         Sel::SketchCurve { .. } | Sel::ExternalSketchCurve { .. } => 1,
         Sel::SketchConstraint { .. } => 2,
         Sel::Vertex { .. } => 3,
@@ -160,7 +160,7 @@ fn rank(s: &Sel, sketching: bool) -> (u8, u8) {
         Sel::Plane { .. } => 8,
         Sel::Axis { .. } => 9,
     };
-    let own = matches!(s, Sel::SketchPoint { .. } | Sel::SketchCurve { .. });
+    let own = matches!(s, Sel::SketchPoint { .. } | Sel::SketchMidpoint { .. } | Sel::SketchCurve { .. });
     (if sketching && !own { 1 } else { 0 }, kind)
 }
 
@@ -235,6 +235,9 @@ pub fn label(app: &SolveApp, sel: &Sel) -> String {
     let in_sketch =
         |sketch: u64, f: &dyn Fn(&solidcraft_engine::sketch::Sketch) -> String| st.sketch(sketch).map(|ss| f(&ss.sketch)).unwrap_or_default();
     match sel {
+        Sel::SketchMidpoint { id } => {
+            format!("MID · {}", app.session.active_sketch.map(|s| in_sketch(s, &|sk| curve_label(sk, id))).unwrap_or_else(|| id.clone()))
+        }
         Sel::SketchPoint { id } => app.session.active_sketch.map(|s| in_sketch(s, &|sk| point_label(sk, id))).unwrap_or_else(|| id.clone()),
         Sel::SketchCurve { id } => app.session.active_sketch.map(|s| in_sketch(s, &|sk| curve_label(sk, id))).unwrap_or_else(|| id.clone()),
         Sel::ExternalSketchPoint { sketch, id } => format!("{} · {}", in_sketch(*sketch, &|sk| point_label(sk, id)), sketch_name(app, *sketch)),
@@ -267,7 +270,7 @@ fn icon(app: &SolveApp, sel: &Sel) -> &'static str {
         }
     };
     match sel {
-        Sel::SketchPoint { .. } | Sel::ExternalSketchPoint { .. } | Sel::Vertex { .. } => "point",
+        Sel::SketchPoint { .. } | Sel::SketchMidpoint { .. } | Sel::ExternalSketchPoint { .. } | Sel::Vertex { .. } => "point",
         Sel::SketchCurve { id } => curve(app.session.active_sketch, id),
         Sel::ExternalSketchCurve { sketch, id } => curve(Some(*sketch), id),
         Sel::SketchConstraint { .. } => "dimension",
@@ -539,7 +542,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                         crate::scenario::publish_handle(&format!("select_other:{i}"), r.center());
                         if resp.hovered() {
                             hovered = Some(i);
-                            ui.painter().rect_filled(r.shrink2(vec2(2.0, 1.0)), 4.0, t.hover);
+                            ui.painter().rect_filled(r.shrink2(vec2(2.0, 1.0)), t.radius_sm, t.hover);
                         }
                         crate::icons::paint_icon(
                             ui.painter(),
@@ -547,13 +550,19 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                             row.icon,
                             f32::from(t.icon.a()) / 255.0,
                         );
-                        ui.painter().text(
-                            pos2(r.left() + 32.0, r.center().y),
-                            Align2::LEFT_CENTER,
-                            &row.label,
-                            FontId::proportional(crate::theme::Tokens::get().font_button),
-                            t.text,
-                        );
+                        // Names can be wider than the list. Keep one line inside the row and
+                        // expose the full name on hover, as the browser tree does.
+                        let text_rect = Rect::from_min_max(pos2(r.left() + 32.0, r.top()), pos2(r.right() - 8.0, r.bottom()));
+                        let mut job =
+                            egui::text::LayoutJob::simple(row.label.clone(), FontId::proportional(t.font_button), t.text, text_rect.width());
+                        job.wrap.max_rows = 1;
+                        job.wrap.break_anywhere = true;
+                        job.wrap.overflow_character = Some('\u{2026}');
+                        let galley = ui.painter().layout_job(job);
+                        let elided = galley.elided;
+                        let at = pos2(text_rect.left(), r.center().y - galley.size().y / 2.0);
+                        ui.painter().with_clip_rect(ui.clip_rect().intersect(text_rect)).galley(at, galley, t.text);
+                        let resp = if elided { resp.on_hover_text(&row.label) } else { resp };
                         if resp.clicked() {
                             picked = Some(i);
                         }

@@ -9,7 +9,31 @@ faded.
 A component is placed by its **occurrences**. Paste creates another instance of the same
 component, and **Paste New** creates an independent copy. Move an occurrence with the move
 triad, then **Capture Position** to keep it or **Revert** to put it back. SolidCraft asks before
-the next command if a move wasn't captured. **Ground** fixes an occurrence in place.
+the next command if a move wasn't captured. **Ground** fixes an occurrence in place, and
+**Unground** (the same row of the browser's context menu) frees it again.
+
+The design's first part is grounded when it is made: the first occurrence placed directly in the
+design by **New Component**, **Create Components from Bodies** or an import. Parts made after it,
+standard parts and copies made with Paste or Paste New start free, so do parts made inside other
+components. Any number of parts may be grounded, or none; opening a design never grounds
+anything. A grounded part refuses Move until it is ungrounded, and `component.create` takes
+`grounded: true` or `false` to choose for itself.
+
+**Drag a part to put it somewhere else.** With the design active, press the left button on a part
+and drag: the part follows the pointer, the point you grabbed moving in the plane through it that
+faces the view, and stays where you let go, with its position captured. The whole drag is one
+undo step, and Escape during the drag puts the part back. The drag moves the placement of the
+active component that holds the part, so with the design active a part inside a subassembly
+moves the whole subassembly; activate the subassembly to move the part inside it. Moving a
+definition shared by several placements moves it in all of them, as Move does. A grounded part
+does not move, and a part that joints hold to something grounded moves only as far as its joints
+allow (below). Dragging any member of a chain joined to nothing grounded moves the whole chain,
+preserving its joint values. Shared nested definitions move in every instance; the selected
+instance follows the pointer even when its parent is rotated differently from the first one. A drag that starts on empty space, on a part that can't move, or
+with Shift, Ctrl (Cmd) or Alt held draws a selection box instead. Other uncaptured moves stay
+pending. Scripts and agents do the same with `occurrence.drag {occurrence or path, at, point}`,
+which moves the placement by `point - at` in world coordinates and answers the placements it
+`moved`.
 
 Paste New copies nested component definitions, sketches, feature histories and generated
 dimension parameters. Repeated child instances remain shared within the new copy. Materials,
@@ -185,8 +209,8 @@ picked in the browser, or on the first joint that moves when none is picked.
 grabbed follows the pointer in the plane through it that faces the view, the joints on the
 part's chain take the values that bring it nearest, within their limits, through motion links,
 and with closed loops kept closed, and a four-bar's rocker stops at the end of its swing. The
-whole drag is one undo step. A grounded part, or one no joint places, is not moved; a drag on
-it draws a selection box as before. Each frame runs `joint.reach`, which scripts and agents use
+whole drag is one undo step. A grounded part, or one its joints hold fixed, is not moved; a drag
+on it draws a selection box. Each frame runs `joint.reach`, which scripts and agents use
 directly to put a part's point somewhere: `joint.reach {occurrence, point}` moves the joints on
 its chain from where they are to the nearest pose (the arm keeps its elbow up or down, and a
 linkage stays on its branch). `at` picks the part's point (the centre of its bodies by
@@ -264,6 +288,11 @@ are drawn by the same renderer as `solidcraft-cli snapshot`, on a copy of the de
 changed. A GIF keeps one palette for all its frames, so colours don't flicker, and stores only
 what changed from one frame to the next. Frames are capped: at most 1000, and a GIF holds at most
 2^26 pixels of frames (about 160 frames of 800 × 500).
+An exploded view animates the same way: give its name or id as `view` (instead of a `study` or a
+`joint`) and the parts come apart at a steady pace, from the assembled placement to where the view
+shows them; `back: true` brings them back together, exploded at the middle frame. That takes 41
+frames by default, or 81 with `back`, and the home view frames the parts both assembled and
+exploded. As with `explode.show`, the design keeps its placements.
 
 **Motion analysis.** The **Motion Study** dialog's **Study** box opens a saved study to edit, and
 by its timeline the dialog charts what the study does.

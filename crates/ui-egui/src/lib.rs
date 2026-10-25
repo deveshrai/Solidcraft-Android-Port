@@ -34,6 +34,8 @@ pub mod dialogs;
 pub mod dialogs_appearance;
 pub mod dialogs_assembly;
 pub mod dialogs_coupling;
+pub mod dialogs_frame;
+mod dialogs_hole;
 pub mod dialogs_library;
 pub mod dialogs_motion;
 pub mod dialogs_move;
@@ -62,8 +64,14 @@ pub mod gpu;
 pub mod help;
 #[cfg(test)]
 mod hole_direction_ui_tests;
+pub(crate) mod hole_place;
+#[cfg(test)]
+mod hole_place_ui_tests;
 #[cfg(test)]
 mod hole_placement_ui_tests;
+pub(crate) mod hole_refs;
+#[cfg(test)]
+mod hole_refs_ui_tests;
 pub mod home;
 pub mod i18n;
 #[cfg(test)]
@@ -87,6 +95,7 @@ mod look_at_tests;
 #[cfg(test)]
 mod manage_dialogs_tests;
 mod material_card_review;
+mod material_editor;
 
 #[cfg(test)]
 mod measurement_ui_tests;
@@ -94,6 +103,7 @@ mod measurement_ui_tests;
 mod menu_tests;
 pub(crate) mod mesh_lod;
 pub mod messages;
+pub mod occurrence_drag;
 #[cfg(test)]
 mod pattern_arrow_tests;
 #[cfg(test)]
@@ -137,6 +147,8 @@ mod status_tests {
 mod apply_off_thread_tests;
 mod expression_complete;
 #[cfg(test)]
+mod extrude_auto_to_object_tests;
+#[cfg(test)]
 mod extrude_edit_tests;
 mod extrude_preview;
 mod file_load;
@@ -144,6 +156,7 @@ mod file_picker;
 pub(crate) mod frame_watch;
 #[cfg(test)]
 mod history_off_thread_tests;
+mod move_preview;
 pub use file_picker::FilePickerFuture;
 #[cfg(test)]
 mod blend_arrow_tests;
@@ -223,9 +236,12 @@ pub mod smart_extrude;
 mod smart_extrude_ui_tests;
 pub mod space_mouse;
 pub mod space_mouse_calibration;
+pub mod space_mouse_model;
+pub mod space_mouse_offer;
 pub mod stand_up;
 #[cfg(test)]
 mod sweep_dialog_tests;
+pub(crate) mod test_boat;
 pub mod theme;
 pub mod theme_files;
 #[cfg(test)]
@@ -262,15 +278,17 @@ pub struct UiState {
     pub layout: shell::LayoutMode,
     /// Ribbon tab; SHEET METAL and the contextual SKETCH join the seven design tabs.
     pub tab: String,
+    /// The toolbar tab a sketch was started from; finishing the sketch goes back to it (#3250).
+    /// Not saved: it only lives while a sketch is open.
+    #[serde(skip)]
+    pub sketch_return_tab: Option<String>,
     /// Last contextual body/sketch, only used to select on entry.
     #[serde(skip)]
     pub ribbon_context: Option<String>,
     pub show_browser: bool,
     pub show_timeline: bool,
     pub show_grid: bool,
-    pub show_origin: bool,
     pub perspective: bool,
-    pub show_sketches: bool,
     pub palette_open: bool,
     /// Dark theme (the default); a preference kept between runs.
     pub dark: bool,
@@ -284,12 +302,6 @@ pub struct UiState {
     pub ground_shadow: bool,
     /// The world's up axis (Z or Y; #3): the camera, axis view, home view and ground follow it.
     pub up_axis: solidcraft_engine::render::UpAxis,
-    /// Sketches whose closed profiles are not shaded.
-    pub hidden_profiles: Vec<u64>,
-    /// Finished sketches whose dimensions are shown.
-    pub shown_dims: Vec<u64>,
-    /// Bodies locked in the browser (no move or delete).
-    pub locked_bodies: Vec<String>,
     /// The agent cursor: shown, speed, follow camera (#35).
     pub agent_cursor: agent_cursor::Settings,
 }
@@ -300,12 +312,11 @@ impl Default for UiState {
             layout: Default::default(),
             tab: "MODEL".into(),
             ribbon_context: None,
+            sketch_return_tab: None,
             show_browser: true,
             show_timeline: true,
             show_grid: true,
-            show_origin: true,
             perspective: false,
-            show_sketches: true,
             palette_open: false,
             dark: true,
             pick_off: Vec::new(),
@@ -313,9 +324,6 @@ impl Default for UiState {
             visual_style: 0,
             ground_shadow: true,
             up_axis: Default::default(),
-            hidden_profiles: Vec::new(),
-            shown_dims: Vec::new(),
-            locked_bodies: Vec::new(),
             agent_cursor: Default::default(),
         }
     }
@@ -337,6 +345,8 @@ pub struct Services {
     pub show_in_folder: Option<Box<dyn Fn(&str)>>,
     /// Where the host reads the anti-aliasing preference at start (a small JSON file).
     pub graphics_path: Option<String>,
+    /// Linux: the window system this run uses, `wayland` or `x11` (Preferences shows it, #3083).
+    pub window_system: Option<&'static str>,
     /// HTTPS GET for the update check (`update`); None: never check (browser, tests).
     pub http_get: Option<update::HttpGet>,
     /// HTTPS download to a file, with progress, for one-click updates (`update::install`).
@@ -675,6 +685,12 @@ impl SolveApp {
                 None
             }
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let adapter = rs.adapter.clone();
+            let key = render_workspace::adapter_key(&adapter.get_info());
+            self.render_workspace.defer_path_host(key, move || solidcraft_gpu::path::host_on_adapter(&adapter).map_err(|e| e.to_string()));
+        }
         render_workspace::sync_backend(self);
         self.msaa_supported = rs.msaa_supported.clone();
         let info = rs.adapter.get_info();
@@ -701,6 +717,7 @@ impl SolveApp {
             "ground_shadow": self.ui.ground_shadow,
             "agent_cursor": self.ui.agent_cursor,
             "preferences": self.preferences,
+            "gpu_path_setup_seconds": self.render_workspace.setup_seconds,
         })
         .to_string()
     }
@@ -712,6 +729,9 @@ impl SolveApp {
         self.home.opened_at = v.get("recent_opened_at").and_then(|x| serde_json::from_value(x.clone()).ok()).unwrap_or_default();
         if let Some(d) = flag("dark") {
             self.ui.dark = d;
+        }
+        if let Some(t) = v.get("gpu_path_setup_seconds") {
+            self.render_workspace.setup_seconds = render_workspace::load_setup_seconds(t);
         }
         if let Some(g) = flag("grid") {
             self.ui.show_grid = g;
@@ -792,6 +812,20 @@ impl SolveApp {
                     if v.get("mode").and_then(Value::as_str) == Some("compact") { shell::LayoutMode::Docked } else { shell::LayoutMode::Floating };
                 self.preferences.layout = layout;
                 self.ui.layout = layout;
+            }
+            if matches!(id, "browser.expand_all" | "browser.collapse_all") {
+                let strings = |key: &str| -> Vec<String> {
+                    v.get(key)
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).take(10_000).collect())
+                        .unwrap_or_default()
+                };
+                browser::apply_fold(
+                    self,
+                    v.get("open").and_then(Value::as_bool).unwrap_or(id == "browser.expand_all"),
+                    &strings("open_by_default"),
+                    &strings("closed_by_default"),
+                );
             }
             if id == "view.history_layout" {
                 if let Some(width) = v.get("width").and_then(Value::as_f64) {
@@ -908,6 +942,16 @@ impl SolveApp {
         if self.file_load.busy() || self.file_picker.is_some() {
             return;
         }
+        // Front … Isometric (Ctrl+1…7 by default) turn the view as the view cube's faces do. The
+        // flat pattern is a 2D page: it has no other side to turn to.
+        if solidcraft_engine::standard_view(id).is_some() {
+            if !dialogs_sheet::flat_active(self) {
+                // `view.isometric` → "isometric", which `StandardView::parse` reads as Iso.
+                self.animate_view(id.trim_start_matches("view."));
+                self.home.open = false;
+            }
+            return;
+        }
         if id == "view.normal_to" {
             if self.run(id, json!({"camera": self.cam})).is_ok() {
                 self.follow_view_request(true);
@@ -923,6 +967,9 @@ impl SolveApp {
         {
             let label = self.tr_label(info.label).to_string();
             self.set_status(format!("{label}: {why}"), true);
+            return;
+        }
+        if render_workspace::start_interactive(self, id) {
             return;
         }
         workspace::select_command_tab(self, id);
@@ -1028,10 +1075,33 @@ impl SolveApp {
             self.finish_sketch();
             return;
         }
-        // Press Pull: edges get a fillet, faces and profiles an extrude.
+        if id == "sketch.cancel" {
+            self.cancel_sketch();
+            return;
+        }
+        // Press Pull: edges get a fillet, curved faces an offset, planar faces and profiles an extrude.
         if id == "solid.press_pull" {
-            let edges = self.session.selection.iter().any(|s| matches!(s, solidcraft_engine::Sel::Edge { .. }));
-            return self.start(if edges { "solid.fillet" } else { "solid.extrude" });
+            let sel = &self.session.selection;
+            let edges = sel.iter().any(|s| matches!(s, solidcraft_engine::Sel::Edge { .. }));
+            let curved = sel.iter().any(
+                |s| matches!(s, solidcraft_engine::Sel::Face { body, index, .. } if dialogs::planar_face(&self.session, body, *index).is_none()),
+            );
+            if edges {
+                return self.start("solid.fillet");
+            }
+            if curved {
+                return self.start("solid.offset_face");
+            }
+            let empty = sel.is_empty();
+            self.start("solid.extrude");
+            if empty
+                && let Some(d) = &mut self.dialog
+                && let Some(input) = d.inputs.first_mut()
+            {
+                input.accept |= selection::FACES | selection::EDGES;
+                d.press_pull = true;
+            }
+            return;
         }
         if let Some(spec) = solidcraft_engine::find_command(id)
             && (tools::Tool::for_command(id).is_some() || dialogs::Dialog::for_command(self, id).is_some())
@@ -1175,13 +1245,25 @@ impl SolveApp {
     /// Finish the active sketch: stop editing and restore the history marker Edit Sketch moved.
     /// The camera stays where it is, however the sketch is left.
     pub fn finish_sketch(&mut self) {
+        self.leave_sketch("sketch.finish");
+    }
+
+    /// Cancel Sketch (#3838): leave the sketch without its changes. When the command refuses (the
+    /// undo history no longer leads back to where the sketch was opened), the sketch stays open.
+    pub fn cancel_sketch(&mut self) {
+        self.leave_sketch("sketch.cancel");
+    }
+
+    fn leave_sketch(&mut self, command: &str) {
         sketch_text_move::cancel_drag(self);
         if sketch_text::editing(self) || self.dialog.as_ref().is_some_and(|d| matches!(d.kind, dialogs::Kind::TextMove(_))) {
             dialogs::cancel(self);
         }
         dim_view::cancel();
         self.tool = None;
-        let _ = self.run("sketch.finish", json!({}));
+        if self.run(command, json!({})).is_err() && command != "sketch.finish" {
+            return;
+        }
         if let Some(marker) = self.pre_sketch_marker.take() {
             self.restore_marker(marker);
         }
@@ -1204,11 +1286,22 @@ impl SolveApp {
         v
     }
 
+    /// Is the browser's Origin folder shown? The design keeps it once it is toggled; until then
+    /// the Hide Origin by Default preference decides.
+    pub fn origin_shown(&self) -> bool {
+        !self.session.visibility.origin_hidden.unwrap_or(self.preferences.hide_origin)
+    }
+
+    /// Show or hide the browser's Origin folder (saved with the design).
+    pub fn set_origin_shown(&mut self, on: bool) {
+        self.session.visibility.origin_hidden = Some(!on);
+    }
+
     /// Is the origin widget shown? Origin planes and axes are drawn and pickable. While a dialog
     /// picks a plane ([`SolveApp::picking_plane`]) the Origin is always shown, drawn through the
     /// model (a plane inside a body stays visible), even when the browser hides it.
     pub fn origin_visible(&self) -> bool {
-        self.ui.show_origin || self.picking_plane()
+        self.origin_shown() || self.picking_plane()
     }
 
     /// Is Create Sketch open, waiting for its plane?
@@ -1289,6 +1382,10 @@ impl SolveApp {
     }
 
     pub fn fit_view(&mut self) {
+        if render_workspace::result_active(self) {
+            render_workspace::fit_result(self);
+            return;
+        }
         if dialogs_sheet::flat_active(self) {
             self.flat_view.fitted = false;
             return;
@@ -1395,6 +1492,10 @@ impl SolveApp {
 
     /// Animated view changes for the axis view and navigation bar.
     pub fn animate_view(&mut self, v: &str) {
+        if render_workspace::result_active(self) && matches!(v, "fit" | "home") {
+            render_workspace::fit_result(self);
+            return;
+        }
         // The flat pattern is a 2D view: Fit and Home frame it, and the Design camera stays put.
         if dialogs_sheet::flat_active(self) && matches!(v, "fit" | "home") {
             self.flat_view.fitted = false;
@@ -1520,6 +1621,10 @@ impl SolveApp {
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
         if self.issue_report.draft.is_none() && self.file_picker.is_none() {
+            // Completion owns its keys before either CAD shortcuts or text editors see them.
+            if !keymap::capturing(self) {
+                expression_complete::begin_frame(ctx);
+            }
             toolbar::shortcuts(self, ctx);
         }
         recovery_ui::tick(self);
@@ -1582,7 +1687,6 @@ impl SolveApp {
 
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
-        expression_complete::begin_frame(ui.ctx());
         let t0 = now_ms();
         // The first frames draw with the bundled faces while the system's CJK, Hangul and Thai
         // faces are read on a thread; the fonts are installed again once they are there.

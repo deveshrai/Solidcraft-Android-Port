@@ -166,7 +166,7 @@ pub(crate) fn cmd(app: &SolveApp, id: &str, label: &str) -> Item {
     let shortcut = match id {
         "edit.undo" => "Ctrl+Z".to_string(),
         "edit.redo" => "Ctrl+Y".to_string(),
-        _ => crate::keymap::effective(app, id).unwrap_or_default(),
+        _ => crate::keymap::display_for(app, id).unwrap_or_default(),
     };
     Item {
         id: id.into(),
@@ -225,6 +225,8 @@ pub struct MenuState {
     /// The button that opened the menu, when it toggles it: a press there is not a press outside,
     /// so its click closes the menu instead of closing and reopening it (#1522).
     opener: Option<Rect>,
+    /// The menu was on screen in an earlier frame. Until then a press is the opening click's own.
+    shown: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -245,6 +247,8 @@ pub struct Rename {
     pub text: String,
     pub at: Pos2,
     pub(crate) focused: bool,
+    /// Edited in the browser row itself (a double-click on a body), not in the floating box.
+    pub(crate) inline: bool,
 }
 
 /// Radial slots, clockwise from the top.
@@ -346,6 +350,13 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
         Target::Sketch { id } => sketch_items(app, *id),
         Target::Feature { id } => vec![
             act("ui.editFeature", "Edit Feature", "edit").with(json!({"feature":id})).on(app.session.doc.feature(*id).is_some()),
+            act("ui.rename", "Rename", "rename").with(json!({"feature":id})).on(app.session.doc.feature(*id).is_some()),
+            act("ui.delete", "Delete", "delete").key("Del").with(json!({"items": [{"type": "feature", "id": id}]})).on(app
+                .session
+                .doc
+                .feature(*id)
+                .is_some()),
+            Item::sep(),
             act("ui.findTimeline", "Find in Timeline", "rollback").with(json!({"feature":id})).on(app.session.doc.feature(*id).is_some()),
         ],
         Target::Plane { id } => plane_items(app, *id),
@@ -482,6 +493,7 @@ fn viewport_items(app: &SolveApp) -> Vec<Item> {
         v.push(cmd(app, "sketch.offset", "Offset"));
         v.push(Item::sep());
         v.push(act("ui.finishSketch", "Finish Sketch", "finish"));
+        v.push(act("ui.cancelSketch", "Cancel Sketch", "sketch_cancel"));
         v.push(Item::sep());
         v.push(cmd(app, "edit.undo", "Undo").on(!app.session.undo.is_empty()));
         v.push(cmd(app, "edit.redo", "Redo").on(!app.session.redo.is_empty()));
@@ -543,11 +555,14 @@ fn viewport_items(app: &SolveApp) -> Vec<Item> {
         v.push(cmd(app, "solid.extrude", "Extrude"));
         v.push(cmd(app, "solid.revolve", "Revolve"));
     } else {
-        // Empty space, or a plane, which leads with a sketch on it.
-        if let Some(plane) = &app.menu.plane {
-            v.push(cmd(app, "sketch.create", "Create Sketch").with(json!({ "plane": plane })));
-            v.push(Item::sep());
-        }
+        // Empty space, or a plane: both lead with Create Sketch (#3032). On a plane it sketches
+        // there; on empty space it is the toolbar's, which asks for the plane or face.
+        let sketch = cmd(app, "sketch.create", "Create Sketch");
+        v.push(match &app.menu.plane {
+            Some(plane) => sketch.with(json!({ "plane": plane })),
+            None => sketch,
+        });
+        v.push(Item::sep());
         v.push(act("ui.nav", "Pan", "pan").with(json!({ "mode": "pan" })));
         v.push(act("ui.nav", "Zoom", "zoom").with(json!({ "mode": "zoom" })));
         v.push(act("ui.nav", "Orbit", "orbit").with(json!({ "mode": "orbit" })));
@@ -569,7 +584,7 @@ fn viewport_items(app: &SolveApp) -> Vec<Item> {
         if app.session.section.is_some() {
             v.push(act("ui.unsection", "Remove Section", "section"));
         }
-        v.push(act("ui.origin", if app.ui.show_origin { "Hide Origin" } else { "Show Origin" }, "origin"));
+        v.push(act("ui.origin", if app.origin_shown() { "Hide Origin" } else { "Show Origin" }, "origin"));
         return v;
     }
     if !sel.is_empty() {
@@ -588,7 +603,7 @@ fn body_items(app: &SolveApp, bodies: &[String], browser: bool) -> Vec<Item> {
     let names = json!(bodies);
     let all_hidden = bodies.iter().all(|b| app.session.visibility.hidden_bodies.contains(b));
     let one = bodies.len() == 1;
-    let locked = bodies.iter().all(|b| app.ui.locked_bodies.contains(b));
+    let locked = bodies.iter().all(|b| app.session.visibility.locked_bodies.contains(b));
     let items = json!(bodies.iter().map(|b| json!({"type": "body", "name": b})).collect::<Vec<_>>());
     let mut v = vec![
         act("ui.moveBodies", "Move/Copy", "move").key("M").with(json!({ "bodies": names })).on(!locked),
@@ -625,8 +640,8 @@ fn body_items(app: &SolveApp, bodies: &[String], browser: bool) -> Vec<Item> {
 
 fn sketch_items(app: &SolveApp, id: u64) -> Vec<Item> {
     let visible = crate::browser::sketch_visible(app, id);
-    let profiles = !app.ui.hidden_profiles.contains(&id);
-    let dims = app.ui.shown_dims.contains(&id);
+    let profiles = !app.session.visibility.hidden_profiles.contains(&id);
+    let dims = app.session.visibility.shown_dimensions.contains(&id);
     let editing = app.session.active_sketch == Some(id);
     let has_profiles = app.session.world_state().sketch(id).is_some_and(|s| !s.profiles.is_empty());
     vec![
@@ -751,6 +766,7 @@ fn occurrence_items(app: &SolveApp, path: &[u64]) -> Vec<Item> {
                 item.params = Some(json!({"path": path}));
             }
             "ui.export" | "ui.saveMesh" => item.params = Some(json!({"bodies": bodies})),
+            "browser.expand_all" | "browser.collapse_all" => item.params = Some(json!({"path": path})),
             _ => {}
         }
     }
@@ -841,6 +857,9 @@ fn component_items(app: &SolveApp, id: u64) -> Vec<Item> {
     v.push(act("ui.showAll", "Show All Bodies", "eye"));
     v.push(act("ui.isolate", "Isolate", "body").with(json!({ "bodies": names })).on(!bodies.is_empty() && id != 0));
     v.push(act("ui.newGroup", "New Group", "folder").with(json!({ "component": id })));
+    v.push(Item::sep());
+    v.push(cmd(app, "browser.expand_all", "Expand All").with(json!({ "component": id })));
+    v.push(cmd(app, "browser.collapse_all", "Collapse All").with(json!({ "component": id })));
     v
 }
 
@@ -851,6 +870,15 @@ fn explode_text(app: &SolveApp) -> Option<Item> {
     Some(cmd(app, "sketch.break_link", "Explode Text").with(json!({ "link": link })))
 }
 
+fn alignment_items(selection: &[Sel]) -> Vec<Item> {
+    let Some(points) = crate::selection::alignment_points(selection) else { return Vec::new() };
+    vec![
+        act("ui.horizontalConstraint", "Horizontal Constraint", "c_hv")
+            .with(json!({"points": points, "mode": "horizontal", "if_redundant": "refuse"})),
+        act("ui.verticalConstraint", "Vertical Constraint", "c_hv").with(json!({"points": points, "mode": "vertical", "if_redundant": "refuse"})),
+    ]
+}
+
 /// Sketch entity items: construction, fix, delete, dimension and the constraints the selection
 /// can take.
 fn sketch_entity_items(app: &SolveApp) -> Vec<Item> {
@@ -858,6 +886,9 @@ fn sketch_entity_items(app: &SolveApp) -> Vec<Item> {
     let Some(sid) = app.session.active_sketch else { return Vec::new() };
     let st = app.session.world_state();
     let Some(ss) = st.sketch(sid) else { return Vec::new() };
+    if app.session.selection.iter().any(|sel| matches!(sel, Sel::SketchMidpoint { .. })) {
+        return alignment_items(&app.session.selection);
+    }
     let mut lines = Vec::new();
     let mut rounds = Vec::new();
     let mut curves = Vec::new();
@@ -943,7 +974,7 @@ fn sketch_entity_items(app: &SolveApp) -> Vec<Item> {
     }
     if p == 2 && n == 2 {
         c.push(cmd(app, "sketch.constraint.coincident", "Coincident").with(json!({ "a": points[0], "b": points[1] })));
-        c.push(cmd(app, "sketch.constraint.horizontal_vertical", "Horizontal/Vertical").with(json!({ "points": points })));
+        c.extend(alignment_items(&app.session.selection));
     }
     if p == 1 && curves.len() == 1 && n == 2 {
         c.push(cmd(app, "sketch.constraint.coincident", "Coincident").with(json!({ "a": picked[0], "b": picked[1] })));
@@ -1013,7 +1044,15 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
         }
         "ui.delete" if item.params.is_some() => crate::delete::request(app, p),
         "ui.delete" => delete(app),
+        "ui.horizontalConstraint" | "ui.verticalConstraint" => {
+            let selection = app.session.selection.clone();
+            let keep_midpoints = selection.iter().any(|s| matches!(s, Sel::SketchMidpoint { .. }));
+            if app.run("sketch.constraint.horizontal_vertical", p).is_ok() && keep_midpoints {
+                let _ = app.run("select.set", json!({"items": selection}));
+            }
+        }
         "ui.finishSketch" => app.finish_sketch(),
+        "ui.cancelSketch" => app.cancel_sketch(),
         "ui.relinkSource" => {
             if let Some(component) = id_of(&p, "component") {
                 crate::linked_source::start(app, component);
@@ -1046,18 +1085,20 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
             app.session.visibility.hidden_sketches.clear();
             // Hidden folders and groups too, so everything really shows.
             app.session.visibility.hidden_folders.clear();
-            app.ui.show_sketches = true;
         }
         "ui.isolate" => {
             app.session.visibility.hidden_bodies =
                 app.session.world_state().bodies.iter().map(|b| b.name.clone()).filter(|b| !bodies.contains(b)).collect();
         }
         "ui.lock" => {
-            let locked = bodies.iter().all(|b| app.ui.locked_bodies.contains(b));
+            let locked = bodies.iter().all(|b| app.session.visibility.locked_bodies.contains(b));
             if locked {
-                app.ui.locked_bodies.retain(|b| !bodies.contains(b));
+                app.session.visibility.locked_bodies.retain(|b| !bodies.contains(b));
             } else {
-                app.ui.locked_bodies.extend(bodies.into_iter().filter(|b| !app.ui.locked_bodies.contains(b)).collect::<Vec<_>>());
+                app.session
+                    .visibility
+                    .locked_bodies
+                    .extend(bodies.into_iter().filter(|b| !app.session.visibility.locked_bodies.contains(b)).collect::<Vec<_>>());
             }
         }
         "ui.moveBodies" => {
@@ -1133,7 +1174,7 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
             }
         }
         "ui.tangentChain" => tangent_chain(app),
-        "ui.origin" => app.ui.show_origin = !app.ui.show_origin,
+        "ui.origin" => app.set_origin_shown(!app.origin_shown()),
         "ui.clear" => drop(app.run("select.clear", json!({}))),
         "ui.unsection" => {
             app.tree.hidden_section = None;
@@ -1162,19 +1203,19 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
         }
         "ui.sketchDims" => {
             if let Some(id) = id_of(&p, "sketch") {
-                if app.ui.shown_dims.contains(&id) {
-                    app.ui.shown_dims.retain(|x| *x != id);
+                if app.session.visibility.shown_dimensions.contains(&id) {
+                    app.session.visibility.shown_dimensions.retain(|x| *x != id);
                 } else {
-                    app.ui.shown_dims.push(id);
+                    app.session.visibility.shown_dimensions.push(id);
                 }
             }
         }
         "ui.sketchProfile" => {
             if let Some(id) = id_of(&p, "sketch") {
-                if app.ui.hidden_profiles.contains(&id) {
-                    app.ui.hidden_profiles.retain(|x| *x != id);
+                if app.session.visibility.hidden_profiles.contains(&id) {
+                    app.session.visibility.hidden_profiles.retain(|x| *x != id);
                 } else {
-                    app.ui.hidden_profiles.push(id);
+                    app.session.visibility.hidden_profiles.push(id);
                 }
             }
         }
@@ -1246,7 +1287,7 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
             }
         }
         "ui.originAll" => {
-            app.ui.show_origin = true;
+            app.set_origin_shown(true);
             app.session.visibility.hidden_origin.retain(|h| !["O", "X", "Y", "Z", "XY", "XZ", "YZ"].contains(&h.as_str()));
         }
         "ui.originPart" => {
@@ -1461,7 +1502,7 @@ pub fn start_rename(app: &mut SolveApp, what: RenameWhat, at: Pos2) {
         RenameWhat::View(v) => v.clone(),
         RenameWhat::Joint(j) => doc.assembly.joints.iter().find(|x| x.id == *j).map(|x| x.name.clone()).unwrap_or_default(),
     };
-    app.menu.rename = Some(Rename { what, text, at, focused: false });
+    app.menu.rename = Some(Rename { what, text, at, focused: false, inline: false });
 }
 
 pub(crate) fn commit_rename(app: &mut SolveApp, r: &Rename) {
@@ -1471,13 +1512,8 @@ pub(crate) fn commit_rename(app: &mut SolveApp, r: &Rename) {
     }
     match &r.what {
         RenameWhat::Body(old) => {
-            if app.run("body.rename", json!({ "body": old, "name": name })).is_ok() {
-                for list in [&mut app.session.visibility.hidden_bodies, &mut app.ui.locked_bodies] {
-                    for b in list.iter_mut().filter(|b| *b == old) {
-                        *b = name.clone();
-                    }
-                }
-            }
+            // The command renames the body where it is hidden or locked too.
+            drop(app.run_heavy("body.rename", json!({ "body": old, "name": name })));
         }
         RenameWhat::Feature(f) => drop(app.run("timeline.rename", json!({ "feature": f, "name": name }))),
         RenameWhat::Component(c) => drop(app.run("component.rename", json!({ "component": c, "name": name }))),
@@ -1493,8 +1529,17 @@ pub(crate) fn commit_rename(app: &mut SolveApp, r: &Rename) {
 // Opening and showing
 // ---------------------------------------------------------------------------------------------
 
+/// Right-clicking the MID of an already selected edge keeps that geometry selection.
+fn context_target_selected(selection: &[Sel], target: &Sel) -> bool {
+    selection.iter().any(|selected| {
+        crate::selection::same_item(selected, target)
+            || matches!((selected, target), (Sel::SketchCurve { id: a }, Sel::SketchMidpoint { id: b }) if a == b)
+    })
+}
+
 /// Open the viewport menu at a screen position. A right-click on something not selected
-/// selects it first, so the menu is about what is under the cursor.
+/// selects it first, so the menu is about what is under the cursor; a face or edge already in a
+/// multi-selection keeps the whole selection (#3733).
 pub fn open(app: &mut SolveApp, at: Pos2) {
     app.menu.over_geometry = app.viewport.hover.is_some();
     // A right-click leaves a plane unselected, but the menu offers a sketch on it.
@@ -1503,18 +1548,20 @@ pub fn open(app: &mut SolveApp, at: Pos2) {
         _ => None,
     });
     crate::select_other::close(app);
+    let selected = |app: &SolveApp, sel: &Sel| app.session.selection.iter().any(|x| crate::selection::same_item(x, sel));
     if app.session.active_sketch.is_none()
         && let Some(h) = app.viewport.hover.clone()
         && let Some((_, sel)) = crate::viewport::candidate(app, &[h])
-        && !app.session.selection.contains(&sel)
+        && !selected(app, &sel)
         && !matches!(sel, Sel::Plane { .. } | Sel::Axis { .. })
     {
         let _ = app.run("select.set", json!({ "items": [sel] }));
     } else if app.session.active_sketch.is_some()
         && let Some(h) = app.viewport.hover.clone()
         && let Some((_, sel)) = crate::viewport::candidate(app, &[h])
-        && (matches!(sel, Sel::SketchCurve { .. } | Sel::SketchPoint { .. }) || crate::sketch_text::entity_for_selection(app, &sel).is_some())
-        && !app.session.selection.contains(&sel)
+        && (matches!(sel, Sel::SketchCurve { .. } | Sel::SketchPoint { .. } | Sel::SketchMidpoint { .. })
+            || crate::sketch_text::entity_for_selection(app, &sel).is_some())
+        && !context_target_selected(&app.session.selection, &sel)
     {
         let _ = app.run("select.set", json!({ "items": [sel] }));
     }
@@ -1530,6 +1577,7 @@ pub fn open_for(app: &mut SolveApp, at: Pos2, target: Target) {
     app.menu.target = target;
     app.menu.flick = false;
     app.menu.opener = None;
+    app.menu.shown = false;
     app.viewport.context_menu = Some(at);
 }
 
@@ -1853,10 +1901,11 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         inside |= sub.response.contains_pointer() || pointer.is_some_and(|p| sub.response.rect.contains(p));
     }
 
+    let shown = std::mem::replace(&mut app.menu.shown, true);
     let (primary, secondary, esc) = ctx.input(|i| {
         (
-            i.pointer.button_pressed(egui::PointerButton::Primary),
-            i.pointer.button_pressed(egui::PointerButton::Secondary),
+            shown && i.pointer.button_pressed(egui::PointerButton::Primary),
+            shown && i.pointer.button_pressed(egui::PointerButton::Secondary),
             i.key_pressed(egui::Key::Escape),
         )
     });
@@ -1923,6 +1972,9 @@ fn show_rename(app: &mut SolveApp, ctx: &egui::Context) {
     // Feature-history folders own their editor inside the row. Keep the shared rename state so
     // automation and keyboard handling still use the same path, but do not draw the floating box.
     if app.preferences.timeline_left && matches!(app.menu.rename.as_ref().map(|rename| &rename.what), Some(RenameWhat::TimelineGroup(_))) {
+        return;
+    }
+    if app.menu.rename.as_ref().is_some_and(|r| r.inline) {
         return;
     }
     let Some(mut r) = app.menu.rename.take() else { return };
@@ -2052,7 +2104,7 @@ mod tests {
         assert!(list["radial"].as_array().unwrap().is_empty());
         assert!(list["items"].as_array().unwrap().iter().any(|item| item["id"] == "ui.origin" && item["enabled"] == true));
         h.step(&json!({"click":{"handle":"menu:ui.origin"}})).unwrap();
-        assert!(!h.app.ui.show_origin && h.app.viewport.context_menu.is_none(), "the ordinary menu must execute Hide Origin and close");
+        assert!(!h.app.origin_shown() && h.app.viewport.context_menu.is_none(), "the ordinary menu must execute Hide Origin and close");
         h.call("ui.prefs", json!({"radial_context_menu":true}));
         h.step(&json!({"click":point,"button":"right"})).unwrap();
         assert_eq!(describe(&h.app)["radial"].as_array().unwrap().len(), DIRS);

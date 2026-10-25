@@ -68,7 +68,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SOLID", "CREATE")
         .icon("hole")
         .key("H")
-        .params("position: [x,y,z] on a face (numbers, or length expressions the hole follows) | sketch + points: [sketch point ids] (one hole each, perpendicular to the sketch, into the material on whichever side of the sketch plane it is) | sketch alone (every sketch point: standalone points and circle centres); flip?: bool (sketch points: drill to the other side); single?: bool (with one sketch point: a Single hole that follows the point, drilled into the face there); direction?: [x,y,z] (default: into the face, against its outward normal; one that leaves the face is mirrored into it; ignored with sketch points unless single); diameter | thread (a tapped hole: the tap drill, major − pitch) | clearance: \"M6\" with fit?: close|normal|loose (ISO 273); depth? (default through all) | to?: [x,y,z] (To Object: drill to that face or point); type?: simple|drilled|counterbore|countersink; tip_angle?; cb_diameter?, cb_depth?; cs_diameter?, cs_angle?; thread?: \"M6\" (cosmetic); targets?: [body] (the bodies to drill; holes at the points of a sketch on a body's face default to that body, found along the holes' direction on it alone; explicit targets or participants override, [\"*\"] every body)"),
+        .params("position: [x,y,z] on a face (numbers, or length expressions the hole follows) | sketch + points: [sketch point ids] (one hole each, perpendicular to the sketch, into the material on whichever side of the sketch plane it is) | sketch alone (every sketch point: standalone points and circle centres); flip?: bool (sketch points: drill to the other side); single?: bool (with one sketch point: a Single hole that follows the point, drilled into the face there); direction?: [x,y,z] (default: into the face, against its outward normal; one that leaves the face is mirrored into it; ignored with sketch points unless single); diameter | thread (a tapped hole: metric major minus pitch or tabulated UNC/UNF, G or Rp cut-tap drill) | clearance: \"M6\" with fit?: close|normal|loose (ISO 273); depth? (default through all) | to?: [x,y,z] (To Object: drill to that face or point); references?: [{edge: [x,y,z] on a straight edge of the face, distance: expr}] (at most two; the centre goes that far from each edge's line, in the face's plane, and follows the edges; with a numeric position only); type?: simple|drilled|counterbore|countersink; tip_angle?; cb_diameter?, cb_depth?; cs_diameter?, cs_angle?; thread?: \"M6\" or \"1/4-20 UNC\" (cosmetic); targets?: [body] (the bodies to drill; holes at the points of a sketch on a body's face default to that body, found along the holes' direction on it alone; explicit targets or participants override, [\"*\"] every body)"),
     CommandSpec::new("solid.pipe", "Pipe", pipe)
         .at("SOLID", "CREATE")
         .icon("pipe")
@@ -88,7 +88,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("solid.offset_face", "Offset Face", offset_face)
         .at("SOLID", "MODIFY")
         .icon("offset_face")
-        .params("faces: [[x,y,z] points on planar faces, or face names from model.faces]; distance: expr (positive: outward); body?"),
+        .params("faces: [[x,y,z] points on faces (planar or curved), or face names from model.faces]; distance: expr (positive: outward); body?"),
     CommandSpec::new("solid.thread", "Thread", thread)
         .at("SOLID", "CREATE")
         .icon("thread")
@@ -520,6 +520,11 @@ fn add_feature_in(s: &mut Session, p: &Value, kind: FeatureKind, world: bool) ->
             (Vec::new(), solidcraft_doc::sheet::sheet_edge_names(&s.model.state(), &solidcraft_doc::plain(&points)))
         }
         FeatureKind::SheetHem { edges, .. } => (Vec::new(), solidcraft_doc::sheet::sheet_edge_names(&s.model.state(), &solidcraft_doc::plain(edges))),
+        // A hole's reference edges (#37) are edges of the body it is drilled into.
+        FeatureKind::Hole { position, references, .. } if !references.is_empty() => {
+            let edges: Vec<Vec3> = references.iter().map(|r| r.edge.0).collect();
+            (Vec::new(), solidcraft_doc::hole_reference::reference_edge_names(&s.model.state(), position.0, &edges))
+        }
         // A conversion's bend edges are edges of the body it converts.
         FeatureKind::SheetConvert { body, bends, .. } if !bends.is_empty() => {
             (Vec::new(), solidcraft_doc::sheet::bend_edge_names(&s.model.state(), body, &solidcraft_doc::plain(bends)))
@@ -1901,9 +1906,9 @@ fn hole(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let thread = str_(p, "thread").map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
     if let Some(t) = &thread
-        && solidcraft_doc::parse_metric_thread(t).is_none()
+        && solidcraft_doc::parse_tapped_thread(t).is_none()
     {
-        return Err(bad(cmd, format!("unknown thread `{t}` (ISO metric, like M6 or M6x0.75)")));
+        return Err(bad(cmd, format!("unknown tapped thread `{t}` (ISO metric or a catalogued UNC/UNF, G or Rp size)")));
     }
     // A position given as length expressions (#1678), say `["leg_h*0.4", "width/2", "t"]`: kept,
     // so the hole follows the parameters; drilled where they evaluate now.
@@ -1931,6 +1936,11 @@ fn hole(s: &mut Session, p: &Value) -> Result<Value> {
         }
         None => None,
     };
+    // Reference edges (#37): the centre sits at these distances from straight edges of its face.
+    let references = hole_reference_params(s, p, cmd)?;
+    if !references.is_empty() && (points.is_some() || at.is_some()) {
+        return Err(bad(cmd, "`references` place a hole by its `position` given as numbers, not at sketch points or length expressions"));
+    }
     let position = match (&points, at_value.or_else(|| p.get("position").and_then(vec3))) {
         (Some((_, first, _)), None) => *first,
         (_, Some(x)) => x,
@@ -1948,7 +1958,25 @@ fn hole(s: &mut Session, p: &Value) -> Result<Value> {
             }
         },
     };
-    // The diameter: given, or the tap drill of the thread (major − pitch), or an ISO 273
+    // Placed by its reference edges: drilled where their distances put it, which `position`
+    // then keeps. The edges must be straight edges at the given points, and cross.
+    let position = if references.is_empty() {
+        position
+    } else {
+        let st = s.model.state();
+        let mut distances = Vec::with_capacity(references.len());
+        for r in &references {
+            distances.push(s.doc.eval(&r.distance, Kind::Length).map_err(|e| bad(cmd, format!("`references`: {e}")))?);
+        }
+        let edges: Vec<(Vec3, Option<&str>)> = references.iter().map(|r| (r.edge.0, None)).collect();
+        let frame = solidcraft_doc::hole_reference::reference_frame(&st, position, direction, &edges, true).map_err(|e| bad(cmd, e.to_string()))?;
+        let centre = frame.place(position, &distances).map_err(|e| bad(cmd, e.to_string()))?;
+        if !solidcraft_doc::hole_reference::on_reference_face(&st, &frame, centre) {
+            return Err(bad(cmd, "the reference distances put the hole's centre off its face"));
+        }
+        centre
+    };
+    // The diameter: given, or a metric-estimate/Unified-table tap drill, or an ISO 273
     // clearance hole for a bolt size (close, normal or loose fit).
     let diameter = match (expr(p, "diameter"), &thread, str_(p, "clearance")) {
         (Some(d), _, _) => d,
@@ -1958,8 +1986,8 @@ fn hole(s: &mut Session, p: &Value) -> Result<Value> {
             Expr::new(format!("{d} mm"))
         }
         (None, Some(t), None) => {
-            let (major, pitch) = solidcraft_doc::parse_metric_thread(t).ok_or_else(|| bad(cmd, "thread"))?;
-            Expr::new(format!("{} mm", ((major - pitch) * 1000.0).round() / 1000.0))
+            let size = solidcraft_doc::parse_tapped_thread(t).ok_or_else(|| bad(cmd, "thread"))?;
+            Expr::new(format!("{} mm", size.tap_drill))
         }
         (None, None, None) => return Err(bad(cmd, "needs `diameter`, `thread` (a tapped hole) or `clearance` (a bolt size)")),
     };
@@ -2022,8 +2050,31 @@ fn hole(s: &mut Session, p: &Value) -> Result<Value> {
             points: points.map(|x| x.0),
             thread,
             to: to.map(FacePick),
+            references,
         },
     )
+}
+
+/// A hole's reference edges (#37): `references: [{edge: [x, y, z], distance: expr}]`, at most
+/// two, each distance a length.
+fn hole_reference_params(s: &Session, p: &Value, cmd: &str) -> Result<Vec<solidcraft_doc::HoleReference>> {
+    let Some(v) = p.get("references") else { return Ok(Vec::new()) };
+    let list = v.as_array().ok_or_else(|| bad(cmd, "`references` must be a list of {edge: [x, y, z], distance}"))?;
+    let most = solidcraft_doc::hole_reference::MAX_HOLE_REFERENCES;
+    if list.len() > most {
+        return Err(bad(cmd, format!("a hole takes at most {most} `references`")));
+    }
+    let mut out = Vec::with_capacity(list.len());
+    for (i, r) in list.iter().enumerate() {
+        let edge = r
+            .get("edge")
+            .and_then(vec3)
+            .ok_or_else(|| bad(cmd, format!("`references[{i}].edge` must be a point [x, y, z] on a straight edge of the face")))?;
+        let distance = expr(r, "distance").ok_or_else(|| bad(cmd, format!("`references[{i}].distance` must be a number or an expression")))?;
+        check_expr(s, &distance, Kind::Length, cmd, "references")?;
+        out.push(solidcraft_doc::HoleReference { edge: Position(edge), distance });
+    }
+    Ok(out)
 }
 
 /// The body whose face is nearest `p` (within its pick tolerance), when it belongs to another

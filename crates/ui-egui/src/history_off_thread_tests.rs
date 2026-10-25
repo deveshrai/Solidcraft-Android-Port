@@ -504,3 +504,44 @@ fn without_a_wait_the_delete_checks_in_place() {
     assert!(h.app.delete_check.is_none());
     assert!(h.app.session.doc.feature(boss).is_none());
 }
+
+/// A body renamed in its rename box (#2467): off the window thread, the features after the one
+/// that made it (a pattern, a chamfer) kept as they are, and the body's lock following the new
+/// name.
+#[test]
+fn a_body_renamed_in_the_browser_keeps_the_pattern_after_it() {
+    let mut h = Harness::new();
+    h.app.home.open = false;
+    for (id, p) in [
+        ("sketch.create", json!({"plane": "XY"})),
+        ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [80, 50]})),
+        ("sketch.finish", json!({})),
+        ("solid.extrude", json!({"distance": 10})),
+        ("solid.hole", json!({"position": [15, 12, 10], "diameter": 5, "name": "Hole1"})),
+        (
+            "solid.pattern.rectangular",
+            json!({"features": ["Hole1"], "dir1": [1, 0, 0], "count1": 3, "spacing1": 25, "dir2": [0, 1, 0], "count2": 2, "spacing2": 25}),
+        ),
+        ("solid.chamfer", json!({"edges": [[40, 0, 10]], "distance": 1})),
+    ] {
+        h.app.run(id, p).unwrap();
+    }
+    h.app.session.visibility.locked_bodies.push("Body1".into());
+    h.app.apply_off_thread = Some(Duration::ZERO);
+    crate::context_menu::start_rename(&mut h.app, crate::context_menu::RenameWhat::Body("Body1".into()), egui::pos2(0.0, 0.0));
+    h.frames(2);
+    h.step(&json!({"text": "Plate"})).unwrap();
+    let names = |h: &Harness| h.app.session.model.state().bodies.iter().map(|b| b.name.clone()).collect::<Vec<_>>();
+    let mesh = |h: &Harness| h.app.session.model.state().bodies.first().map(|b| b.mesh());
+    let before = mesh(&h);
+    // What Enter does, without the frames after it that would see the rename in.
+    let rename = h.app.menu.rename.take().unwrap();
+    crate::context_menu::commit_rename(&mut h.app, &rename);
+    assert!(h.app.computing_since().is_some(), "computing");
+    assert_eq!(names(&h), ["Body1"], "the design is as it was while it computes");
+    until_settled(&mut h);
+    assert_eq!(names(&h), ["Plate"]);
+    let kept = before.zip(mesh(&h)).is_some_and(|(a, b)| std::sync::Arc::ptr_eq(&a, &b));
+    assert!(kept, "no feature computed again");
+    assert_eq!(h.app.session.visibility.locked_bodies, ["Plate"]);
+}

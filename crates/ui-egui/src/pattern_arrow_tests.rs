@@ -87,3 +87,32 @@ fn a_solid_pattern_shows_the_second_arrow_once_it_has_a_second_direction() {
     assert_eq!(after, spacing);
     assert_ne!(after2, spacing2);
 }
+
+#[test]
+fn a_pattern_of_features_puts_its_arrow_on_the_patterned_feature() {
+    let mut h = Harness::new();
+    h.run(&json!([
+        {"call": "engine.execute", "params": {"command": "solid.box", "params": {"corner": [0, 0, 0], "length": 60, "width": 20, "height": 5, "name": "Plate"}}},
+        {"call": "engine.execute", "params": {"command": "solid.box", "params": {"corner": [8, 6, 5], "length": 8, "width": 8, "height": 6, "operation": "join", "name": "Boss"}}},
+        {"call": "engine.execute", "params": {"command": "solid.pattern.rectangular", "params": {"features": ["Boss"], "dir1": [1, 0, 0], "count1": 2, "spacing1": 20, "name": "Pattern"}}},
+        {"call": "ui.view", "params": {"view": "iso"}},
+        {"call": "ui.editFeature", "params": {"feature": "Pattern"}}
+    ]))
+    .unwrap();
+    h.settle();
+    let d = h.app.dialog.as_ref().expect("the pattern dialog");
+    assert!(matches!(d.inputs.first().and_then(|i| i.items.first()), Some(solidcraft_engine::Sel::Feature { .. })), "{:?}", d.inputs);
+    // The arrow starts at the middle of the boss and points along X, the pattern's direction.
+    let (base, dir) = crate::canvas::anchor(&h.app, d).expect("the pattern has an anchor");
+    assert!(base.dist(solidcraft_engine::geom::Vec3::new(12.0, 10.0, 8.0)) < 1e-6, "{base:?}");
+    assert!(dir.is_some_and(|v| v.dist(solidcraft_engine::geom::Vec3::new(1.0, 0.0, 0.0)) < 1e-9), "{dir:?}");
+    let Some(tip) = handle_at("arrow") else { panic!("no arrow on a pattern of features") };
+    let from = h.call("ui.worldToScreen", json!({"points": [[12, 10, 8], [32, 10, 8]]}))["result"].clone();
+    let at = |i: usize| egui::pos2(from[i][0].as_f64().unwrap() as f32, from[i][1].as_f64().unwrap() as f32);
+    let (b, x) = (at(0), at(1));
+    // The tip lies off the base, on the screen line of the boss's +X direction.
+    let (ux, uy) = (x.x - b.x, x.y - b.y);
+    let (vx, vy) = (tip.x - b.x, tip.y - b.y);
+    assert!(vx * ux + vy * uy > 0.0, "tip {tip:?} base {b:?}");
+    assert!((vx * uy - vy * ux).abs() / (ux * ux + uy * uy).sqrt() < 3.0, "tip {tip:?} off the X line through {b:?}");
+}

@@ -14,7 +14,7 @@ fn result(h: &Harness) -> &Value {
 fn vertex_measurement(a: [f64; 3], b: [f64; 3]) -> Harness {
     let mut h = Harness::new();
     h.app.home.open = false;
-    h.app.ui.show_origin = false;
+    h.app.set_origin_shown(false);
     h.app.ui.show_browser = false;
     h.app.run("solid.box", json!({"length":3,"width":4,"height":12,"corner":[-3,0,-12],"body_name":"Box"})).unwrap();
     h.app.session.selection = [a, b].into_iter().map(|p| Sel::Vertex { body: "Box".into(), point: p.into() }).collect();
@@ -61,7 +61,7 @@ fn measure_dialog_shows_the_obtuse_corner_of_selected_lines() {
 fn measurement_axis_distances_follow_the_upstream_centre_min_and_max_choices() {
     let mut h = Harness::new();
     h.app.home.open = false;
-    h.app.ui.show_origin = false;
+    h.app.set_origin_shown(false);
     h.app.ui.show_browser = false;
     h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
     let mut items = Vec::new();
@@ -177,4 +177,27 @@ fn measurement_axis_distances_can_be_disabled_saved_and_restored_in_preferences(
     h.call("ui.prefs", json!({"measure_axis_distances":false}));
     h.call("ui.prefs", json!({"button":"cancel"}));
     assert!(h.app.preferences.measure_axis_distances, "Cancel restores the last Apply");
+}
+
+#[test]
+fn the_distance_row_has_a_copy_button_that_copies_the_shown_value() {
+    let mut h = vertex_measurement([0., 0., 0.], [3., 4., 0.]);
+    h.frames(4);
+    let want = crate::prefs::show_mm(&h.app, 5.0, 1);
+    assert!(crate::scenario::handle_at("measure:copy:distance").is_some(), "the Distance row publishes its copy button");
+    let at = crate::scenario::handle_at("measure:copy:distance").unwrap_or_default();
+    let (hover, _) = crate::control::ControlRequest::new("ui.move", json!({"x": f64::from(at.x), "y": f64::from(at.y)}));
+    crate::control::handle(&mut h.app, &h.ctx, &hover);
+    h.frames(2);
+    let (request, _reply) = crate::control::ControlRequest::new("ui.click", json!({"x": f64::from(at.x), "y": f64::from(at.y)}));
+    crate::control::handle(&mut h.app, &h.ctx, &request);
+    let mut copied = Vec::new();
+    for _ in 0..8 {
+        h.frame();
+        copied.extend(h.output.commands.iter().filter_map(|c| match c {
+            egui::OutputCommand::CopyText(text) => Some(text.clone()),
+            _ => None,
+        }));
+    }
+    assert_eq!(copied, [want]);
 }

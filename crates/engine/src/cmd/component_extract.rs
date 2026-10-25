@@ -566,7 +566,7 @@ pub(super) fn extract(s: &mut Session, p: &Value) -> Result<Value> {
 
     // This design: the component's history becomes an Import feature of the new design's bodies
     let shown = file.display().to_string();
-    let (_, sf) = session_bodies(&part, &shown)?;
+    let (_, sf, faces) = session_bodies(&part, &shown)?;
     // The link has a body per piece: a body in pieces keeps its name on the first
     let mut solids: Vec<String> = Vec::new();
     for b in part.world_state().bodies.iter().filter(|b| !b.body.is_mesh()) {
@@ -589,6 +589,7 @@ pub(super) fn extract(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(f) = d.feature_mut(id) {
         f.component = comp;
         f.body_names = if solids.len() == sf.body_names.len() { solids } else { sf.body_names };
+        f.link_faces = faces;
     }
     let path = stored(s.path.as_deref(), &file);
     s.doc_mut().links.insert(comp, DesignLink { path: path.clone(), feature: id });
@@ -758,7 +759,7 @@ mod tests {
         let mut s = Session::default();
         run(&mut s, "parameters.add", json!({"name": "plate_h", "expression": "12 mm"}));
         run(&mut s, "parameters.add", json!({"name": "unused", "expression": "3 mm"}));
-        let plate = run(&mut s, "component.create", json!({"name": "Plate"}));
+        let plate = run(&mut s, "component.create", json!({"name": "Plate", "grounded": false}));
         let (plate, plate_occ) = (plate["component"].as_u64().unwrap(), plate["occurrence"].as_u64().unwrap());
         run(&mut s, "solid.box", json!({"length": 40, "width": 30, "height": "plate_h", "body_name": "PlateBody"}));
         let pin = run(&mut s, "component.create", json!({"name": "Pin", "parent": plate}));

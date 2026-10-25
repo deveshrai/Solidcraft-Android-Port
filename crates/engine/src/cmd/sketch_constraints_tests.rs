@@ -966,3 +966,144 @@ fn coincident_circles_lie_on_each_other() {
     assert!(sk.point(c).unwrap().dist(Vec2::new(0.0, 0.0)) < 1e-6);
     assert!((sk.point(start).unwrap().dist(sk.point(c).unwrap()) - 10.0).abs() < 1e-6);
 }
+
+#[test]
+fn midpoint_edge_dimensions_track_the_midpoint_and_reuse_it() {
+    for reverse in [false, true] {
+        let mut s = new_sketch();
+        run(&mut s, "sketch.line", json!({"points":[[0,10],[20,10]]}));
+        run(&mut s, "sketch.line", json!({"points":[[-10,-10],[-10,40]]}));
+        run(&mut s, "sketch.constraint.fix", json!({"entity":"l2"}));
+        let length = run(&mut s, "sketch.dimension", json!({"entities":["l1"],"value":20}))["param"].as_str().unwrap().to_string();
+        let baseline = s.doc.to_json();
+        let entities = if reverse { json!(["l2", "mid:l1"]) } else { json!(["mid:l1", "l2"]) };
+        let d = run(&mut s, "sketch.dimension", json!({"entities":entities,"value":25}));
+        assert_eq!(d["unit"], "mm");
+        assert!((d["measured"].as_f64().unwrap() - 25.).abs() < 1e-6);
+        let param = d["param"].as_str().unwrap().to_string();
+        let accepted = s.doc.to_json();
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(s.doc.to_json(), baseline, "the helper and dimension undo together");
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(s.doc.to_json(), accepted);
+        run(&mut s, "parameters.change", json!({"name":length,"expression":"40 mm"}));
+        run(&mut s, "parameters.change", json!({"name":param,"expression":"30 mm"}));
+        run(&mut s, "sketch.dimension", json!({"entities":entities,"driven":true}));
+        let sk = sketch(&s);
+        let mids: Vec<_> = sk
+            .constraints
+            .iter()
+            .filter_map(|c| match c.kind {
+                solidcraft_sketch::ConstraintKind::Midpoint { p, l } if l == sk.curve_index("l1").unwrap() => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(mids.len(), 1, "another dimension reuses the constrained midpoint");
+        let mid = sk.point(mids[0]).unwrap();
+        let a = sk.point(sk.resolve_point("l1.start").unwrap()).unwrap();
+        let b = sk.point(sk.resolve_point("l1.end").unwrap()).unwrap();
+        assert!(mid.dist((a + b) * 0.5) < 1e-6);
+        assert!((mid.x - 20.).abs() < 1e-6, "distance from the fixed x=-10 edge is 30 mm");
+        assert!((a.dist(b) - 40.).abs() < 1e-6);
+        let mut reopened = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+        reopened.active_sketch = s.active_sketch;
+        assert_eq!(sketch(&reopened), sk);
+    }
+}
+
+#[test]
+fn invalid_midpoint_dimension_references_leave_the_design_unchanged() {
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points":[[0,10],[20,10]]}));
+    run(&mut s, "sketch.circle.center", json!({"center":[30,30],"radius":5}));
+    let baseline = s.doc.to_json();
+    for entities in [json!(["mid:missing", "l1"]), json!(["mid:c1", "l1"]), json!(["mid:l1", "missing"])] {
+        assert!(s.execute("sketch.dimension", &json!({"entities":entities,"value":10})).is_err());
+        assert_eq!(s.doc.to_json(), baseline);
+    }
+}
+
+#[test]
+fn midpoint_pair_orientation_uses_the_text_box_and_respects_explicit_types() {
+    use solidcraft_sketch::ConstraintKind as K;
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points":[[0,10],[20,10]],"infer":false}));
+    run(&mut s, "sketch.line", json!({"points":[[40,20],[40,40]],"infer":false}));
+    for (ty, at, axis) in [
+        ("auto", [25., 33.], 'x'),
+        ("auto", [43., 20.], 'y'),
+        ("auto", [25., 20.], 'd'),
+        ("distance", [25., 33.], 'd'),
+        ("horizontal", [43., 20.], 'x'),
+        ("vertical", [25., 33.], 'y'),
+    ] {
+        let mut trial = s.scratch();
+        run(&mut trial, "sketch.dimension", json!({"entities":["mid:l1","mid:l2"],"type":ty,"text_at":at,"driven":true}));
+        let sk = sketch(&trial);
+        let c = sk.constraints.iter().rev().find(|c| c.kind.is_dimension()).unwrap();
+        assert!(
+            match axis {
+                'x' => matches!(c.kind, K::DistanceX { .. }),
+                'y' => matches!(c.kind, K::DistanceY { .. }),
+                _ => matches!(c.kind, K::Distance { .. }),
+            },
+            "{ty} at {at:?}: {:?}",
+            c.kind
+        );
+        let expected = match axis {
+            'x' => 30.,
+            'y' => 20.,
+            _ => 1300_f64.sqrt(),
+        };
+        assert!((solidcraft_sketch::measure_dimension(&sk, &c.kind).unwrap() - expected).abs() < 1e-6);
+    }
+}
+
+/// Four circles, `c1` dimensioned to radius 5 (diameter 10).
+fn four_circles() -> Session {
+    let mut s = new_sketch();
+    for (x, r) in [(0, 5), (20, 3), (40, 7), (60, 4)] {
+        run(&mut s, "sketch.circle.center", json!({"center": [x, 0], "radius": r}));
+    }
+    run(&mut s, "sketch.dimension", json!({"entities": ["c1"], "value": 10}));
+    s
+}
+
+fn radius_of(s: &Session, id: &str) -> f64 {
+    let sk = sketch(s);
+    sk.radius(sk.curve_index(id).unwrap()).unwrap()
+}
+
+#[test]
+fn equal_over_a_list_of_curves_makes_them_all_equal_in_one_step() {
+    // #4985: whatever the order, the dimensioned circle keeps its size and the others take it.
+    for order in [["c1", "c2", "c3", "c4"], ["c4", "c3", "c2", "c1"]] {
+        let mut s = four_circles();
+        let r1 = radius_of(&s, "c1");
+        let undo = s.undo.len();
+        let out = run(&mut s, "sketch.constraint.equal", json!({"curves": order}));
+        assert_eq!(out["constraints"].as_array().unwrap().len(), 3, "{order:?}");
+        assert_eq!(s.undo.len(), undo + 1, "one undo step");
+        for id in ["c1", "c2", "c3", "c4"] {
+            assert!((radius_of(&s, id) - r1).abs() < 1e-6, "{order:?} {id}: {}", radius_of(&s, id));
+        }
+        // Applying it again adds nothing: those pairs are already equal.
+        let again = run(&mut s, "sketch.constraint.equal", json!({"curves": order}));
+        assert!(again["constraints"].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn equal_over_a_list_refuses_bad_lists_and_conflicts_without_changing_the_sketch() {
+    let mut s = four_circles();
+    let before = s.doc.to_json();
+    for bad in [json!({"curves": ["c1"]}), json!({"curves": ["c1", "c1"]}), json!({"curves": ["c1", "nope"]}), json!({"curves": vec!["c1"; 201]})] {
+        assert!(s.execute("sketch.constraint.equal", &bad).is_err(), "{bad}");
+        assert_eq!(s.doc.to_json(), before, "{bad}");
+    }
+    // Two circles dimensioned to different sizes can't be made equal: nothing changes.
+    run(&mut s, "sketch.dimension", json!({"entities": ["c2"], "value": 6}));
+    let before = s.doc.to_json();
+    assert!(s.execute("sketch.constraint.equal", &json!({"curves": ["c1", "c2", "c3"]})).is_err());
+    assert_eq!(s.doc.to_json(), before);
+}

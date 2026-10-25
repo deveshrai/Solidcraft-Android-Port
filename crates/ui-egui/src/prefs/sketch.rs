@@ -9,6 +9,10 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         if ui_kit::checkbox(ui, crate::i18n::tr_label("Project face edges into new sketches"), &mut auto).changed() {
             let _ = app.run("sketch.auto_project", json!({"value": auto}));
         }
+        ui_kit::checkbox(ui, crate::i18n::tr_label("Pressing a tool's shortcut again switches its mode"), &mut app.preferences.shortcut_cycles_modes)
+            .on_hover_text(crate::i18n::tr_label(
+                "Before the first point, pressing a sketch tool's shortcut again steps through its creation modes. Off: it starts the tool again.",
+            ));
         ui_kit::settings_block_hint(ui, app.tr("prefs.hold_stop_snapping"), app.tr("prefs.snap_drawing_note"), t.space_24 * 8.0 + t.space_8, |ui| {
             let combo = &mut app.preferences.suppress_sketch_snap;
             ui_kit::settings_control_width(ui, t.space_24 * 7.0 + t.space_12, |ui| {

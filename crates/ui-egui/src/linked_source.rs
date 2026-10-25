@@ -251,7 +251,7 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("solidcraft-extract-ui-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let mut app = SolveApp::new(Session::default(), Default::default());
-        let made = app.run("component.create", json!({"name": "Bracket"})).unwrap();
+        let made = app.run("component.create", json!({"name": "Bracket", "grounded": false})).unwrap();
         let (component, occurrence) = (made["component"].as_u64().unwrap(), made["occurrence"].as_u64().unwrap());
         app.run("solid.box", json!({"length": 10, "width": 20, "height": 30})).unwrap();
         let find = |app: &SolveApp, id: u64| context_menu::items(app, &Target::Component { id }).into_iter().find(|i| i.id == "ui.extractComponent");

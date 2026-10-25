@@ -44,8 +44,11 @@ pub fn stand_up(app: &mut SolveApp) -> Result<(), String> {
     app.stand_up_reason = false;
     let Some(bodies) = app.stand_up.take() else { return Err("no file is waiting to be stood up".into()) };
     match app.stand_up_occurrence.take() {
-        // The import's component turns about its parent's origin, contents and all.
-        Some(occurrence) => app.run("occurrence.move", json!({ "occurrence": occurrence, "axis": [1, 0, 0], "angle": "90 deg" })),
+        // The import's component turns about its parent's origin, contents and all, even when it
+        // came in as the design's grounded first part (#2804): it is still being placed.
+        Some(occurrence) => {
+            app.run("occurrence.move", json!({ "occurrence": occurrence, "axis": [1, 0, 0], "angle": "90 deg", "move_grounded": true }))
+        }
         None => app.run("solid.move", json!({ "bodies": bodies, "axis": [1, 0, 0], "angle": "90 deg" })),
     }
     .map_err(|e| e.to_string())?;

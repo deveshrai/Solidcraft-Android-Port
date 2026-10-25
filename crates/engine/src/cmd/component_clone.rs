@@ -275,7 +275,8 @@ pub(super) fn paste(
     clone_path.push(root_occurrence);
     if let Some(o) = scratch.doc_mut().occurrences.iter_mut().find(|o| o.id == root_occurrence) {
         o.transform = transform;
-        o.grounded = source_occurrence.as_ref().is_some_and(|o| o.grounded);
+        // A copy starts free, even of a grounded part (#2804); the parts inside it keep theirs.
+        o.grounded = false;
     }
     if let Some(o) = &source_occurrence {
         occurrences.insert(o.id, root_occurrence);

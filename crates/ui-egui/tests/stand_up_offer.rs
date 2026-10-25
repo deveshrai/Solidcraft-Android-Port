@@ -126,6 +126,7 @@ fn turn_up_axis_in_the_component_menu_turns_and_undo_restores() {
     h.run(&json!([{"click": {"handle": "stand_up:leave"}}])).unwrap();
     h.frames(3);
     let occurrence = h.app.session.doc.occurrences.iter().map(|o| o.id).max().expect("the import's occurrence");
+    h.app.run("occurrence.ground", json!({"occurrence": occurrence, "grounded": false})).unwrap();
     let items = solidcraft_ui_egui::context_menu::items(&h.app, &solidcraft_ui_egui::context_menu::Target::Occurrence { path: vec![occurrence] });
     let turn = items.iter().find(|i| i.id == "ui.turnUpAxis").expect("Turn Up Axis is in the menu");
     let labels: Vec<_> = turn.children.iter().map(|c| c.label.as_str()).collect();

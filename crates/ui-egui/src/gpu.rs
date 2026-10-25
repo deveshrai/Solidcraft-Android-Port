@@ -161,9 +161,13 @@ pub(crate) fn offscreen_backends() -> wgpu::Backends {
 }
 
 /// A device of its own for an offscreen render or check (`None` without a GPU adapter), on
-/// [`offscreen_backends`].
+/// [`offscreen_backends`]. One test at a time starts its instance, adapter and device: starting an
+/// instance scans the Vulkan drivers, and tests doing that side by side crashed the test process
+/// inside the Vulkan loader (`loader_icd_scan`). Rendering on the devices still runs side by side.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn offscreen_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
+    static STARTING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one_at_a_time = STARTING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
     desc.backends = offscreen_backends();
     let instance = wgpu::Instance::new(desc);

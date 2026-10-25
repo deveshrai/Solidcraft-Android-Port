@@ -69,6 +69,7 @@ impl Control {
             return Err("--connect requires a loopback address and a nonzero port (the app listens on 127.0.0.1)".into());
         }
         let token = solidcraft_engine::control_auth::client_token(addr.port(), token)
+            .map(|t| t.token)
             .ok_or("no control token: pass --token, set SOLIDCRAFT_CONTROL_TOKEN, or run on the app's computer (its token file)")?;
         if token.len() > 4096 {
             return Err("the control token is longer than 4096 bytes".into());

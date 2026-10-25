@@ -1247,6 +1247,29 @@ mod tests {
         assert!(!app.session.is_dirty());
     }
 
+    /// The shipped picture of the sample being opened can arrive after it was asked for: that is
+    /// not its build failing, and the sample still opens (#4349 fixed it; it had made the
+    /// `s15_start_page_sample_save_reopen` scenario fail depending on timing).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_sample_picture_arriving_while_the_sample_builds_is_not_a_failed_build() {
+        let mut app = SolveApp::new(Session::default(), Default::default());
+        let (pictures, rx) = std::sync::mpsc::channel();
+        app.home.rx = Some(rx);
+        let ctx = egui::Context::default();
+        open_sample(&mut app, 0);
+        assert!(app.home.open && app.home.wanted == Some(0));
+        pictures.send(("sample:0".into(), sample_picture(0), None)).unwrap();
+        let began = std::time::Instant::now();
+        while app.home.open && began.elapsed() < std::time::Duration::from_secs(30) {
+            poll(&mut app, &ctx);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(app.status.as_ref().is_none_or(|(_, _, error)| !error), "{:?}", app.status);
+        assert!(!app.home.open, "the sample opens once built");
+        assert_eq!(app.session.doc.name, "Sample Plate");
+    }
+
     #[test]
     fn recent_list_is_newest_first_and_bounded() {
         let mut h = HomeState::default();

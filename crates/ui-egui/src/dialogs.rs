@@ -117,7 +117,7 @@ crate::dialog_descriptor::dialog_descriptors! {
             FeatureKind::Scale { factor, .. }) {
             factor: String = "2".into() => factor.to_string(),
         } => json!({"factor": factor});
-        OffsetFaces("solid.offset_face", "OFFSET FACE", [("Faces", PLANAR_FACES, true)],
+        OffsetFaces("solid.offset_face", "OFFSET FACE", [("Faces", FACES, true)],
             FeatureKind::OffsetFace { distance, .. }) {
             distance: String = "2 mm".into() => distance.to_string(),
         } => json!({"distance": distance});
@@ -275,6 +275,7 @@ crate::dialog_descriptor::dialog_descriptors! {
             /// Physical material (and with it the appearance) of bodies.
             Material {
                 index: usize,
+                editor: crate::material_editor::Editor,
             },
             /// Section Analysis: cut the view by a plane, moved along its normal.
             Section {
@@ -342,6 +343,9 @@ crate::dialog_descriptor::dialog_descriptors! {
                 with: Vec<String>,
                 fail: Vec<String>,
             },
+            /// Pick what the agent chat's next message is about (#2286): elements, features and bodies.
+            /// OK hands the picks to the chat (`agent_chat::pick_done`); nothing is run.
+            ChatContext,
             /// Joints and components (`dialogs_assembly`).
             Assembly(crate::dialogs_assembly::Asm),
             /// Sheet metal (`dialogs_sheet`).
@@ -355,6 +359,8 @@ crate::dialog_descriptor::dialog_descriptors! {
             },
             /// Plastic features (`dialogs_plastic`).
             Plastic(crate::dialogs_plastic::Pl),
+            /// Frame members (`dialogs_frame`).
+            Frame(crate::dialogs_frame::Member),
             /// Appearance (`dialogs_appearance`).
             Appearance(crate::dialogs_appearance::Ap),
             /// Contact sets, motion studies, exploded views, configurations (`dialogs_motion`).
@@ -377,6 +383,13 @@ crate::dialog_descriptor::dialog_descriptors! {
 /// Holes go on any face (flat or curved; the engine drills against the face's normal there).
 const HOLE_FACES: Accept = PLANAR_FACES | FACES | selection::POINTS;
 
+/// The Single hole placement's inputs: the face, then up to two reference edges (#37).
+fn single_hole_inputs() -> Vec<SelInput> {
+    let mut v = vec![SelInput::new("Face", HOLE_FACES, true)];
+    v.extend(crate::hole_refs::inputs());
+    v
+}
+
 /// The rest of the Hole dialog: placement, extents, tap type and drill point.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HoleOpts {
@@ -392,11 +405,22 @@ pub struct HoleOpts {
     pub thread: String,
     /// Custom nominal diameter and pitch being edited, separate from the saved designation.
     pub custom_thread: Option<crate::dialogs_thread::HoleThreadDraft>,
+    /// The Single hole's reference edge distances (`hole_refs`, #37).
+    pub refs: Box<crate::hole_refs::Refs>,
 }
 
 impl Default for HoleOpts {
     fn default() -> Self {
-        HoleOpts { multiple: false, all: false, angled: true, tip_angle: "118 deg".into(), tapped: false, thread: "M5".into(), custom_thread: None }
+        HoleOpts {
+            multiple: false,
+            all: false,
+            angled: true,
+            tip_angle: "118 deg".into(),
+            tapped: false,
+            thread: "M5".into(),
+            custom_thread: None,
+            refs: Default::default(),
+        }
     }
 }
 
@@ -432,6 +456,9 @@ pub struct Dialog {
     pub(crate) chain_applied: bool,
     /// Shell feedback is derived from the picks, never saved as additional face references.
     shell_chain: std::cell::RefCell<Option<ShellChain>>,
+    /// An extrude Press Pull opened with nothing selected: its first pick may be a curved face or
+    /// an edge, which reopens Press Pull on it (an offset or a fillet).
+    pub press_pull: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -572,13 +599,14 @@ fn fits(a: Accept, s: &Sel) -> bool {
         Sel::Body { .. } => a & BODIES != 0,
         Sel::Plane { .. } => a & PLANES != 0,
         Sel::Axis { .. } => a & AXES != 0,
-        Sel::SketchCurve { .. } => a & (AXES | CURVES) != 0,
+        Sel::SketchCurve { .. } => a & (AXES | CURVES | selection::SKETCH_LINES) != 0,
+        Sel::ExternalSketchCurve { .. } => a & selection::SKETCH_LINES != 0,
         Sel::Vertex { .. } => a & selection::VERTICES != 0,
         Sel::Feature { .. } => a & selection::FEATURES != 0,
         // Sketch points go into a sketch command's own inputs (Entities, a base point), so a
         // box selection and a pre-selection reach them the way a click already does.
         Sel::SketchPoint { .. } => a & (selection::POINTS | selection::SKETCH_POINTS) != 0,
-        Sel::SketchConstraint { .. } | Sel::Occurrence { .. } | Sel::ExternalSketchCurve { .. } | Sel::ExternalSketchPoint { .. } => false,
+        Sel::SketchMidpoint { .. } | Sel::SketchConstraint { .. } | Sel::Occurrence { .. } | Sel::ExternalSketchPoint { .. } => false,
     }
 }
 
@@ -609,7 +637,23 @@ impl Dialog {
             picked_edges: Vec::new(),
             chain_applied,
             shell_chain: Default::default(),
+            press_pull: false,
         }
+    }
+
+    /// The picker for the agent chat's context, holding what is already picked.
+    pub fn chat_context(picked: &[Sel]) -> Dialog {
+        let mut inputs = vec![
+            SelInput::new("Elements", FACES | EDGES | selection::VERTICES, true),
+            SelInput::new("Features", selection::FEATURES, true),
+            SelInput::new("Bodies", BODIES, true),
+        ];
+        for sel in picked {
+            if let Some(input) = inputs.iter_mut().find(|i| fits(i.accept, sel)) {
+                input.items.push(sel.clone());
+            }
+        }
+        Dialog::new(Kind::ChatContext, inputs)
     }
 
     pub fn for_command(app: &SolveApp, id: &str) -> Option<Dialog> {
@@ -623,7 +667,7 @@ impl Dialog {
                     direction: 0,
                     operation: usize::from(has_bodies),
                     auto_op: true,
-                    smart: Default::default(),
+                    smart: crate::smart_extrude::Smart { auto_to_object: app.preferences.extrude_auto_to_object, ..Default::default() },
                     distance2: "10 mm".into(),
                     taper: "0 deg".into(),
                     taper_present: false,
@@ -701,7 +745,7 @@ impl Dialog {
                 Kind::Thread { designation: String::new(), length: String::new(), suggested: None, of: Vec::new(), helix: Default::default() },
                 vec![SelInput::new("Cylindrical face", FACES, false)],
             ),
-            "material.assign" => Dialog::new(Kind::Material { index: 1 }, vec![SelInput::new("Bodies", BODIES, true)]),
+            "material.assign" => Dialog::new(Kind::Material { index: 1, editor: Default::default() }, vec![SelInput::new("Bodies", BODIES, true)]),
             "inspect.section" => Dialog::new(
                 Kind::Section { offset: "0 mm".into(), flip: false, hatch: true },
                 vec![SelInput::new("Plane", PLANES | PLANAR_FACES, false)],
@@ -737,7 +781,7 @@ impl Dialog {
                 ]
             }),
             "solid.move" => Dialog::new(crate::dialogs_move::kind(0), crate::dialogs_move::inputs(0)),
-            "solid.hole" => Dialog::new(hole_defaults(), vec![SelInput::new("Face", HOLE_FACES, true)]),
+            "solid.hole" => Dialog::new(hole_defaults(), single_hole_inputs()),
             "solid.box" => Dialog::new(
                 Kind::Primitive {
                     cmd: "solid.box",
@@ -795,6 +839,7 @@ impl Dialog {
                     .or_else(|| crate::dialogs_save_mesh::start(app, id))
                     .or_else(|| crate::dialogs_view_dxf::start(app, id))
                     .or_else(|| crate::dialogs_plastic::start(app, id))
+                    .or_else(|| crate::dialogs_frame::start(app, id))
                     .or_else(|| crate::dialogs_appearance::start(app, id))
                     .or_else(|| crate::dialogs_motion::start(app, id))
                     .or_else(|| crate::dialogs_parts::start(app, id))
@@ -936,6 +981,7 @@ impl Dialog {
             Kind::Surface(_) => return true,
             Kind::SketchModify(k) => return k.previews(),
             Kind::Plastic(k) => return k.previews(),
+            Kind::Frame(_) => return true,
             Kind::Part(_) | Kind::PartSize(_) => return true,
             // Web previews run synchronously; a modelled thread can take seconds.
             Kind::Thread { helix, .. } => {
@@ -1134,6 +1180,9 @@ impl Dialog {
         if matches!(self.kind, Kind::SketchModify(_)) {
             return crate::sketch_modify_ui::candidate(self, s, h);
         }
+        if let Some(target) = self.extrude_target(s, h) {
+            return Some(target);
+        }
         let inp = self.active_input()?;
         // Features are also picked on the canvas: a face stands for the feature that made it.
         if inp.accept == selection::FEATURES {
@@ -1152,8 +1201,67 @@ impl Dialog {
         inp.accepts(h, |body, face| snap.and_then(|f| f.planar(body, face)).unwrap_or_else(|| planar_face(s, body, face).is_some()))
     }
 
+    /// Extrude's automatic To Object: with profiles picked, a face or vertex off their plane, or
+    /// a plane parallel to it, is the object to extrude to rather than another profile. While the
+    /// To Object input is active, a parallel plane is taken too (as a place on it).
+    fn extrude_target(&self, s: &Session, h: &Hit) -> Option<Sel> {
+        if !matches!(self.kind, Kind::Extrude { thin: false, smart: crate::smart_extrude::Smart { auto_to_object: true, .. }, .. }) {
+            return None;
+        }
+        let to_active = self.active_input().is_some_and(|i| i.label == TO_OBJECT);
+        if self.active != 0 && !to_active {
+            return None;
+        }
+        let reference = profile_plane(s, self.inputs.first()?.items.first()?)?;
+        let sel = match h {
+            // A place on the plane: its origin (a browser pick carries no point).
+            Hit::Plane { name, .. } => {
+                let plane = plane_by_name(s, name)?;
+                if plane.normal().dot(reference.normal()).abs() < 1.0 - 1e-9 {
+                    return None;
+                }
+                Sel::Vertex { body: String::new(), point: plane.origin }
+            }
+            _ if to_active => return None,
+            Hit::Face { body, index, point } => Sel::Face { body: body.clone(), index: *index, point: *point },
+            Hit::Vertex { body, point } => Sel::Vertex { body: body.clone(), point: *point },
+            _ => return None,
+        };
+        object_target(s, &reference, &sel).then_some(sel)
+    }
+
+    /// Take a pick as the extrude's To Object (see [`Dialog::extrude_target`]): the extent turns to
+    /// To Object with it. False when the pick is not one.
+    fn take_extrude_target(&mut self, s: &Session, sel: &Sel) -> bool {
+        if self.active != 0
+            || !matches!(self.kind, Kind::Extrude { thin: false, smart: crate::smart_extrude::Smart { auto_to_object: true, .. }, .. })
+        {
+            return false;
+        }
+        let Some(reference) = self.inputs.first().and_then(|i| i.items.first()).and_then(|first| profile_plane(s, first)) else { return false };
+        if !object_target(s, &reference, sel) {
+            return false;
+        }
+        set_to_object(&mut self.inputs, &mut self.active, true);
+        let Some(at) = self.inputs.iter().position(|i| i.label == TO_OBJECT) else { return false };
+        if let Some(input) = self.inputs.get_mut(at) {
+            input.items = vec![sel.clone()];
+        }
+        self.active = at;
+        if let Kind::Extrude { all, .. } = &mut self.kind {
+            *all = false;
+        }
+        self.focus = true;
+        self.error = None;
+        self.sync_thread(s);
+        true
+    }
+
     /// A pick in the viewport (already accepted by the active input).
     pub fn pick(&mut self, s: &Session, sel: Sel) {
+        if self.take_extrude_target(s, &sel) {
+            return;
+        }
         if let Some(key) = feature_pattern_reference_key(self, self.active) {
             self.extra.remove(key);
         }
@@ -1165,10 +1273,12 @@ impl Dialog {
             self.profile_selection_changed = true;
         }
         let measure = matches!(self.kind, Kind::Measure { .. });
+        // The chat's picks stay what was clicked: a rim is one edge there, not its pieces.
+        let one = measure || matches!(self.kind, Kind::ChatContext);
         let sel = if measure { crate::viewport::measurement_selection(s, &sel) } else { sel };
         let chain = matches!(self.kind, Kind::Fillet { chain: true, .. });
         let single =
-            if !measure && self.active_input().is_some_and(|i| i.multi) { crate::viewport::picked_selection(s, &sel) } else { vec![sel.clone()] };
+            if !one && self.active_input().is_some_and(|i| i.multi) { crate::viewport::picked_selection(s, &sel) } else { vec![sel.clone()] };
         // Tangent chain: an edge brings the edges that continue it smoothly.
         let picked = if chain { fillet_edges(s, &sel, true) } else { single.clone() };
         // Extrude and revolve take profiles of one sketch.
@@ -1685,6 +1795,7 @@ fn title(k: &Kind) -> &'static str {
         Kind::Align { .. } => "ALIGN",
         Kind::BoundaryFill { .. } => "BOUNDARY FILL",
         Kind::Remove => "REMOVE",
+        Kind::ChatContext => "PICK CONTEXT",
         Kind::PathPattern { .. } => "PATTERN ON PATH",
         Kind::Split => "SPLIT BODY",
         Kind::Thread { .. } => "THREAD",
@@ -1712,6 +1823,7 @@ fn title(k: &Kind) -> &'static str {
         Kind::SaveMesh(_) => "SAVE AS MESH",
         Kind::ViewDxf { .. } => "Export Current View as DXF",
         Kind::Plastic(k) => k.title(),
+        Kind::Frame(_) => "FRAME MEMBER",
         Kind::Appearance(_) => "APPEARANCE",
         Kind::Motion(k) => k.title(),
         Kind::Part(_) => "INSERT PART",
@@ -1733,6 +1845,8 @@ fn hint(inp: &SelInput) -> &'static str {
         "click a plane or planar face"
     } else if a & AXES != 0 {
         "click an axis or sketch line"
+    } else if a & selection::SKETCH_LINES != 0 {
+        "click sketch lines"
     } else if a & CURVES != 0 {
         "click sketch curves"
     } else if a & (selection::POINTS | selection::SKETCH_POINTS) != 0 {
@@ -1889,7 +2003,7 @@ fn placement_row(d: &mut Dialog, ui: &mut egui::Ui) {
     choice_row(ui, "Placement", "hole_place", &mut m, &["Single", "Multiple"]);
     if (m == 1) != opts.multiple {
         opts.multiple = m == 1;
-        d.inputs = vec![if opts.multiple { SelInput::new("Points", selection::POINTS, true) } else { SelInput::new("Face", HOLE_FACES, true) }];
+        d.inputs = if opts.multiple { vec![SelInput::new("Points", selection::POINTS, true)] } else { single_hole_inputs() };
         d.active = 0;
         d.extra.remove("direction");
     }
@@ -1938,7 +2052,7 @@ fn stored_revolve_axis(kind: &Kind) -> Option<&Value> {
     }
 }
 
-fn input_rows_range(d: &mut Dialog, ui: &mut egui::Ui, s: &Session, range: std::ops::Range<usize>) {
+pub(crate) fn input_rows_range(d: &mut Dialog, ui: &mut egui::Ui, s: &Session, range: std::ops::Range<usize>) {
     // Edit Text shows its Path input among its own rows.
     if matches!(d.kind, Kind::Text(_)) {
         return;
@@ -2215,6 +2329,38 @@ pub(crate) fn shown_distance(r: &Value, show: Option<Shown>) -> Option<(Shown, f
     show.and_then(get).or_else(|| get(default)).or_else(|| get(Shown::Min))
 }
 
+/// A new To Object target of a new extrude sets the distance to how far it is, so the length
+/// shows and stays when the extent goes back to Distance.
+fn sync_reach(app: &SolveApp, d: &mut Dialog) {
+    let Kind::Extrude { smart, start, to_offset, .. } = &d.kind else { return };
+    if !smart.auto_to_object {
+        return;
+    }
+    let target = d.inputs.iter().find(|i| i.label == TO_OBJECT).and_then(|i| i.items.first()).cloned();
+    if smart.target == target {
+        return;
+    }
+    // A start offset, a To offset or a From Object move the ends: the distance stays as it is.
+    let plain = d.editing.is_none() && start.trim().is_empty() && to_offset.trim().is_empty() && !object_on(&d.inputs, FROM_OBJECT);
+    // Picks and the profiles' plane are both in world space.
+    let reach = match &target {
+        Some(Sel::Face { point, .. } | Sel::Vertex { point, .. }) if plain => {
+            d.inputs.first().and_then(|i| i.items.first()).and_then(|first| profile_plane(&app.session, first)).map(|plane| plane.height(*point))
+        }
+        _ => None,
+    };
+    let Kind::Extrude { smart, distance, direction, .. } = &mut d.kind else { return };
+    smart.target = target;
+    if let Some(reach) = reach.filter(|r| r.is_finite() && r.abs() > 1e-9) {
+        let text = format!("{:.6}", reach.abs());
+        *distance = format!("{} mm", text.trim_end_matches('0').trim_end_matches('.'));
+        // The side the target is on, for when the extent goes back to Distance.
+        if *direction < 2 {
+            *direction = usize::from(reach < 0.0);
+        }
+    }
+}
+
 /// Smart Extrude (#1257, see [`crate::smart_extrude`]): a new pick sets the direction from the
 /// side it was picked from, and the automatic operation follows the geometry, latched per side.
 fn auto_operation(app: &SolveApp, d: &mut Dialog) {
@@ -2293,6 +2439,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     {
         return;
     }
+    sync_reach(app, &mut d);
     auto_operation(app, &mut d);
     d.sync_thread(&app.session);
     update_measure(app, &mut d);
@@ -2349,6 +2496,9 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let has_ok = !matches!(d.kind, Kind::Sketch | Kind::Measure { .. });
     let valid = match &d.kind {
         Kind::Sketch => false,
+        // Nothing picked is an answer too: OK empties the chat's tray.
+        Kind::ChatContext => true,
+        Kind::Material { editor, .. } if editor.editing() => false,
         Kind::SaveMesh(_) => crate::dialogs_save_mesh::ready(&d.inputs),
         Kind::SketchModify(crate::sketch_modify_ui::Mod::Corner { .. }) => {
             // Corner dialogs: preview errors are visual only; validation errors from
@@ -2367,7 +2517,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     };
     let panel = crate::ui_kit::Panel::new(&heading, egui::Id::new(("sc_dialog", title(&d.kind))), anchor, drag_bounds, side, frame)
         .actions(ok_label, close_label);
-    let panel = if matches!(d.kind, Kind::Appearance(_)) {
+    let panel = if matches!(d.kind, Kind::Appearance(_) | Kind::Material { .. }) {
         panel.width(t.form_card_width + t.form_label_width + t.space_6)
     } else if wide {
         let panel = panel.wide();
@@ -2428,7 +2578,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                     | Kind::Plastic(crate::dialogs_plastic::Pl::Rules { .. })
             );
             // A study/configuration owns Enter for its cells, including when folded.
-            let cell_enter = matches!(&d.kind, Kind::Motion(k) if k.wide());
+            let cell_enter = matches!(&d.kind, Kind::Motion(k) if k.wide()) || matches!(&d.kind, Kind::Material { editor, .. } if editor.editing());
             if cell_enter && collapsed {
                 ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
             }
@@ -2483,8 +2633,9 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let nothing_focused = ctx.memory(|m| m.focused().is_none());
     let canvas_enter = enter_free && ctx.memory(|m| m.had_focus_last_frame(egui::Id::new("sc_canvas_value")));
     // Tables (configurations, a study's keys) take Enter for their cells.
-    let enter_applies =
-        !matches!(d.kind, Kind::Sketch | Kind::Measure { .. } | Kind::ConfirmDelete { .. }) && !matches!(&d.kind, Kind::Motion(k) if k.wide());
+    let enter_applies = !matches!(d.kind, Kind::Sketch | Kind::Measure { .. } | Kind::ConfirmDelete { .. })
+        && !matches!(&d.kind, Kind::Motion(k) if k.wide())
+        && !matches!(&d.kind, Kind::Material { editor, .. } if editor.editing());
     let report_active = app.issue_report.draft.is_some();
     if !report_active && enter_applies && app.applying.is_none() && (enter || canvas_enter || (enter_free && nothing_focused)) {
         ok = true;
@@ -2528,6 +2679,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         // Edit Text applies its own way: its live changes and OK are one undo step.
         let run = match &mut d.kind {
             Kind::Text(k) => Some(crate::sketch_text::apply(app, k)),
+            Kind::ChatContext => Some(crate::agent_chat::pick_done(app, &d)),
             _ => match begin_applying(app, &d) {
                 // Computing: the dialog stays, saying so, until it is in.
                 Begun::Later(job) => {
@@ -2664,6 +2816,33 @@ fn set_object(inputs: &mut Vec<SelInput>, active: &mut usize, label: &'static st
     } else if !on && object_on(inputs, label) {
         inputs.retain(|i| i.label != label);
         *active = (*active).min(inputs.len().saturating_sub(1));
+    }
+}
+
+/// The plane an extrude's picked profiles lie in: the first pick's sketch plane, or its planar face.
+fn profile_plane(s: &Session, first: &Sel) -> Option<solidcraft_engine::geom::Plane> {
+    let st = s.world_state();
+    match first {
+        Sel::Profile { sketch, .. } => st.sketch(*sketch).map(|ss| ss.plane),
+        Sel::Face { body, index, .. } => st.body(body)?.body.planar_face(*index),
+        _ => None,
+    }
+}
+
+/// Is a pick an object to extrude to from profiles in `reference` (not one more profile)? A face
+/// is unless it is planar and in that plane; a vertex or a place is unless it lies in it.
+fn object_target(s: &Session, reference: &solidcraft_engine::geom::Plane, sel: &Sel) -> bool {
+    const TOLERANCE: f64 = 1e-6;
+    match sel {
+        Sel::Face { body, index, .. } => {
+            let st = s.world_state();
+            let Some(b) = st.body(body) else { return false };
+            b.body
+                .planar_face(*index)
+                .is_none_or(|face| reference.normal().dot(face.normal()).abs() < 1.0 - 1e-9 || reference.height(face.origin).abs() > TOLERANCE)
+        }
+        Sel::Vertex { point, .. } => reference.height(*point).abs() > TOLERANCE,
+        _ => false,
     }
 }
 
@@ -2854,7 +3033,7 @@ pub fn start_sketch(app: &mut SolveApp, sel: &Sel) -> Result<(), String> {
 /// behind the plane's normal, the in-plane axis to turn the plane about (`"x"` or `"y"`), chosen
 /// so the sketch's y axis stays as upright on screen as it can (x then runs to the right).
 fn flip_toward_viewer(app: &SolveApp, name: &str) -> Option<&'static str> {
-    let plane = plane_by_name(app, name)?;
+    let plane = plane_by_name(&app.session, name)?;
     let n = plane.normal();
     // Where the eye is: in perspective its position, in orthographic only its direction counts.
     let side = if app.cam.fov > 0.0 { (app.cam.eye() - plane.origin).dot(n) } else { app.cam.basis().2.dot(n) };
@@ -2880,15 +3059,21 @@ fn shown_origin_plane(app: &SolveApp, name: &str) -> Option<Value> {
 }
 
 /// The world plane of an origin plane or a construction plane by name, where it is shown.
-fn plane_by_name(app: &SolveApp, name: &str) -> Option<solidcraft_engine::geom::Plane> {
+pub(crate) fn plane_by_name(s: &Session, name: &str) -> Option<solidcraft_engine::geom::Plane> {
     if let Some(p) = solidcraft_engine::geom::Plane::named(name) {
         return Some(p);
     }
-    let st = app.session.world_state();
-    st.construct.iter().find(|c| c.name == name).and_then(|c| match &c.geom {
-        solidcraft_engine::doc::construct::ConstructGeom::Plane(pl) => Some(*pl),
-        _ => None,
-    })
+    let st = s.world_state();
+    st.construct
+        .iter()
+        .find(|c| c.name == name)
+        .and_then(|c| match &c.geom {
+            solidcraft_engine::doc::construct::ConstructGeom::Plane(pl) => Some(*pl),
+            _ => None,
+        })
+        // With occurrences the world state leaves construction geometry out; the viewport's
+        // planes are evaluated in place.
+        .or_else(|| solidcraft_engine::view::construction_planes(s).into_iter().find(|(_, n, _)| n == name).map(|(_, _, pl)| pl))
 }
 
 /// Animate the camera to look straight at the active sketch plane.
@@ -2945,6 +3130,11 @@ pub(crate) fn facing(app: &SolveApp, n: Vec3, again: bool) -> Vec3 {
 
 fn sels(d: &Dialog, i: usize) -> &[Sel] {
     selection::items(&d.inputs, i)
+}
+
+/// Section Analysis with a section on and no plane picked: OK turns the section off.
+fn section_turns_off(s: &Session, inputs: &[selection::SelInput]) -> bool {
+    s.section.is_some() && selection::items(inputs, 0).is_empty()
 }
 
 pub(crate) fn run_dialog(app: &mut SolveApp, d: &Dialog) -> Result<(), String> {
@@ -3108,6 +3298,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
     };
     let face_points = |i: usize| -> Vec<Value> { sels(d, i).face_points().into_iter().map(pt).collect() };
     let (cmd, params): (&str, Value) = match &d.kind {
+        Kind::ChatContext => return Err("the chat takes these picks; nothing runs".into()),
         Kind::Extrude {
             distance,
             direction,
@@ -3581,7 +3772,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             ("solid.scale", json!({"bodies": sels(d, 0).body_names()}))
         }
         Kind::OffsetFaces { .. } => {
-            need(0, "planar faces")?;
+            need(0, "faces")?;
             ("solid.offset_face", json!({"faces": face_points(0)}))
         }
         Kind::Thread { designation, length, suggested, helix, .. } => {
@@ -3604,12 +3795,18 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             helix.params(d.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false), &mut p);
             ("solid.thread", p)
         }
-        Kind::Material { index } => {
+        Kind::Material { index, editor } => {
+            if editor.editing() {
+                return Err(crate::i18n::tr("material.editor.save_or_discard").to_string());
+            }
             need(0, "bodies")?;
             let name = s.doc.material_names().get(*index).cloned().unwrap_or_else(|| solidcraft_engine::doc::DEFAULT_MATERIAL.into());
             ("material.assign", json!({"bodies": sels(d, 0).body_names(), "material": name}))
         }
         Kind::Section { offset, flip, hatch } => {
+            if section_turns_off(s, &d.inputs) {
+                return Ok(vec![("inspect.section".into(), json!({"clear": true}))]);
+            }
             need(0, "a plane or planar face")?;
             let plane = match sels(d, 0).first() {
                 Some(Sel::Plane { name }) if matches!(name.as_str(), "XY" | "XZ" | "YZ") => json!(name),
@@ -3681,6 +3878,16 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                         None => json!({ "position": kept.unwrap_or(p) }),
                     }));
                 }
+                // Reference edges (#37) place the one hole by its distances from them, from where
+                // it was picked.
+                let references = crate::hole_refs::params(d);
+                if !references.is_empty() {
+                    let at = sels(d, 0).iter().find_map(face_point);
+                    match (places.as_mut_slice(), at) {
+                        ([place], Some(at)) => *place = json!({"position": at, "references": references}),
+                        _ => return Err("reference edges place one hole: pick one place on the face".into()),
+                    }
+                }
             }
             let mut out = Vec::new();
             for place in places {
@@ -3701,7 +3908,8 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                     if let Some(error) = opts.custom_thread.as_ref().and_then(|draft| draft.error.as_ref()) {
                         return Err(error.clone());
                     }
-                    solidcraft_engine::doc::parse_metric_thread(&opts.thread).ok_or("select a valid metric thread size")?;
+                    solidcraft_engine::doc::parse_tapped_thread(&opts.thread)
+                        .ok_or("select a valid metric or catalogued UNC/UNF, G or Rp thread size")?;
                     params["thread"] = json!(opts.thread.trim());
                 }
                 match *kind {
@@ -3775,6 +3983,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
         Kind::SaveMesh(k) => return crate::dialogs_save_mesh::commands(k, &d.inputs),
         Kind::ViewDxf { .. } => return Ok(Vec::new()),
         Kind::Plastic(k) => return crate::dialogs_plastic::commands(app, k, &d.inputs, &d.extra),
+        Kind::Frame(k) => return crate::dialogs_frame::commands(app, k, &d.inputs, &d.extra),
         Kind::Appearance(k) => return Ok(crate::dialogs_appearance::commands(k, &d.inputs)),
         Kind::Motion(k) => return crate::dialogs_motion::commands(app, k, &d.inputs),
         Kind::Part(k) => return crate::dialogs_parts::commands(app, k, &d.inputs),
@@ -4039,6 +4248,41 @@ pub(crate) fn face_sel(s: &Session, p0: Vec3) -> Option<Sel> {
     (d <= tolerance).then(|| Sel::Face { body: body.name.clone(), index, point })
 }
 
+/// Resolve a stored name on the current input body before placing its pick in the viewport.
+/// Keep the resolved index: a face point can lie on a boundary shared with another face.
+fn named_refill(s: &Session, body: Option<&str>, name: &str, point: Vec3, edge: bool) -> Option<Sel> {
+    use solidcraft_engine::doc::naming;
+
+    if name.is_empty() {
+        return None;
+    }
+    let st = s.model.state();
+    let (source, index, point) = if edge {
+        let (b, hit) = st
+            .bodies
+            .iter()
+            .filter(|b| body.is_none_or(|name| b.name == name))
+            .filter_map(|b| naming::locate_edge(b, name, point).ok().map(|hit| (b, hit)))
+            .min_by(|(_, a), (_, b)| a.point.dist(point).total_cmp(&b.point.dist(point)))?;
+        (b, hit.edge, hit.point)
+    } else if let Some((b, (index, point, _))) = body.and_then(|n| st.body(n)).and_then(|b| naming::face_on_body(b, name, point).map(|hit| (b, hit)))
+    {
+        (b, index, point)
+    } else {
+        let hit = naming::locate_face(&st, name, point)?;
+        (st.bodies.get(hit.body)?, hit.face, hit.point)
+    };
+    let (body, point) = s
+        .doc
+        .body_frames_with_source(&st)
+        .into_iter()
+        .find(|(_, definition, _, _, _)| definition == source.definition_name())
+        .map(|(world, _, _, _, frame)| (world, solidcraft_engine::doc::apply_point(&frame, point)))
+        .unwrap_or_else(|| (source.name.clone(), point));
+    s.world_state().body(&body)?;
+    Some(if edge { Sel::Edge { body, index, point } } else { Sel::Face { body, index, point } })
+}
+
 fn emboss_face_sel(s: &Session, component: u64, face: &solidcraft_engine::doc::EmbossFace, persistent: &str) -> Option<Sel> {
     let source = s.model.state();
     let body = source.body(&face.body)?;
@@ -4210,7 +4454,7 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                 },
                 operation: op_index(operation),
                 auto_op: false,
-                smart: crate::smart_extrude::Smart { manual_dir: true, ..Default::default() },
+                smart: crate::smart_extrude::Smart { manual_dir: true, auto_to_object: app.preferences.extrude_auto_to_object, ..Default::default() },
                 distance2: extent.distance2.as_deref().map(str::to_string).unwrap_or_else(|| "10 mm".into()),
                 taper: extent.taper.as_deref().map(str::to_string).unwrap_or_else(|| "0 deg".into()),
                 taper_present: extent.taper.is_some(),
@@ -4293,7 +4537,9 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             }
             d
         }
-        FeatureKind::Fillet { edges, radius, .. } | FeatureKind::Chamfer { edges, distance: radius, .. } => {
+        FeatureKind::Fillet { edges, radius, body, .. } | FeatureKind::Chamfer { edges, distance: radius, body, .. } => {
+            let edge_pick =
+                |i: usize, p: Vec3| f.edge_names.get(i).and_then(|name| named_refill(s, body.as_deref(), name, p, true)).or_else(|| edge_sel(s, p));
             let chamfer = matches!(f.kind, FeatureKind::Chamfer { .. });
             let mut d = start(if chamfer { "solid.chamfer" } else { "solid.fillet" })?;
             d.kind = fillet_kind(radius, chamfer);
@@ -4354,7 +4600,7 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                             FilletStyle::Constant | FilletStyle::Chord | FilletStyle::Curvature => {}
                         }
                         // The start was the first edge's last point: ends swapped.
-                        let first_end = edges.first().and_then(|p| edge_sel(s, p.0)).and_then(|x| match x {
+                        let first_end = edges.first().and_then(|p| edge_pick(0, p.0)).and_then(|x| match x {
                             Sel::Edge { body, index, .. } => {
                                 s.world_state().body(&body).and_then(|b| b.mesh().edges.get(index).and_then(|e| e.last().copied()))
                             }
@@ -4366,7 +4612,7 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                 }
             }
             if let Some(inp) = d.inputs.first_mut() {
-                inp.items = edges.iter().filter_map(|p| edge_sel(s, p.0)).collect();
+                inp.items = edges.iter().enumerate().filter_map(|(i, p)| edge_pick(i, p.0)).collect();
                 d.picked_edges = inp.items.clone();
             }
             d.chain_applied = false;
@@ -4380,7 +4626,13 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                 d.extra.insert("direction".into(), json!(direction));
             }
             if let Some(inp) = d.inputs.first_mut() {
-                inp.items = faces.iter().filter_map(|p| face_sel(s, p.0)).collect();
+                inp.items = faces
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, p)| {
+                        f.face_names.get(i).and_then(|name| named_refill(s, f.kind.face_body(), name, p.0, false)).or_else(|| face_sel(s, p.0))
+                    })
+                    .collect();
             }
             d
         }
@@ -4388,7 +4640,13 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             let mut d = start("solid.draft")?;
             d.kind = Kind::simple_restore(&f.kind)?;
             if let Some(inp) = d.inputs.get_mut(0) {
-                inp.items = faces.iter().filter_map(|p| face_sel(s, p.0)).collect();
+                inp.items = faces
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, p)| {
+                        f.face_names.get(i).and_then(|name| named_refill(s, f.kind.face_body(), name, p.0, false)).or_else(|| face_sel(s, p.0))
+                    })
+                    .collect();
             }
             if let Some(inp) = d.inputs.get_mut(1) {
                 inp.items = plane_sel(s, neutral).into_iter().collect();
@@ -4396,7 +4654,7 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             d.extra.insert("pull".into(), pt3(pull.0));
             d
         }
-        FeatureKind::Hole { position, at, direction, diameter, depth, hole, points, thread, to } => {
+        FeatureKind::Hole { position, at, direction, diameter, depth, hole, points, thread, to, references } => {
             let mut d = start("solid.hole")?;
             let mut k = hole_defaults();
             if let Kind::Hole { diameter: dia, depth: dep, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts } = &mut k {
@@ -4464,6 +4722,7 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                         let exprs: Vec<&str> = at.iter().map(|e| e.as_str()).collect();
                         d.extra.insert("position_exprs".into(), json!({"at": exprs, "point": pt3(position.0)}));
                     }
+                    crate::hole_refs::restore(s, &mut d, references, &f.edge_names);
                 }
             }
             if to.is_some() {
@@ -4517,6 +4776,40 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                 at: None,
             };
             d.extra.insert("center".into(), pt_expr(center));
+            d
+        }
+        FeatureKind::Coil { base, axis, diameter, pitch, turns, section_size, section, position, start_angle, clockwise, operation, targets } => {
+            let mut d = start("solid.coil")?;
+            d.kind = Kind::Primitive {
+                cmd: "solid.coil",
+                fields: vec![
+                    ("diameter", stored_length(s, diameter)),
+                    ("revolutions", turns.to_string()),
+                    ("pitch", stored_length(s, pitch)),
+                    ("section_size", stored_length(s, section_size)),
+                ],
+                operation: op_index(operation),
+                at: None,
+            };
+            d.extra.insert("base".into(), pt_expr(base));
+            d.extra.insert("axis".into(), pt3(axis.0));
+            if *section == solidcraft_engine::doc::CoilSection::Square {
+                d.extra.insert("section".into(), json!("square"));
+            }
+            match position {
+                ..0 => d.extra.insert("section_position".into(), json!("inside")),
+                1.. => d.extra.insert("section_position".into(), json!("outside")),
+                0 => None,
+            };
+            if let Some(a) = start_angle {
+                d.extra.insert("start_angle".into(), json!(a.to_string()));
+            }
+            if *clockwise {
+                d.extra.insert("clockwise".into(), json!(true));
+            }
+            if !targets.is_empty() {
+                d.extra.insert("targets".into(), json!(targets));
+            }
             d
         }
         FeatureKind::BoundaryFill { tools, cells, operation, remove_tools } => {
@@ -4922,6 +5215,7 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
         other => {
             let (kind, inputs, extra) = crate::dialogs_sheet::for_feature(app, other)
                 .or_else(|| crate::dialogs_plastic::for_feature(app, other))
+                .or_else(|| crate::dialogs_frame::for_feature(app, other))
                 .or_else(|| crate::dialogs_surface::for_feature(app, other, &feature_frame(s, f.component)))?;
             let mut d = Dialog::new(kind, inputs);
             d.extra = extra;

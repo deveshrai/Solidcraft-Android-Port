@@ -8,14 +8,15 @@ use crate::scenario::Harness;
 /// A sketch with two lines drawn on top of each other (l1, then l2), off the origin axes.
 fn two_lines() -> (Harness, Value) {
     let mut h = Harness::new();
-    h.app.ui.show_origin = false;
+    h.app.set_origin_shown(false);
     h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
     for _ in 0..2 {
         h.app.run("sketch.line", json!({"points":[[0,10],[20,10]],"infer":false,"connect":false})).unwrap();
     }
     h.app.cam.distance = 60.0;
     h.settle();
-    let at = h.call("ui.at", json!({"sketch":[10,10]}))["result"].clone();
+    // Curve tests pick away from MID; the centre is a distinct point target.
+    let at = h.call("ui.at", json!({"sketch":[5,10]}))["result"].clone();
     (h, at)
 }
 
@@ -120,7 +121,7 @@ fn the_viewport_menu_offers_select_other() {
 #[test]
 fn overlapping_bodies_list_both_and_the_hidden_one_can_be_picked() {
     let mut h = Harness::new();
-    h.app.ui.show_origin = false;
+    h.app.set_origin_shown(false);
     h.app.run("solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Inner"})).unwrap();
     h.app.run("solid.box", json!({"length":10,"width":10,"height":10,"corner":[5,5,5],"body_name":"Outer"})).unwrap();
     h.call("ui.view", json!({"view":"top"}));
@@ -136,9 +137,47 @@ fn overlapping_bodies_list_both_and_the_hidden_one_can_be_picked() {
 }
 
 #[test]
+fn long_names_stay_inside_the_popup_and_remain_available_on_hover() {
+    let mut h = Harness::new();
+    h.app.set_origin_shown(false);
+    h.call("ui.resize", json!({"width":1000,"height":700}));
+    let name = "Long assembly component ".repeat(12);
+    h.app.run("solid.box", json!({"length":10,"width":10,"height":10,"body_name":name})).unwrap();
+    h.call("ui.view", json!({"view":"top"}));
+    h.call("ui.view", json!({"view":"fit"}));
+    h.step(&json!({"hold": {"world": [5, 5, 10]}})).unwrap();
+    let label = format!("Body · {name}");
+    let row = labels(&h).iter().position(|r| r == &label).unwrap();
+    let mut output = h.ctx.run_ui(egui::RawInput { screen_rect: Some(h.ctx.content_rect()), focused: true, ..Default::default() }, |ui| {
+        h.app.logic(ui.ctx());
+        h.app.ui(ui);
+    });
+    output.textures_delta.clear();
+    let text = output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text == label => Some(t),
+            _ => None,
+        })
+        .expect("the body label is painted");
+    let popup = h.ctx.memory(|m| m.area_rect(egui::Id::new("sc_select_other"))).unwrap();
+    let text_rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+    assert!(popup.contains_rect(text_rect), "{text_rect:?} spills outside {popup:?}");
+    assert!(h.ctx.content_rect().contains_rect(popup));
+    assert!(text.galley.elided, "long names end in an ellipsis");
+
+    h.step(&json!({"move": {"handle": format!("select_other:{row}")}})).unwrap();
+    h.frames(90);
+    assert!(h.widget(&label).is_some(), "the tooltip exposes the full label");
+    h.step(&json!({"click": {"handle": format!("select_other:{row}")}})).unwrap();
+    assert_eq!(h.app.session.selection, [Sel::Body { name }], "the shortened label still selects the original body");
+}
+
+#[test]
 fn a_dialog_selection_input_takes_its_pick_from_the_list() {
     let mut h = Harness::new();
-    h.app.ui.show_origin = false;
+    h.app.set_origin_shown(false);
     h.app.run("solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Block"})).unwrap();
     h.call("ui.view", json!({"view":"home"}));
     h.call("ui.view", json!({"view":"fit"}));
@@ -160,7 +199,7 @@ fn a_dialog_selection_input_takes_its_pick_from_the_list() {
 #[test]
 fn rows_name_points_by_their_curves() {
     let mut h = Harness::new();
-    h.app.ui.show_origin = false;
+    h.app.set_origin_shown(false);
     h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
     h.app.run("sketch.circle.center", json!({"center":[10,10],"radius":3})).unwrap();
     h.app.cam.distance = 60.0;
@@ -174,9 +213,9 @@ fn rows_name_points_by_their_curves() {
 #[test]
 fn a_dense_spot_is_capped_per_kind_and_reports_the_total() {
     let mut h = Harness::new();
-    h.app.ui.show_origin = false;
+    h.app.set_origin_shown(false);
     h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
-    // Thirty lines drawn on top of each other: one kind of thing, far beyond the per-kind cap.
+    // Thirty overlapping lines and their MID targets each exceed the per-kind cap.
     for _ in 0..30 {
         h.app.run("sketch.line", json!({"points":[[0,10],[20,10]],"infer":false,"connect":false})).unwrap();
     }
@@ -189,8 +228,27 @@ fn a_dense_spot_is_capped_per_kind_and_reports_the_total() {
     let rows = d["rows"].as_array().expect("rows");
     let lines = rows.iter().filter(|r| r["label"].as_str().is_some_and(|l| l.starts_with("Line "))).count();
     assert_eq!(lines, 20, "at most 20 rows of one kind, nearest first: {rows:?}");
-    assert_eq!(rows[0]["label"], json!("Line 1"), "the nearest still leads");
+    let mids = rows.iter().filter(|r| r["sel"]["type"] == "sketch_midpoint").count();
+    assert_eq!(mids, 20, "MID targets have the same per-kind bound");
+    assert_eq!(rows[0]["label"], json!("MID · Line 1"), "the nearest point target leads");
     let total = d["total"].as_u64().expect("total");
-    assert!(total >= 30, "the total counts every candidate, not just the rows: {total}");
+    assert!(total >= 60, "the total counts every line and MID candidate, not just the rows: {total}");
     assert!((total as usize) < rows.len() + 30, "the list is truncated: {total} total, {} rows", rows.len());
+}
+
+#[test]
+fn overlapping_midpoints_can_be_selected_individually_without_creating_points() {
+    let (mut h, _) = two_lines();
+    let at = h.call("ui.at", json!({"sketch":[10,10]}))["result"].clone();
+    let before = h.app.session.doc.to_json();
+    let undo = h.app.session.undo.len();
+    h.step(&json!({"hold":at})).unwrap();
+    assert!(labels(&h).starts_with(&["MID · Line 1".into(), "MID · Line 2".into(), "Line 1".into(), "Line 2".into()]));
+    h.step(&json!({"click":{"handle":"select_other:1"}})).unwrap();
+    assert_eq!(h.app.session.selection, vec![Sel::SketchMidpoint { id: "l2".into() }]);
+    h.step(&json!({"hold":at})).unwrap();
+    h.step(&json!({"click":{"handle":"select_other:0"},"shift":true})).unwrap();
+    assert_eq!(h.app.session.selection, vec![Sel::SketchMidpoint { id: "l2".into() }, Sel::SketchMidpoint { id: "l1".into() }]);
+    assert_eq!(h.app.session.doc.to_json(), before);
+    assert_eq!(h.app.session.undo.len(), undo);
 }

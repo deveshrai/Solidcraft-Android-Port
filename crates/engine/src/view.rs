@@ -105,28 +105,23 @@ impl Default for Palette {
 /// joints and moves place them, and the sketches the view draws (not ones used by a feature,
 /// hidden ones, or ones in hidden components). What Home, Fit and the orbit pivot frame.
 pub fn bounds(s: &Session) -> Aabb3 {
-    visible_bounds(s, true)
+    bounds_by(s, |body| body.mesh_bounds())
 }
 
-/// [`bounds`], with the browser's Sketches folder shown (`sketches`) or hidden.
-pub fn visible_bounds(s: &Session, sketches: bool) -> Aabb3 {
-    bounds_by(s, sketches, |body| body.mesh_bounds())
-}
-
-/// [`visible_bounds`] without meshing anything: a body not meshed yet counts with its outline
+/// [`bounds`] without meshing anything: a body not meshed yet counts with its outline
 /// ([`solidcraft_kernel::Body::outline_bounds`]), which a face curving out past all of its edges
 /// can exceed. Frames a design whose bodies are still being meshed.
-pub fn unmeshed_bounds(s: &Session, sketches: bool) -> Aabb3 {
-    bounds_by(s, sketches, |body| body.cached_mesh().map(|m| m.bounds()).unwrap_or_else(|| body.outline_bounds()))
+pub fn unmeshed_bounds(s: &Session) -> Aabb3 {
+    bounds_by(s, |body| body.cached_mesh().map(|m| m.bounds()).unwrap_or_else(|| body.outline_bounds()))
 }
 
-fn bounds_by(s: &Session, sketches: bool, of: impl Fn(&solidcraft_doc::ModelBody) -> Aabb3) -> Aabb3 {
+fn bounds_by(s: &Session, of: impl Fn(&solidcraft_doc::ModelBody) -> Aabb3) -> Aabb3 {
     let st = s.world_state();
     let mut b = Aabb3::EMPTY;
     for body in st.bodies.iter().filter(|x| s.body_visible(&x.name)) {
         b = b.union(&of(body));
     }
-    for ss in st.sketches.iter().filter(|x| sketch_drawn(s, x.feature, sketches)) {
+    for ss in st.sketches.iter().filter(|x| sketch_shown(s, x.feature)) {
         // All four corners: on a tilted plane two opposite ones don't span the rectangle.
         if let Some((lo, hi)) = ss.sketch.bounds() {
             for p in [lo, hi, solidcraft_geom::Vec2::new(lo.x, hi.y), solidcraft_geom::Vec2::new(hi.x, lo.y)] {
@@ -643,21 +638,27 @@ impl SectionIndex {
     }
 }
 
-/// Is a sketch drawn? The active one is; others unless hidden. Finished sketches are hidden
-/// once a feature uses them, by default, unless shown one by one.
+/// Is a sketch drawn? The sketch being edited always is; otherwise not in a hidden component,
+/// Sketches folder or group (even one shown on its own). The sketch immediately before a
+/// rollback marker is shown regardless of its individual visibility; other hidden sketches, and
+/// ones used by a feature unless shown on their own, retain their stored visibility.
 pub fn sketch_shown(s: &Session, id: u64) -> bool {
-    sketch_drawn(s, id, true)
-}
-
-/// Is a sketch drawn, with sketches shown (`folder`) or hidden? The sketch being edited always
-/// is; otherwise not when hidden, nor in a hidden component, Sketches folder or group (even one
-/// shown on its own), and one used by a feature only when shown on its own.
-pub fn sketch_drawn(s: &Session, id: u64, folder: bool) -> bool {
     let v = &s.visibility;
     if s.active_sketch == Some(id) {
         return true;
     }
-    if !folder || v.hidden_sketches.contains(&id) || !sketch_component_visible(s, id) || s.feature_folder_hidden(id, "sketches") {
+    if !sketch_component_visible(s, id) || s.feature_folder_hidden(id, "sketches") {
+        return false;
+    }
+    if s.doc
+        .marker
+        .and_then(|position| position.checked_sub(1))
+        .and_then(|index| s.doc.features.get(index))
+        .is_some_and(|f| f.id == id && matches!(f.kind, solidcraft_doc::FeatureKind::Sketch { .. }))
+    {
+        return true;
+    }
+    if v.hidden_sketches.contains(&id) {
         return false;
     }
     v.shown_sketches.contains(&id) || !sketch_consumed(s, id)

@@ -12,7 +12,9 @@ mod icons;
 mod layers;
 mod licences;
 mod lists;
+mod render_assets;
 mod test;
+mod test_nextest;
 mod ui_containers;
 mod web_offline;
 mod web_offline_test;
@@ -57,7 +59,8 @@ commands:
                   message catalogs in assets/locales); --fix sorts them
   test [CARGO ARGS] [-- TEST ARGS]
                   build the tests with the ci profile, then run every test binary at once
-                  (and the doc tests alongside)
+                  (and the doc tests alongside); SOLIDCRAFT_TEST_JOBS=N bounds concurrent test
+                  and side commands for test/ci; inherited per-test/worker overrides are unchanged
   wasm            cargo check every library crate and the web app for wasm32-unknown-unknown
   web-offline [DIR]
                   write the web build's service worker (sw.js: offline use, updates); run by
@@ -382,7 +385,7 @@ fn cmd_ci() -> Result<(), String> {
     c.args(["clippy", "--workspace", "--all-targets", "--profile", "ci", "--", "-D", "warnings"]);
     run(c, "cargo clippy -D warnings")?;
     let (wasm, n) = wasm_check()?;
-    test::run(&[], &[], vec![(format!("wasm32-unknown-unknown check ({n} crates)"), wasm), test::doc_tests(&[], &[])])?;
+    test_nextest::run_selected(vec![(format!("wasm32-unknown-unknown check ({n} crates)"), wasm), test::doc_tests(&[], &[])])?;
     web_offline_test::run(&root(), None, false)?;
     eprintln!("ci: all gates passed");
     Ok(())

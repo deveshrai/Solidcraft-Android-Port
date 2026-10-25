@@ -215,6 +215,19 @@ fn component_picks_become_occurrences() {
     assert_eq!(c[0].0, "component.create");
 }
 
+/// A body of a further instance of a component belongs to that instance, not the first (#3857).
+#[test]
+fn body_of_a_further_instance_is_its_own_occurrence() {
+    let mut app = two_boxes();
+    let copy = app.session.execute("occurrence.copy", &json!({"component": "B", "translate": [0, 40, 0]})).unwrap()["occurrence"].as_u64().unwrap();
+    let first = occ(&app, "B");
+    assert_ne!(copy, first);
+    let frames = app.session.doc.body_frames(&app.session.model.state());
+    let of = |o: u64| frames.iter().find(|f| f.2.last() == Some(&o)).map(|f| f.0.clone()).unwrap();
+    assert_eq!(occurrence_of_body(&app.session, &of(first)), Some(first));
+    assert_eq!(occurrence_of_body(&app.session, &of(copy)), Some(copy));
+}
+
 /// Round edges snap to their centre; straight ones are not circles.
 #[test]
 fn circles_from_edge_polylines() {

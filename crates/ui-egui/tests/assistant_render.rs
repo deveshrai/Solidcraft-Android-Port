@@ -30,6 +30,7 @@ fn assistant_transcript_tools_and_approvals_fit_in_both_themes() {
                     text: "Make the plate 80 mm wide, soften its edges, and export a STEP file.".into(),
                     image: false,
                     pictures: vec![],
+                    context: Default::default(),
                     files: vec!["plate-notes.txt".into()],
                 },
                 Item::Agent { thought: false, text: "I’ll update the width and check the selected edges before exporting.".into() },

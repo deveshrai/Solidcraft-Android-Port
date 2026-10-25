@@ -22,7 +22,7 @@ pub struct Pending {
 pub fn selection_params(app: &SolveApp) -> Value {
     use solidcraft_engine::Sel;
     let mut items: Vec<Sel> = Vec::new();
-    for s in app.session.selection.iter().filter(|s| !matches!(s, Sel::Body { name } if app.ui.locked_bodies.contains(name))) {
+    for s in app.session.selection.iter().filter(|s| !matches!(s, Sel::Body { name } if app.session.visibility.locked_bodies.contains(name))) {
         // A MidPoint glyph shared by lines whose midpoints meet removes every constraint it
         // shows, and the point they shared when nothing else holds it.
         let group = match s {

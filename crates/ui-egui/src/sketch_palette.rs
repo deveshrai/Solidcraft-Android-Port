@@ -401,7 +401,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                     ui.horizontal(|ui| {
                         let text = crate::i18n::format("sketch.untied_ends", &[("count", &untied_ends.to_string())]);
                         ui.label(egui::RichText::new(text).size(t.font_small).color(t.warning)).on_hover_text(app.tr("ui.untied_ends_tip"));
-                        let button = crate::ui_kit::button(ui, "ui.tie_ends", crate::ui_kit::Button::Normal).on_hover_text(app.tr("ui.tie_ends_tip"));
+                        let button =
+                            crate::ui_kit::button(ui, app.tr("ui.tie_ends"), crate::ui_kit::Button::Normal).on_hover_text(app.tr("ui.tie_ends_tip"));
                         crate::scenario::publish_handle("sketch_palette:tie_ends", button.rect.center());
                         tie = button.clicked();
                     });
@@ -610,7 +611,12 @@ mod tests {
         h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
         h.settle();
         let at = crate::scenario::handle_at("sketch_palette:finish").expect("the palette ends in Finish Sketch");
-        assert!(crate::scenario::rect_of("sketch_palette:look_at").is_some(), "Look At | Slice stay");
+        let look = crate::scenario::rect_of("sketch_palette:look_at").expect("Look At | Slice stay");
+        let slice = crate::scenario::rect_of("sketch_palette:slice").unwrap();
+        let finish = crate::scenario::rect_of("sketch_palette:finish").unwrap();
+        assert_eq!((finish.left(), finish.right()), (look.left(), slice.right()), "Finish {finish:?} shares the pair's inset");
+        assert_eq!(finish.height(), Tokens::get().form_button_height);
+        assert_eq!(look.top() - finish.bottom(), 2.0 * Tokens::get().space_6, "same spacing as the pair");
         assert!(crate::scenario::handle_at("button:sketch.finish").is_some(), "and so does the ribbon's Finish");
         h.call("ui.click", json!({"x":at.x,"y":at.y}));
         assert!(h.app.session.active_sketch.is_none());
@@ -794,6 +800,7 @@ mod tests {
         h.settle();
         assert!(h.widget("Open 2").is_some(), "the status counts the open ends");
         assert!(h.widget("Untied 4").is_some(), "the status counts the untied ends");
+        assert!(h.widget("Tie").is_some(), "the Tie button shows its label, not its catalog key");
         let at = crate::scenario::handle_at("sketch_palette:tie_ends").unwrap();
         h.call("ui.click", json!({"x": at.x, "y": at.y}));
         h.settle();

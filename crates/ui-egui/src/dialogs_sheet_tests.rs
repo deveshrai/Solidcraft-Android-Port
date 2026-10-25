@@ -879,3 +879,77 @@ fn fit_and_home_frame_the_flat_pattern() {
         assert!(!app.flat_view.fitted);
     }
 }
+
+fn perforated_flat() -> (SolveApp, Dialog) {
+    let mut app = plate(crate::shell::LayoutMode::Floating);
+    app.run("sheet.flange", json!({"sketch": "Base"})).unwrap();
+    app.run("sheet.perforate", json!({"diameter": 3, "pitch": 6})).unwrap();
+    let flat = app.session.execute("sheet.flat_pattern", &json!({})).unwrap();
+    assert_eq!(flat["perforations"][0]["count"], 155);
+    app.start("sheet.flat_pattern");
+    let mut dialog = app.dialog.clone().unwrap();
+    let Kind::Sheet(Sm::FlatPattern { data, .. }) = &mut dialog.kind else { panic!("flat dialog") };
+    *data = Some(Ok(flat));
+    (app, dialog)
+}
+
+fn flat_circles(app: &mut SolveApp, dialog: &Dialog, rect: Rect) -> Vec<egui::epaint::CircleShape> {
+    let ctx = crate::fonts::test_context();
+    let input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+    let output = crate::test_support::frame(&ctx, input, |ui| {
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("perforation-test")));
+        assert!(overlay(app, &painter, rect, dialog));
+    });
+    output.shapes.into_iter().filter_map(|s| if let egui::Shape::Circle(c) = s.shape { Some(c) } else { None }).collect()
+}
+
+#[test]
+fn flat_perforations_match_export_centres_and_cutout_style() {
+    let (mut app, dialog) = perforated_flat();
+    let state = app.session.world_state();
+    let sheet = state.sheets.last().unwrap();
+    let holes = sheet.perforation_holes(&sheet.perforations[0]).unwrap();
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0));
+    let circles = flat_circles(&mut app, &dialog, rect);
+    assert_eq!(circles.len(), holes.len());
+    let cam = app.flat_view.cam;
+    let scale = f64::from(rect.height()) / (2.0 * cam.half_height());
+    for (circle, hole) in circles.iter().zip(holes) {
+        let centre = pos2(
+            (f64::from(rect.center().x) + (hole.x - cam.target.x) * scale) as f32,
+            (f64::from(rect.center().y) - (hole.y - cam.target.y) * scale) as f32,
+        );
+        assert!(circle.center.distance(centre) < 0.001);
+        assert!((circle.radius - (1.5 * scale) as f32).abs() < 0.001);
+        assert_eq!(circle.stroke, Stroke::new(1.4, Tokens::get().text));
+        assert_eq!(circle.fill, Color32::TRANSPARENT);
+    }
+    let cached = app.flat_view.perforations.as_ptr();
+    assert_eq!(flat_circles(&mut app, &dialog, rect).len(), 155);
+    assert_eq!(app.flat_view.perforations.as_ptr(), cached, "navigation reuses the centres");
+    app.run("sheet.perforate", json!({"diameter": 2, "pitch": 10})).unwrap();
+    let state = app.session.world_state();
+    let sheet = state.sheets.last().unwrap();
+    let expected: usize = sheet.perforations.iter().map(|p| sheet.perforation_holes(p).unwrap().len()).sum();
+    assert!(expected > 155);
+    assert_eq!(flat_circles(&mut app, &dialog, rect).len(), expected, "model changes refresh the centres");
+}
+
+#[test]
+fn flat_perforations_cull_offscreen_and_subpixel_holes() {
+    let (mut app, dialog) = perforated_flat();
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0));
+    assert_eq!(flat_circles(&mut app, &dialog, rect).len(), 155);
+    let fitted_distance = app.flat_view.cam.distance;
+    // Keep a hole crossing the left viewport edge, even when its centre is outside.
+    let scale = f64::from(rect.height()) / (2.0 * app.flat_view.cam.half_height());
+    app.flat_view.cam.target.x = 40.5 + (f64::from(rect.width()) / 2.0 + 0.75 * scale) / scale;
+    let partial = flat_circles(&mut app, &dialog, rect);
+    assert!(!partial.is_empty() && partial.len() < 155);
+    assert!(partial.iter().any(|c| c.center.x < rect.left() && c.center.x + c.radius > rect.left()));
+    app.flat_view.cam.target.x = 1e6;
+    assert!(flat_circles(&mut app, &dialog, rect).is_empty());
+    app.flat_view.cam.target.x = 50.0;
+    app.flat_view.cam.distance = fitted_distance * 1000.0;
+    assert!(flat_circles(&mut app, &dialog, rect).is_empty());
+}

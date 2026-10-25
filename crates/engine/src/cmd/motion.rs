@@ -69,7 +69,16 @@ pub static COMMANDS: &[CommandSpec] = &[
         .noundo()
         .params("study; samples? (default steps + 1); path? (.json or .csv) → occurrence positions per step (the design is not changed)"),
     CommandSpec::new("motion.export_animation", "Export Motion Animation", animation::export).icon("export").noundo().params(
-        "study: id|name, or joint: id|name with from and to (degrees for angles, mm for distances, or expressions) and index?;          path: a .gif file, or a folder for PNG frames (frame-0001.png, frame-0002.png, …); samples? (frames, 2…1000; default the          study's steps + 1, or 100); width?, height? (16…4096 pixels, default 800 × 500); camera?: {target, yaw, pitch, roll?,          distance, fov?, up?} (ui.camera's reply; fields left out keep the default view: view.apply's camera, or the home view          framing the model); fps? (1…50, default 20); grid?, axes? (default true: the ground grid and the origin's axes) - draws the study as it plays, or the joint as it is driven, with the headless          renderer → path, format, frames, width, height, fps (GIF), bytes, renderer, stopped_at, stopped_by_loop,          stopped_by_contact (the design is not changed)",
+        "study: id|name, or joint: id|name with from and to (degrees for angles, mm for distances, or expressions) and index?, or \
+         view: id|name (an exploded view, coming apart from the assembled placement) with back? (default false; true: back together \
+         too, exploded at the middle frame of an odd count); path: a .gif file, or a folder for PNG frames (frame-0001.png, \
+         frame-0002.png, …); samples? (frames, 2…1000; default the study's steps + 1, 100 for a joint, 41 for a view or 81 with \
+         back); width?, height? (16…4096 pixels, default 800 × 500); camera?: {target, yaw, pitch, roll?, distance, fov?, up?} \
+         (ui.camera's reply; fields left out keep the default view: view.apply's camera, or the home view framing the model, for a \
+         view both assembled and exploded); fps? (1…50, default 20); grid?, axes? (default true: the ground grid and the origin's \
+         axes) - draws the study as it plays, the joint as it is driven or the view as it explodes, with the headless renderer → \
+         path, format, frames, width, height, fps (GIF), bytes, renderer, stopped_at, stopped_by_loop, stopped_by_contact (the \
+         design is not changed, nor its placements)",
     ),
     CommandSpec::new("motion.trace", "Motion Trace", trace).at("SOLID", "ASSEMBLE").icon("trace").noundo().params(concat!(
         trace_doc!(),
@@ -87,7 +96,10 @@ pub static COMMANDS: &[CommandSpec] = &[
          Edits a saved associative trace's driving conditions in one undo step",
     ),
     CommandSpec::new("motion.plot", "Plot Motion Study", analysis::plot).icon("graph").noundo().params(analysis::PLOT_DOC),
-    CommandSpec::new("motion.interference", "Motion Interference", analysis::interference).icon("interference").noundo().params(analysis::INTERFERENCE_DOC),
+    CommandSpec::new("motion.interference", "Motion Interference", analysis::interference)
+        .icon("interference")
+        .noundo()
+        .params(analysis::INTERFERENCE_DOC),
     CommandSpec::new("joint.sweep", "Sweep Joint", sweep::sweep).icon("interference").params(sweep::SWEEP_DOC),
     CommandSpec::new("motion.list", "List Motion Studies", list_studies).icon("list").noundo(),
     CommandSpec::new("motion.delete", "Delete Motion Study", delete_study).icon("delete").params("study"),
@@ -1051,19 +1063,32 @@ fn explode_show(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let i = view_index(s, p, cmd)?;
     let v = s.doc.assembly.exploded.get(i).cloned().ok_or_else(|| bad(cmd, "view"))?;
-    s.pending_moves.clear();
-    for (o, t) in &v.moves {
-        let Some(occ) = s.doc.occurrences.iter().find(|x| x.id == *o) else { continue };
-        let mut m = occ.transform;
-        if let Some(r) = m.get_mut(3) {
-            r[0] += t.x;
-            r[1] += t.y;
-            r[2] += t.z;
-        }
-        s.pending_moves.insert(*o, m);
-    }
+    s.pending_moves = exploded_at(&explode_moves(s, &v), 1.0);
     s.revision += 1;
     Ok(json!({"view": v.id, "name": v.name}))
+}
+
+/// What exploded view `v` moves: (occurrence, its placement, the translation the view adds). Moves
+/// of occurrences no longer in the design, or not finite (a hostile design file), are left out;
+/// a later move of one occurrence replaces an earlier one.
+fn explode_moves(s: &Session, v: &ExplodedView) -> Vec<(u64, Mat, Vec3)> {
+    let placed: std::collections::BTreeMap<u64, Mat> = s.doc.occurrences.iter().map(|o| (o.id, o.transform)).collect();
+    v.moves.iter().filter(|(_, t)| t.len() < 1e7).filter_map(|(o, t)| Some((*o, *placed.get(o)?, *t))).collect()
+}
+
+/// The pending moves that show `moves` `amount` of the way out: 0 assembled, 1 exploded.
+fn exploded_at(moves: &[(u64, Mat, Vec3)], amount: f64) -> std::collections::BTreeMap<u64, Mat> {
+    let mut out = std::collections::BTreeMap::new();
+    for (o, m, t) in moves {
+        let mut m = *m;
+        if let Some(r) = m.get_mut(3) {
+            r[0] += t.x * amount;
+            r[1] += t.y * amount;
+            r[2] += t.z * amount;
+        }
+        out.insert(*o, m);
+    }
+    out
 }
 
 fn explode_list(s: &mut Session, _p: &Value) -> Result<Value> {

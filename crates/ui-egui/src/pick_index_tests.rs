@@ -12,7 +12,7 @@ fn assembly() -> SolveApp {
     s.execute("solid.cylinder", &json!({"radius": 8, "height": 35, "base": [10, 10, 0], "operation": "new_body"})).unwrap();
     s.execute("solid.sphere", &json!({"radius": 9, "center": [30, 25, 22]})).unwrap();
     let mut app = SolveApp::new(s, crate::Services::default());
-    app.ui.show_origin = false;
+    app.set_origin_shown(false);
     app
 }
 
@@ -118,7 +118,7 @@ fn pick_timing_on_curved_models() {
         scenes.push(("25 placed meshes", app, 0.6));
     }
     for (name, mut app, pitch) in scenes {
-        app.ui.show_origin = false;
+        app.set_origin_shown(false);
         (app.cam.yaw, app.cam.pitch) = (0.6, pitch);
         let st = app.session.world_state();
         app.cam.fit(&st.bodies.iter().fold(solidcraft_engine::geom::Aabb3::EMPTY, |a, b| a.union(&b.mesh_bounds())));

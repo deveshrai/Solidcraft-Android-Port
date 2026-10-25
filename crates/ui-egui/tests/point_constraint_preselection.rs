@@ -14,14 +14,15 @@ fn setup() -> Harness {
 
 #[test]
 fn clicked_point_constraint_preselection_applies_and_undoes_once() {
+    // Pick the edge away from its selectable MID; the point/edge constraint is unchanged.
     for (command, picks) in [
         ("coincident", vec![[20, 20], [25, 30]]),
-        ("coincident", vec![[20, 20], [20, 10]]),
-        ("coincident", vec![[20, 10], [20, 20]]),
-        ("midpoint", vec![[20, 20], [20, 10]]),
-        ("midpoint", vec![[20, 10], [20, 20]]),
-        ("symmetry", vec![[20, 10], [20, 20], [25, 30]]),
-        ("symmetry", vec![[20, 20], [20, 10], [25, 30]]),
+        ("coincident", vec![[20, 20], [15, 10]]),
+        ("coincident", vec![[15, 10], [20, 20]]),
+        ("midpoint", vec![[20, 20], [15, 10]]),
+        ("midpoint", vec![[15, 10], [20, 20]]),
+        ("symmetry", vec![[15, 10], [20, 20], [25, 30]]),
+        ("symmetry", vec![[20, 20], [15, 10], [25, 30]]),
     ] {
         let mut h = setup();
         for (index, pick) in picks.iter().enumerate() {
@@ -54,7 +55,7 @@ fn clicked_point_constraint_preselection_applies_and_undoes_once() {
                 assert!(((a + b) * 0.5 - start).cross(axis).abs() < 1e-6);
                 assert!((b - a).dot(axis).abs() < 1e-6);
             }
-            _ if picks.contains(&[20, 10]) => assert!((a - start).cross(axis).abs() < 1e-6),
+            _ if picks.contains(&[15, 10]) => assert!((a - start).cross(axis).abs() < 1e-6),
             _ => assert!(a.dist(b) < 1e-6),
         }
         let after = h.app.session.doc.to_json();

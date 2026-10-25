@@ -434,7 +434,7 @@ fn sheet_pocket_transfer_keeps_local_depth_world_pose_and_history() {
     run(&mut s, "solid.extrude", json!({"sketch":"Pocket","distance":1,"operation":"cut"}));
     let name = s.model.state().sheets[0].body.clone();
     check(&s, &name, 0, Vec3::ZERO, Vec3::Y, false);
-    let destination = run(&mut s, "component.create", json!({"name":"Machined","parent":0}));
+    let destination = run(&mut s, "component.create", json!({"name":"Machined","parent":0,"grounded":false}));
     let component = destination["component"].as_u64().unwrap();
     let occurrence = destination["occurrence"].as_u64().unwrap();
     run(&mut s, "occurrence.move", json!({"occurrence":occurrence,"translate":[30,20,10],"axis":[1,0,0],"angle":"90 deg","capture":true}));
@@ -2269,7 +2269,7 @@ fn partial_depth_intersect_flipped_tool_and_transferred_sheet_keep_depth_side_an
     run(&mut s, "solid.extrude", json!({"sketch":"RetainDepth","distance":1,"start_offset":0.5,"operation":"intersect","name":"RetainSlab"}));
     let before = s.world_state().bodies[0].mesh().bounds();
     let name = s.model.state().sheets[0].body.clone();
-    let destination = run(&mut s, "component.create", json!({"name":"Destination","parent":0}));
+    let destination = run(&mut s, "component.create", json!({"name":"Destination","parent":0,"grounded":false}));
     let owner = destination["component"].as_u64().unwrap();
     let occurrence = destination["occurrence"].as_u64().unwrap();
     run(&mut s, "occurrence.move", json!({"occurrence":occurrence,"translate":[30,20,10],"axis":[1,0,0],"angle":"90 deg","capture":true}));
@@ -2315,7 +2315,7 @@ fn partial_depth_intersect_full_gauge_in_rotated_frames_does_not_invent_pockets(
         let mut s = Session::default();
         base(&mut s, 100.0, 60.0);
         let name = s.model.state().sheets[0].body.clone();
-        let destination = run(&mut s, "component.create", json!({"name":"Destination","parent":0}));
+        let destination = run(&mut s, "component.create", json!({"name":"Destination","parent":0,"grounded":false}));
         let owner = destination["component"].as_u64().unwrap();
         run(
             &mut s,
@@ -2493,7 +2493,7 @@ fn partial_depth_intersect_sub_extrusion_resolution_layers_refuse_atomically() {
         let mut s = Session::default();
         base(&mut s, 100.0, 60.0);
         let name = s.model.state().sheets[0].body.clone();
-        let destination = run(&mut s, "component.create", json!({"name":"Far","parent":0}));
+        let destination = run(&mut s, "component.create", json!({"name":"Far","parent":0,"grounded":false}));
         let owner = destination["component"].as_u64().unwrap();
         run(
             &mut s,

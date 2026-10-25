@@ -5,7 +5,7 @@ use crate::Session;
 #[test]
 fn grouped_face_auto_operation_keeps_implicit_and_explicit_participants() {
     let mut s = Session::default();
-    let part = run(&mut s, "component.create", json!({"name":"Part"}));
+    let part = run(&mut s, "component.create", json!({"name":"Part","grounded":false}));
     run(&mut s, "solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Stock"}));
     run(&mut s, "component.activate", json!({"component":0}));
     for offset in [0., 30.] {
@@ -417,7 +417,7 @@ fn cylinder_cross_component_emboss_keeps_source_owner_and_placements() {
     for (pick_offset, auto) in [(0., false), (80., false), (0., true), (80., true)] {
         let run = |s: &mut Session, id: &str, p: Value| run(s, id, auto_emboss_params(p, auto && matches!(id, "solid.emboss" | "timeline.redefine")));
         let mut s = Session::default();
-        let a = run(&mut s, "component.create", json!({"name":"Source"}))["component"].as_u64().unwrap();
+        let a = run(&mut s, "component.create", json!({"name":"Source","grounded":false}))["component"].as_u64().unwrap();
         run(&mut s, "solid.cylinder", json!({"radius":10,"height":20,"body_name":"Sleeve"}));
         let source_feature = s.model.state().bodies.first().unwrap().feature;
         let source_names = solidcraft_doc::naming::face_names(s.model.state().body("Sleeve").unwrap());
@@ -532,7 +532,7 @@ fn check_active_second_source(auto: bool) {
 fn cylinder_pending_leaf_or_ancestor_positions_require_capture_atomically() {
     for (ancestor, auto) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut s = Session::default();
-        let parent = run(&mut s, "component.create", json!({"name":"Parent"}))["occurrence"].as_u64().unwrap();
+        let parent = run(&mut s, "component.create", json!({"name":"Parent","grounded":false}))["occurrence"].as_u64().unwrap();
         let leaf = run(&mut s, "component.create", json!({"name":"Source"}))["occurrence"].as_u64().unwrap();
         run(&mut s, "solid.cylinder", json!({"radius":10,"height":20,"body_name":"Sleeve"}));
         run(&mut s, "sketch.create", json!({"plane":{"origin":[0,10,0],"x_dir":[-1,0,0],"y_dir":[0,0,1]},"name":"Badge"}));
@@ -561,7 +561,7 @@ fn cylinder_pending_third_component_profile_requires_capture_atomically() {
 fn check_pending_third_profile(auto: bool) {
     let mut s = Session::default();
     run(&mut s, "solid.cylinder", json!({"radius":10,"height":20,"body_name":"Sleeve"}));
-    let profile_occurrence = run(&mut s, "component.create", json!({"name":"ProfileOwner"}))["occurrence"].as_u64().unwrap();
+    let profile_occurrence = run(&mut s, "component.create", json!({"name":"ProfileOwner","grounded":false}))["occurrence"].as_u64().unwrap();
     run(&mut s, "sketch.create", json!({"plane":{"origin":[0,10,0],"x_dir":[-1,0,0],"y_dir":[0,0,1]},"name":"Badge"}));
     run(&mut s, "sketch.rectangle.two_point", json!({"p0":[-2,5],"p1":[2,10]}));
     run(&mut s, "sketch.finish", json!({}));
@@ -594,7 +594,7 @@ fn check_body_offset(auto: bool) {
     let mut s = Session::default();
     run(&mut s, "solid.cylinder", json!({"radius":10,"height":20,"body_name":"Sleeve"}));
     let before = exact_cylinder_volume(&s);
-    let holder = run(&mut s, "component.create", json!({"name":"Holder"}))["component"].as_u64().unwrap();
+    let holder = run(&mut s, "component.create", json!({"name":"Holder","grounded":false}))["component"].as_u64().unwrap();
     run(&mut s, "occurrence.move", json!({"occurrence":"Holder:1","translate":[0,50,0]}));
     std::sync::Arc::make_mut(&mut s.doc).body_components.insert("Sleeve".into(), holder);
     std::sync::Arc::make_mut(&mut s.doc)
@@ -1046,6 +1046,34 @@ fn a_tapered_text_joins_a_block_on_its_face_or_hanging_over_its_edge() {
         let volume = run(&mut s, "inspect.measure", json!({}))["total"]["volume_mm3"].as_f64().unwrap();
         let (block, text) = (200.0 * 40.0 * 10.0, 2.0 * area);
         assert!(volume > block + text && volume < block + 1.3 * text, "hanging {hanging}: {volume} for {text} mm³ of straight text");
+        assert_eq!(s.world_state().bodies.len(), 1);
+    }
+}
+
+/// A tapered pocket cut 5 mm down from a block's top face, from a 282 × 176 rounded rectangle whose
+/// 2 mm corners are smaller than the 2.89 mm the 30° taper widens it by (#4825). Run on out of the
+/// block with its slope, the tool narrowed there and closed its corner arcs: "the taper closes
+/// the profile", though the pocket only grows. It runs on less, then starts on the face.
+#[test]
+fn a_tapered_cut_that_widens_cuts_from_small_corners() {
+    let (w, h, r, depth) = (282.0, 176.0, 2.0, 5.0);
+    for deg in [20.0f64, 30.0, 45.0] {
+        let k = deg.to_radians().tan();
+        let mut s = Session::default();
+        run(&mut s, "sketch.create", json!({"plane":"XY"}));
+        run(&mut s, "sketch.rectangle.two_point", json!({"p0":[-159,-106],"p1":[159,106]}));
+        run(&mut s, "sketch.finish", json!({}));
+        run(&mut s, "solid.extrude", json!({"distance":20,"body_name":"Block"}));
+        run(&mut s, "sketch.create", json!({"plane":"XY","offset":20}));
+        run(&mut s, "sketch.rectangle.rounded", json!({"p0":[-w / 2.0,-h / 2.0],"p1":[w / 2.0,h / 2.0],"radius":r}));
+        run(&mut s, "sketch.finish", json!({}));
+        let cut = json!({"distance":depth,"direction":"negative","taper":format!("{deg} deg"),"operation":"cut","targets":["Block"]});
+        run(&mut s, "solid.extrude", cut);
+        // The pocket: a rounded rectangle grown by k·t at depth t.
+        let (l, c) = (depth, 4.0 - std::f64::consts::PI);
+        let pocket = w * h * l + k * (w + h) * l * l + 4.0 / 3.0 * k * k * l.powi(3) - c * (r * r * l + r * k * l * l + k * k * l.powi(3) / 3.0);
+        let v = volume(&mut s);
+        assert!((v - (318.0 * 212.0 * 20.0 - pocket)).abs() < 1e-3 * pocket, "{deg}°: {v}, a {pocket} mm³ pocket");
         assert_eq!(s.world_state().bodies.len(), 1);
     }
 }

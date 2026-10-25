@@ -114,6 +114,7 @@ pub(crate) fn icon_of(k: &FeatureKind) -> &'static str {
         FeatureKind::Remove { .. } => "delete",
         FeatureKind::BoundingSolid { .. } => "bounding_solid",
         FeatureKind::Pipe { .. } => "pipe",
+        FeatureKind::FrameMember { .. } => "frame_member",
         FeatureKind::Emboss { .. } => "emboss",
         FeatureKind::ReplaceFace { .. } => "replace_face",
         FeatureKind::Align { .. } => "align",
@@ -344,7 +345,7 @@ pub fn timeline(app: &mut SolveApp, ui: &mut egui::Ui) {
         app.shell.history = Some(rect);
         crate::scenario::publish_rect("history:card", rect);
         let mut child = ui.new_child(UiBuilder::new().id_salt("sc_timeline").max_rect(rect));
-        ui.painter().add(Container::new(ui.ctx(), Surface::Panel).frame(ui.ctx(), t.timeline, crate::frame::Side::Left).paint(rect));
+        Container::paint_frame(ui.painter(), Container::new(ui.ctx(), Surface::Panel).frame(ui.ctx(), t.timeline, crate::frame::Side::Left), rect);
         child.set_clip_rect(rect);
         timeline_contents(app, &mut child, true);
     } else {
@@ -355,6 +356,8 @@ pub fn timeline(app: &mut SolveApp, ui: &mut egui::Ui) {
             .show(ui, |ui| {
                 timeline_contents(app, ui, false);
             });
+        let frame = Container::new(ui.ctx(), Surface::Panel).edge_frame(t.timeline);
+        Container::paint_inset(ui.painter(), response.response.rect - frame.outer_margin, frame);
         app.shell.history = Some(response.response.rect);
         crate::scenario::publish_rect("history:strip", response.response.rect);
     }

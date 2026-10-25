@@ -68,6 +68,35 @@ with doc tests alongside. Arguments after `--` go to each test binary, for examp
 `cargo xtask test -- shell`. To run the test binaries sequentially instead, use
 `cargo test --workspace --profile ci`.
 
+## Test-level scheduling for full local CI
+
+Install [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/), then set
+`SOLIDCRAFT_TEST_RUNNER=nextest` when running `cargo xtask ci`. For example, on PowerShell:
+
+```powershell
+$env:SOLIDCRAFT_TEST_RUNNER = 'nextest'
+cargo xtask ci
+```
+
+This optional backend builds the workspace tests once, then schedules individual tests using
+the `local-ci` nextest profile, which inherits `ci`. The action matrix runs first, then the longest geometry
+cases start before the other costly tests, so the ordinary queue does not stall behind an
+all-slot reservation. It **ignores the default filter**,
+so the heavy tests below still run, does not stop after a test failure, and does not retry failures.
+Tests marked `#[ignore]` remain ignored, as with the ordinary full local CI.
+The default concurrency is at most four tests; `NEXTEST_TEST_THREADS` overrides it. The action
+matrix's child workers default to the smaller of that budget and the host CPU count;
+`ACTION_MATRIX_JOBS` explicitly overrides this worker count. The local profile reserves CPU
+slots for the matrix and keeps its scheduling changes separate from GitHub CI. On Windows,
+the `solidcraft-gpu` and app packages, plus UI offscreen/GPU tests, use a serial group. The Wasm check and doc tests still run alongside,
+and the web-offline gate still follows a successful native/Wasm/doc run.
+
+The backend keeps Cargo and binary metadata under `target/xtask-nextest/` and reuses it for the
+native run, freeing Cargo to run the side gates. Nextest prints each test's result and duration
+as it finishes. `SOLIDCRAFT_TEST_RUNNER=libtest` (or leaving it unset) retains the original runner;
+`cargo xtask test` and its Cargo/libtest argument forwarding are unchanged. Unknown runner names
+fail explicitly.
+
 ## CI sharding and heavy tests
 
 On GitHub, one job builds the tests into a [cargo-nextest](https://nexte.st/) archive and four

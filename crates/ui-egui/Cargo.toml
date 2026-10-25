@@ -31,12 +31,17 @@ zip = { workspace = true }
 # Rasterises the icon SVGs (assets/icons/ui/design/svg) at the size they are drawn.
 tiny-skia = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+# Ends an agent's process group with the system call (MIT; already in the tree through zip).
+nix = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 # Updates: the folder the Windows installer recorded, so an install outside Program Files is still
 # updated by its installer (MIT; already in the tree as a build dependency).
 winreg = "0.56"
 
 [dev-dependencies]
+solidcraft-engine = { workspace = true, features = ["bundled-render-library"] }
 # Parse the source guard structurally, including code after inline test modules.
 syn = { workspace = true, features = ["visit"] }
 # The catalog guard reads every UI source file as Rust tokens; already in the tree through

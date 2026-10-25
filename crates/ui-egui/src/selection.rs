@@ -17,6 +17,28 @@ pub(crate) fn same_item(a: &Sel, b: &Sel) -> bool {
     }
 }
 
+/// Two distinct point intents for the alignment command, without creating sketch points.
+pub(crate) fn alignment_points(selection: &[Sel]) -> Option<[serde_json::Value; 2]> {
+    let [a, b] = selection else { return None };
+    let point = |s: &Sel| match s {
+        Sel::SketchPoint { id } => Some(serde_json::json!(id)),
+        Sel::SketchMidpoint { id } => Some(serde_json::json!({"midpoint": id})),
+        _ => None,
+    };
+    let (a, b) = (point(a)?, point(b)?);
+    (a != b).then_some([a, b])
+}
+
+/// The current middle of a finite straight sketch edge.
+pub(crate) fn line_midpoint(sk: &solidcraft_engine::sketch::Sketch, line: usize) -> Option<solidcraft_engine::geom::Vec2> {
+    let curve = sk.curves.get(line)?;
+    if curve.infinite {
+        return None;
+    }
+    let solidcraft_engine::sketch::CurveKind::Line { a, b } = &curve.kind else { return None };
+    Some((sk.point(*a)? + sk.point(*b)?) * 0.5)
+}
+
 /// What a selection input accepts (bit set).
 pub type Accept = u16;
 pub const PROFILES: Accept = 1;
@@ -40,6 +62,9 @@ pub const FEATURES: Accept = 1024;
 pub const SKETCH_POINTS: Accept = 2048;
 /// The origin point, picked as a vertex of no body (in the viewport or the browser's Origin).
 pub const ORIGIN: Accept = 4096;
+/// Curves of any sketch, picked with their sketch (`ExternalSketchCurve`): curve ids are a
+/// sketch's own, so two sketches can both have a `w2` (frame member lines).
+pub const SKETCH_LINES: Accept = 8192;
 
 /// One selection input of a command dialog ("Profiles", "Edges", "Plane", ...).
 #[derive(Clone, Debug, PartialEq)]
@@ -78,6 +103,7 @@ impl SelInput {
             Hit::Plane { name, .. } if a & PLANES != 0 => Some(Sel::Plane { name: name.clone() }),
             Hit::Axis { name } if a & AXES != 0 => Some(Sel::Axis { name: name.clone() }),
             Hit::SketchCurve { id, straight: true, .. } if a & AXES != 0 => Some(Sel::SketchCurve { id: id.clone() }),
+            Hit::SketchCurve { sketch, id, .. } if a & SKETCH_LINES != 0 => Some(Sel::ExternalSketchCurve { sketch: *sketch, id: id.clone() }),
             Hit::SketchCurve { id, .. } if a & CURVES != 0 => Some(Sel::SketchCurve { id: id.clone() }),
             Hit::SketchPoint { id, .. } if a & SKETCH_POINTS != 0 => Some(Sel::SketchPoint { id: id.clone() }),
             Hit::SketchPoint { sketch, id, .. } if a & POINTS != 0 => Some(Sel::SketchPoint { id: format!("{sketch}:{id}") }),

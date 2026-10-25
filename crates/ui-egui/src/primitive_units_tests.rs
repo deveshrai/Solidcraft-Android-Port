@@ -232,3 +232,43 @@ fn editing_in_a_millimetre_design_keeps_the_sizes_as_they_are_kept() {
     assert!(h.app.session.doc.configuration_matches(), "an edit without a change keeps the configuration matched");
     assert_size(&mut h.app.session, [40.0, 30.0, 20.0]);
 }
+
+#[test]
+fn editing_a_coil_reopens_its_dialog_filled_in_and_ok_redefines_it() {
+    // #3862: Edit Feature on a coil opens the Coil dialog with every setting it was made with,
+    // not the command line; OK changes what was edited and keeps the rest.
+    use solidcraft_engine::doc::{CoilSection, FeatureKind};
+    let mut h = design("mm");
+    h.app
+        .run(
+            "solid.coil",
+            json!({"diameter": 40, "revolutions": 4, "pitch": 8, "section_size": 3, "section_position": "outside",
+                   "clockwise": true, "start_angle": "30 deg", "base": [5, 0, 0], "operation": "new"}),
+        )
+        .unwrap();
+    let id = h.app.session.doc.features.first().map(|f| f.id).unwrap();
+    h.app.edit_feature(id);
+    h.frames(3);
+    let shown = fields(&h);
+    let want = [("diameter", "40"), ("revolutions", "4"), ("pitch", "8"), ("section_size", "3")];
+    assert_eq!(shown, want.iter().map(|(k, v)| (*k, (*v).to_string())).collect::<Vec<_>>());
+    assert_shown(&h, &shown);
+    let d = h.app.dialog.as_mut().unwrap();
+    assert!(d.editing.is_some_and(|(edited, _)| edited == id));
+    assert_eq!((&d.extra["section_position"], &d.extra["clockwise"], &d.extra["start_angle"]), (&json!("outside"), &json!(true), &json!("30 deg")));
+    assert!(!d.extra.contains_key("section"), "a circular section is the default");
+    d.extra.insert("section".into(), json!("square"));
+    type_into(&mut h, "pitch", "10");
+    h.frames(2);
+    ok(&mut h);
+    assert_eq!(h.app.session.doc.features.len(), 1, "OK redefines the coil instead of adding one");
+    match h.app.session.doc.feature(id).map(|f| &f.kind) {
+        Some(FeatureKind::Coil { base, pitch, turns, section, position, clockwise, start_angle, .. }) => {
+            assert_eq!((pitch.to_string(), turns.to_string()), ("10".to_string(), "4".to_string()));
+            assert_eq!((*section, *position, *clockwise), (CoilSection::Square, 1, true));
+            assert_eq!(start_angle.as_ref().map(|a| a.to_string()).as_deref(), Some("30 deg"));
+            assert_eq!(base.iter().map(|e| e.to_string()).collect::<Vec<_>>(), ["5", "0", "0"]);
+        }
+        other => panic!("not a coil: {other:?}"),
+    }
+}

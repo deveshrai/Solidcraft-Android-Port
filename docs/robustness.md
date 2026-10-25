@@ -48,12 +48,30 @@ kernel, engine, doc, sketch and geom crates) run every seed but the slowest few 
 and the nightly run them all. Each seed is its own test
 (`seed_00` … `seed_95`), so the CI shards and their cores share them out.
 
-Explicit `platforms.<os>.seeds` records override only the listed seeds on that
-operating system; all other seeds keep the shared records and strict tolerances.
-The first four Windows records were independently reproduced on unmodified main
-`1e984c8e`; seed 94 was independently reproduced on unmodified main `c5992386`
-after the extrusion rebase. Both match the extrusion branch. Recording on a platform
-with such entries updates its changed seeds and preserves shared references.
+Reference selection uses the compilation target's operating system and environment.
+On Windows, `platforms.windows.seeds` contains the MSVC-verified records;
+`platforms.windows-gnu.seeds`, when present, contains GNU records. An override
+replaces the whole seed record. Seeds missing from the selected group use the shared
+record, never another Windows group's record. Non-Windows targets keep their existing
+OS-group selection and shared fallback. Unknown Windows environments compare with the
+shared records and refuse recording until an explicit policy is defined.
+All 96 seeds and the strict measurement and topology tolerances remain unchanged.
+
+The Windows records for seeds 1, 23 and 34 were independently reproduced on unmodified
+main `1e984c8e`; seed 94 was independently reproduced on unmodified main `c5992386`
+after the extrusion rebase. Both match the extrusion branch. Seed 13's was recorded on
+unmodified main `65e6d9da`; seed 23's was re-recorded after #1653. Seed 36's, recorded
+on main `79a843c9`, holds a failure: on Windows (and macOS) its last step leaves a body that fails the
+validity check, where Linux builds it ok (#3583). The record only makes a further change
+show; it does not accept the failure. Recording on a platform with such entries updates its
+changed seeds and preserves shared references. A platform record replaces the shared
+one whole, so a change that moves a seed with a platform record needs that seed checked
+on that platform too: seed 67's Windows record went stale this way after #2064 and
+#2247 and was removed once Windows built the shared record again.
+The Windows records were made with the MSVC target (`x86_64-pc-windows-msvc`) and all
+six were checked again on main `e9490093`. GNU builds (`x86_64-pc-windows-gnu`)
+use the shared records unless an explicit GNU override exists, so MSVC-only outcomes
+do not leak into GNU validation (#4104).
 
 To record an intended change, give the reason:
 
@@ -62,6 +80,10 @@ ROBUSTNESS_GOLDENS_BLESS="why it changed" cargo test --profile ci -p solidcraft-
 ```
 
 The changed seeds and the reason are added to the file's `notes`; say why in the pull request too.
+Recording on Windows always writes to the current environment's own group, even when
+that group does not exist yet. It preserves shared records and the other Windows
+environment's records. Non-Windows recording keeps its existing OS-group policy.
+Notes coalesce only when both the reason and destination match.
 
 The generator feeds the current geometry's bounds and face/edge picks back into later
 commands. The same RNG seed can therefore generate different command coordinates or picks

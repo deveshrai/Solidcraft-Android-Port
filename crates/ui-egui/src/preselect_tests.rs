@@ -270,7 +270,7 @@ fn path_plane_click_retains_source_and_previews_then_edits_in_place() {
     let duplicate = h.app.run("sketch.line3d", json!({"points":[[-30,0,0],[-20,0,0]]})).unwrap()["curves"][0].as_str().unwrap().to_string();
     assert_eq!(wire, duplicate, "exercise duplicate curve ids in different sketches");
     h.app.run("sketch.finish", json!({})).unwrap();
-    h.app.ui.show_origin = false;
+    h.app.set_origin_shown(false);
     h.settle();
     h.call("ui.view", json!({"view":"home"}));
     h.call("ui.view", json!({"view":"fit"}));
@@ -404,7 +404,7 @@ fn cylinder_emboss_target_face_and_edit_keep_the_anchored_operation() {
 #[test]
 fn cylinder_emboss_edit_retains_second_source_and_author_paths_and_all_profiles() {
     let mut h = crate::scenario::Harness::new();
-    let source = h.app.run("component.create", json!({"name":"Source"})).unwrap()["component"].as_u64().unwrap();
+    let source = h.app.run("component.create", json!({"name":"Source","grounded":false})).unwrap()["component"].as_u64().unwrap();
     h.app.run("solid.cylinder", json!({"radius":10,"height":20,"body_name":"Sleeve"})).unwrap();
     h.app.run("occurrence.move", json!({"occurrence":"Source:1","axis":[0,0,1],"angle":"90 deg","translate":[50,0,0]})).unwrap();
     let source_second = h.app.run("occurrence.copy", json!({"component":source,"translate":[80,0,0]})).unwrap()["occurrence"].as_u64().unwrap();
@@ -499,7 +499,11 @@ fn cylinder_emboss_edit_retains_second_source_and_author_paths_and_all_profiles(
 fn cylinder_emboss_profile_guide_uses_target_or_unique_foreign_sketch_frame() {
     for target_owned in [true, false] {
         let mut h = crate::scenario::Harness::new();
-        let source = if target_owned { h.app.run("component.create", json!({"name":"Source"})).unwrap()["component"].as_u64().unwrap() } else { 0 };
+        let source = if target_owned {
+            h.app.run("component.create", json!({"name":"Source","grounded":false})).unwrap()["component"].as_u64().unwrap()
+        } else {
+            0
+        };
         h.app.run("solid.cylinder", json!({"radius":10,"height":20,"body_name":"Sleeve"})).unwrap();
         let (profile_owner, expected, target, face) = if target_owned {
             h.app.run("occurrence.move", json!({"occurrence":"Source:1","axis":[0,0,1],"angle":"90 deg","translate":[50,0,0]})).unwrap();
@@ -507,7 +511,7 @@ fn cylinder_emboss_profile_guide_uses_target_or_unique_foreign_sketch_frame() {
             let target = h.app.session.occurrence_bodies(&[second], false).unwrap().remove(0);
             (source, Vec3::new(120.0, 0.0, 0.0), target, json!([120, 0, 7.5]))
         } else {
-            let profile = h.app.run("component.create", json!({"name":"Profile"})).unwrap()["component"].as_u64().unwrap();
+            let profile = h.app.run("component.create", json!({"name":"Profile","grounded":false})).unwrap()["component"].as_u64().unwrap();
             h.app.run("occurrence.move", json!({"occurrence":"Profile:1","axis":[0,0,1],"angle":"90 deg","translate":[50,20,0]})).unwrap();
             (profile, Vec3::new(0.0, 10.0, 0.0), "Sleeve".to_string(), json!([0, 10, 7.5]))
         };
@@ -733,6 +737,56 @@ fn face_then_extrude_press_pulls_it() {
     let d = start(&mut app, vec![top], "solid.extrude");
     let cmds = apply_commands(&app, &d).unwrap();
     assert!(cmds[0].1.get("face").is_some());
+}
+
+/// Press Pull on a hole's wall offsets it, rather than refusing it as Extrude does (#2873).
+#[test]
+fn curved_face_then_press_pull_offsets_it() {
+    let mut app = app_with(json!([
+        {"command": "solid.box", "params": {"length": 40, "width": 30, "height": 20}},
+        {"command": "solid.cylinder", "params": {"radius": 5, "height": 20, "base": [20, 15, 0], "operation": "cut"}}
+    ]));
+    let st = app.session.model.state();
+    let wall = st.body("Body1").unwrap().body.faces(0.01).unwrap().into_iter().find(|f| f.plane_normal.is_none()).unwrap().index;
+    drop(st);
+    let d = start(&mut app, vec![Sel::Face { body: "Body1".into(), index: wall, point: Vec3::new(25.0, 15.0, 10.0) }], "solid.press_pull");
+    assert!(matches!(d.kind, Kind::OffsetFaces { .. }));
+    let cmds = apply_commands(&app, &d).unwrap();
+    assert_eq!(cmds[0].0, "solid.offset_face");
+}
+
+/// Press Pull with nothing selected: a click on a hole's wall reopens it as Offset Face, a click
+/// on the top keeps the extrude (#2873).
+#[test]
+fn press_pull_then_curved_face_offsets_it() {
+    let script = json!([
+        {"command": "solid.box", "params": {"length": 40, "width": 30, "height": 20}},
+        {"command": "solid.cylinder", "params": {"radius": 5, "height": 20, "base": [20, 15, 0], "operation": "cut"}}
+    ]);
+    let mut app = app_with(script.clone());
+    let st = app.session.model.state();
+    let wall = st.body("Body1").unwrap().body.faces(0.01).unwrap().into_iter().find(|f| f.plane_normal.is_none()).unwrap().index;
+    drop(st);
+    app.start("solid.press_pull");
+    assert!(matches!(app.dialog.as_ref().unwrap().kind, Kind::Extrude { .. }));
+    let p = Vec3::new(25.0, 15.0, 10.0);
+    let hit = crate::viewport::Hit::Face { body: "Body1".into(), index: wall, point: p };
+    crate::viewport::dialog_pick(&mut app, &hit, Sel::Face { body: "Body1".into(), index: wall, point: p });
+    let d = app.dialog.clone().unwrap();
+    assert!(matches!(d.kind, Kind::OffsetFaces { .. }));
+    // Both halves of the hole's wall.
+    assert_eq!(d.inputs[0].items.len(), 2);
+
+    let mut app = app_with(script);
+    app.start("solid.press_pull");
+    let top = face(&app, Vec3::new(20.0, 15.0, 20.0));
+    let hit = crate::viewport::Hit::Face {
+        body: "Body1".into(),
+        index: if let Sel::Face { index, .. } = &top { *index } else { 0 },
+        point: Vec3::new(5.0, 5.0, 20.0),
+    };
+    crate::viewport::dialog_pick(&mut app, &hit, top);
+    assert!(matches!(app.dialog.as_ref().unwrap().kind, Kind::Extrude { .. }));
 }
 
 #[test]
@@ -1477,8 +1531,9 @@ fn newer_options_reach_their_commands() {
     app.dialog = None;
     let top = face(&app, Vec3::new(20.0, 15.0, 20.0));
     let mut d = start(&mut app, vec![top], "solid.hole");
-    d.inputs.push(crate::selection::SelInput::new("To Object", crate::selection::FACES | crate::selection::VERTICES, false));
-    d.inputs[1].items = vec![face(&app, Vec3::new(20.0, 15.0, 0.0))];
+    let mut to = crate::selection::SelInput::new("To Object", crate::selection::FACES | crate::selection::VERTICES, false);
+    to.items = vec![face(&app, Vec3::new(20.0, 15.0, 0.0))];
+    d.inputs.push(to);
     let p = apply_commands(&app, &d).unwrap().remove(0).1;
     assert!(p["to"].is_array() && p.get("depth").is_none(), "{p}");
 }

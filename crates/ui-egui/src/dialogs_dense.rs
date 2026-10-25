@@ -75,6 +75,7 @@ pub(super) fn command(kind: &Kind) -> Option<&'static str> {
             crate::dialogs_sheet::Sm::FlatPattern { .. } => Some("sheet.flat_pattern"),
             _ => k.simple_metadata().map(|(command, _)| command),
         },
+        Kind::Frame(_) => Some("frame.member"),
         Kind::Plastic(k) => match k {
             crate::dialogs_plastic::Pl::SnapFit { .. } => Some("plastic.snap_fit"),
             crate::dialogs_plastic::Pl::Assign { .. } => Some("plastic.assign_rule"),
@@ -104,6 +105,16 @@ const FILLET_TYPES: [(&str, &str); 5] = [
     ("Curvature continuous (G2)", "curvature"),
     ("Spline", "spline"),
 ];
+
+/// The most instances a solid pattern makes in one direction (the document's own limit).
+const MAX_PATTERN_INSTANCES: i64 = 1000;
+
+/// A solid pattern's quantity row, with step arrows from 1 to `MAX_PATTERN_INSTANCES`. The
+/// count goes to the command as typed, so it is evaluated as the document evaluates it.
+fn quantity_row(ui: &mut egui::Ui, doc: &solidcraft_engine::doc::Document, label: &str, value: &mut String) -> bool {
+    let eval = |text: &str| doc.eval(text.trim(), solidcraft_engine::doc::expr::Kind::Unitless).ok();
+    ui_kit::count_row(ui, label, value, &ui_kit::Count { min: 1, max: MAX_PATTERN_INSTANCES, eval: &eval })
+}
 
 fn fillet_type(extra: &serde_json::Map<String, Value>) -> usize {
     let value = extra.get("type").and_then(Value::as_str).unwrap_or("constant");
@@ -172,13 +183,14 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
         ui_kit::text(ui, tr(key), ui_kit::Text::Hint("manage"));
     }
     placement_row(d, ui);
-    input_rows(d, ui, &app.session);
+    if matches!(&d.kind, Kind::Hole { opts, .. } if !opts.multiple) {
+        // Each reference edge with its distance (#37).
+        enter |= crate::hole_refs::input_rows(d, ui, &app.session);
+    } else {
+        input_rows(d, ui, &app.session);
+    }
     match &mut d.kind {
-        Kind::Material { index } => {
-            let names = app.session.doc.material_names();
-            let names: Vec<_> = names.iter().map(String::as_str).collect();
-            choice_row(ui, "Material", "mat", index, &names);
-        }
+        Kind::Material { index, editor } => crate::material_editor::rows(app, ui, index, editor),
         Kind::Appearance(k) => enter |= crate::dialogs_appearance::rows(app, ui, k, &mut d.inputs),
         Kind::Motion(k) => enter |= crate::dialogs_motion::rows(app, ui, k, &mut d.inputs),
         Kind::Part(k) => enter |= crate::dialogs_parts::rows(app, ui, k, &d.inputs),
@@ -197,7 +209,7 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
                 }
             }
         }
-        Kind::SketchModify(k) => enter |= crate::sketch_modify_ui::rows(ui, k),
+        Kind::SketchModify(k) => enter |= crate::sketch_modify_ui::rows(ui, k, &app.session.doc),
         Kind::Text(k) => enter |= crate::sketch_text::rows(ui, k, &mut d.inputs, &mut d.active),
         Kind::TextMove(k) => enter |= crate::sketch_text_move::rows(ui, k),
         Kind::EditParam { name, expr } => {
@@ -468,23 +480,23 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
             }
         }
         Kind::PatternRect { count, spacing, count2, spacing2 } => {
-            for (l, v) in [("Quantity", count), ("Spacing", spacing), ("Quantity 2", count2), ("Spacing 2", spacing2)] {
-                enter |= expr_row(ui, l, v);
-            }
+            enter |= quantity_row(ui, &app.session.doc, "Quantity", count);
+            enter |= expr_row(ui, "Spacing", spacing);
+            enter |= quantity_row(ui, &app.session.doc, "Quantity 2", count2);
+            enter |= expr_row(ui, "Spacing 2", spacing2);
             if d.inputs.first().is_some_and(|i| i.accept == selection::FEATURES) {
                 feature_pattern_alignment_row(ui, &mut d.extra, 0);
                 feature_pattern_alignment_row(ui, &mut d.extra, 1);
             }
         }
         Kind::PatternCirc { count, angle } => {
-            for (l, v) in [("Quantity", count), ("Total angle", angle)] {
-                enter |= expr_row(ui, l, v);
-            }
+            enter |= quantity_row(ui, &app.session.doc, "Quantity", count);
+            enter |= expr_row(ui, "Total angle", angle);
             if d.inputs.first().is_some_and(|i| i.accept == selection::FEATURES) {
                 feature_pattern_alignment_row(ui, &mut d.extra, 0);
             }
         }
-        Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts } => {
+        Kind::Hole { kind, opts, .. } => {
             form_row(ui, "Extents", |ui| {
                 let cur = if to_object_on(&d.inputs) { 1 } else { usize::from(opts.all) * 2 };
                 let mut ext = cur;
@@ -513,30 +525,18 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
             if opts.tapped {
                 enter |= crate::dialogs_thread::hole_rows(ui, &app.session.doc, &mut opts.thread, &mut opts.custom_thread);
             }
-            if *kind == 0 {
+            // Through all, the tip lies past the part.
+            if *kind == 0 && !opts.all {
                 form_row(ui, "Drill Point", |ui| {
                     let mut tip = usize::from(opts.angled);
                     combo(ui, "hole_tip", &["Flat", "Angle"], &mut tip);
                     opts.angled = tip == 1;
                 });
             }
-            if !opts.all {
-                enter |= expr_row(ui, "Depth", depth);
-            }
-            if *kind == 0 && opts.angled {
-                enter |= expr_row(ui, "Tip Angle", &mut opts.tip_angle);
-            }
-            if !opts.tapped {
-                enter |= expr_row(ui, "Diameter", diameter);
-            }
-            if *kind == 1 {
-                enter |= expr_row(ui, "Counterbore Ø", cb_diameter);
-                enter |= expr_row(ui, "Counterbore depth", cb_depth);
-            }
-            if *kind == 2 {
-                enter |= expr_row(ui, "Countersink Ø", cs_diameter);
-                enter |= expr_row(ui, "Countersink angle", cs_angle);
-            }
+            // The section through the hole, each size beside its dimension (#2171).
+            let to_object = to_object_on(&d.inputs);
+            let doc = &app.session.doc;
+            enter |= crate::dialogs_hole::rows(ui, &mut d.kind, to_object, &|e, k| doc.eval(e, k).ok());
         }
         _ => enter |= additional_rows(app, d, ui),
     }
@@ -568,6 +568,40 @@ fn extra_options(ui: &mut egui::Ui, id: &str, extra: &mut serde_json::Map<String
             extra.insert((*key).into(), json!(value));
         }
     }
+}
+
+/// The coil's section, where the section sits on the diameter, the way it turns and where it
+/// starts (#3862). A default stays out of the parameters, so OK on an unchanged edit keeps the coil.
+fn coil_rows(ui: &mut egui::Ui, extra: &mut serde_json::Map<String, Value>) -> bool {
+    const POSITIONS: [(&str, &str); 3] = [("Inside", "inside"), ("Center", "center"), ("Outside", "outside")];
+    form_row(ui, "Section", |ui| extra_segments(ui, extra, "section", &[("Circular", "circular"), ("Square", "square")]));
+    form_row(ui, "Section position", |ui| {
+        let current =
+            extra.get("section_position").and_then(Value::as_str).and_then(|v| POSITIONS.iter().position(|(_, key)| *key == v)).unwrap_or(1);
+        let mut selected = current;
+        if ui_kit::segmented(ui, &mut selected, &POSITIONS.map(|(label, _)| label), Default::default()) && selected != current {
+            match POSITIONS.get(selected) {
+                Some((_, value)) if *value != "center" => {
+                    extra.insert("section_position".into(), json!(value));
+                }
+                _ => {
+                    extra.remove("section_position");
+                }
+            }
+        }
+    });
+    let mut angle = extra.get("start_angle").and_then(Value::as_str).unwrap_or_default().to_string();
+    let before = angle.clone();
+    let enter = hint_row(ui, "Start angle", &mut angle, "0 deg");
+    if angle != before {
+        if angle.trim().is_empty() {
+            extra.remove("start_angle");
+        } else {
+            extra.insert("start_angle".into(), json!(angle));
+        }
+    }
+    extra_options(ui, "coil_options", extra, &[("Clockwise", "clockwise")]);
+    enter
 }
 
 fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> bool {
@@ -652,7 +686,7 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
         Kind::Construct { t: Some(t), .. } => {
             form_row(ui, "Position (0 to 1)", |ui| enter |= field(ui, t));
         }
-        Kind::Split | Kind::ReplaceFace | Kind::Remove | Kind::Midplane | Kind::Construct { t: None, .. } => {}
+        Kind::Split | Kind::ReplaceFace | Kind::Remove | Kind::Midplane | Kind::ChatContext | Kind::Construct { t: None, .. } => {}
         Kind::Rib { thickness, depth, flip, normal, .. } => {
             form_row(ui, "Direction", |ui| {
                 let mut i = usize::from(*normal);
@@ -700,9 +734,8 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
             extra_options(ui, "boundary_options", &mut d.extra, &[("Remove Tools", "remove_tools")]);
         }
         Kind::PathPattern { count, spacing } => {
-            for (l, v) in [("Quantity", count), ("Spacing", spacing)] {
-                enter |= expr_row(ui, l, v);
-            }
+            enter |= quantity_row(ui, &app.session.doc, "Quantity", count);
+            enter |= expr_row(ui, "Spacing", spacing);
         }
         Kind::Pipe { diameter, wall } => {
             enter |= expr_row(ui, "Diameter", diameter);
@@ -757,9 +790,12 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
             enter |= crate::dialogs_move::rows(ui, k);
             extra_options(ui, "move_options", &mut d.extra, &[("Create Copy", "copy")]);
         }
-        Kind::Primitive { fields, operation, at, .. } => {
+        Kind::Primitive { cmd, fields, operation, at } => {
             for (k, v) in fields.iter_mut() {
                 enter |= expr_row(ui, k, v);
+            }
+            if *cmd == "solid.coil" {
+                enter |= coil_rows(ui, &mut d.extra);
             }
             if let Some((p, _)) = *at {
                 form_row(ui, "Position", |ui| {
@@ -791,11 +827,15 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
         Kind::Surface(k) => enter |= crate::dialogs_surface::rows(ui, k),
         Kind::Sheet(k) => enter |= crate::dialogs_sheet::rows(app, ui, k, &mut d.inputs),
         Kind::Plastic(k) => enter |= crate::dialogs_plastic::rows(app, ui, k, &d.inputs),
+        Kind::Frame(k) => enter |= crate::dialogs_frame::rows(app, ui, k, &d.inputs),
         Kind::Assembly(k) => enter |= crate::dialogs_assembly::rows(app, ui, k, &mut d.inputs, &mut d.active),
         Kind::Measure { result, show, .. } => measure_rows(app, ui, result.as_ref(), show),
         Kind::Section { offset, flip, hatch } => {
             enter |= expr_row(ui, "Distance", offset);
             ui_kit::options(ui, "feature_options", &mut [("Flip", flip), ("Hatch", hatch)]);
+            if section_turns_off(&app.session, &d.inputs) {
+                ui_kit::text(ui, tr("section.off_hint"), ui_kit::Text::Hint("section_off"));
+            }
         }
         Kind::Rename { name, .. } => {
             form_row(ui, "Name", |ui| {
@@ -876,7 +916,21 @@ fn measure_rows(app: &SolveApp, ui: &mut egui::Ui, r: Option<&Value>, show: &mut
                 }
             }
         } else {
-            value(ui, crate::i18n::tr_label("Distance"), &crate::prefs::show_mm(app, d, 1));
+            let text = crate::prefs::show_mm(app, d, 1);
+            form_row(ui, crate::i18n::tr_label("Distance"), |ui| {
+                let size = crate::theme::Tokens::get().form_close_size;
+                // The value keeps the room left of the button, so the button stays inside the row.
+                ui.scope(|ui| {
+                    ui.set_max_width((ui.available_width() - size).max(0.0));
+                    ui_kit::text(ui, &text, ui_kit::Text::Cell);
+                });
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+                let copy = ui_kit::icon_button_at(ui, rect, "copy", crate::i18n::tr_label("Copy"));
+                crate::scenario::publish_handle("measure:copy:distance", copy.rect.center());
+                if copy.clicked() {
+                    ui.ctx().copy_text(text.clone());
+                }
+            });
         }
         let delta = b - a;
         for (l, v) in [("ΔX", delta.x), ("ΔY", delta.y), ("ΔZ", delta.z)] {

@@ -140,6 +140,9 @@ pub fn page(app: &mut SolveApp, ui: &mut egui::Ui) {
             let response = ui_kit::checkbox(ui, tr("ai.prefs.background_commands"), &mut app.preferences.agent_off_thread)
                 .on_hover_text(tr("ui.agent_off_thread_note"));
             crate::scenario::publish_handle("prefs:agent_off_thread", response.rect.center());
+            let response = ui_kit::checkbox(ui, tr("ai.prefs.allow_control"), &mut app.preferences.agent_control)
+                .on_hover_text(tr("ai.prefs.allow_control_note"));
+            crate::scenario::publish_handle("prefs:agent_control", response.rect.center());
         }
         if cfg!(target_arch = "wasm32") {
             ui_kit::text(ui, tr("ui.agent_chat_desktop_only"), ui_kit::Text::Hint("desktop"));

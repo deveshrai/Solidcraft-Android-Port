@@ -85,6 +85,24 @@ fn wrap(r: Result<Value, String>) -> Outcome {
     }
 }
 
+/// The design's own Sketches folder (`Visibility::hidden_folders`), which `showSketches` sets.
+const SKETCHES_FOLDER: &str = "c0/sketches";
+
+/// `UiState` as `ui.inspect` and `ui.set` report it, with the browser's view of the design
+/// (kept in the session) under the names the UI state used to give it.
+fn ui_state(app: &SolveApp) -> Value {
+    let mut u = serde_json::to_value(&app.ui).unwrap_or_default();
+    let v = &app.session.visibility;
+    if let Some(o) = u.as_object_mut() {
+        o.insert("showOrigin".into(), json!(app.origin_shown()));
+        o.insert("showSketches".into(), json!(!app.session.folder_hidden(SKETCHES_FOLDER)));
+        o.insert("hiddenProfiles".into(), json!(v.hidden_profiles));
+        o.insert("shownDims".into(), json!(v.shown_dimensions));
+        o.insert("lockedBodies".into(), json!(v.locked_bodies));
+    }
+    u
+}
+
 fn key_from(name: &str) -> Option<egui::Key> {
     egui::Key::from_name(name).or(match name.to_ascii_lowercase().as_str() {
         "enter" | "return" => Some(egui::Key::Enter),
@@ -101,7 +119,16 @@ fn key_from(name: &str) -> Option<egui::Key> {
 fn execute(app: &mut SolveApp, id: &str, params: Value) -> Result<Value, String> {
     let r = app.run(id, params);
     if r.is_ok()
-        && !matches!(id, "view.layout" | "view.navigate" | "view.ambient_occlusion" | "view.graphics_preset" | "view.history_layout")
+        && !matches!(
+            id,
+            "view.layout"
+                | "view.navigate"
+                | "view.ambient_occlusion"
+                | "view.graphics_preset"
+                | "view.history_layout"
+                | "browser.expand_all"
+                | "browser.collapse_all"
+        )
         && app.session.active_sketch.is_none()
         && app.session.world_state().bodies.len() == 1
         && app.session.undo.len() <= 2
@@ -304,7 +331,8 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
         "document.inspect" => wrap(app.session.execute("document.inspect", p).map_err(|e| e.to_string())),
         "ui.messages" => ok(crate::messages::control(app, p)),
         "ui.inspect" => ok(json!({
-            "ui": serde_json::to_value(&app.ui).unwrap_or_default(),
+            "render": crate::render_workspace::inspect_state(app),
+            "ui": ui_state(app),
             "visibility": app.session.visibility,
             "viewport": app.viewport.rect.map(|r| json!([r.left(), r.top(), r.width(), r.height()])),
             "camera": app.cam,
@@ -353,26 +381,46 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
         }
         "ui.set" => {
             // What is hidden lives in the session (`browser.visibility`); `ui.set` still sets it.
-            const VIS: [(&str, &str); 6] = [
+            const VIS: [(&str, &str); 9] = [
                 ("hiddenBodies", "hidden_bodies"),
                 ("hiddenOrigin", "hidden_origin"),
                 ("hiddenSketches", "hidden_sketches"),
                 ("shownSketches", "shown_sketches"),
                 ("hiddenJoints", "hidden_joints"),
+                ("hiddenProfiles", "hidden_profiles"),
+                ("shownDims", "shown_dimensions"),
+                ("lockedBodies", "locked_bodies"),
                 ("hiddenFolders", "hidden_folders"),
             ];
             let mut cur = serde_json::to_value(&app.ui).unwrap_or(json!({}));
             let mut vis = serde_json::to_value(&app.session.visibility).unwrap_or(json!({}));
+            let mut sketches = None;
             if let (Some(o), Some(vo), Some(src)) = (cur.as_object_mut(), vis.as_object_mut(), p.as_object()) {
                 for (k, v) in src {
-                    match VIS.iter().find(|(camel, _)| camel == k) {
-                        Some((_, snake)) => vo.insert(snake.to_string(), v.clone()),
-                        None => o.insert(k.clone(), v.clone()),
+                    let shown = |v: &Value| v.as_bool().map(|b| json!(!b)).unwrap_or_else(|| v.clone());
+                    match (VIS.iter().find(|(camel, _)| camel == k), k.as_str()) {
+                        (Some((_, snake)), _) => vo.insert(snake.to_string(), v.clone()),
+                        (None, "showOrigin") => vo.insert("origin_hidden".into(), shown(v)),
+                        (None, "showSketches") => {
+                            sketches = Some(v.as_bool().ok_or_else(|| "`showSketches` must be true or false".to_string()));
+                            None
+                        }
+                        _ => o.insert(k.clone(), v.clone()),
                     };
                 }
             }
+            let sketches = match sketches.transpose() {
+                Ok(s) => s,
+                Err(e) => return err(e),
+            };
             match (serde_json::from_value::<crate::UiState>(cur), serde_json::from_value::<solidcraft_engine::Visibility>(vis)) {
-                (Ok(mut u), Ok(v)) => {
+                (Ok(mut u), Ok(mut v)) => {
+                    if let Some(shown) = sketches {
+                        v.hidden_folders.retain(|k| k != SKETCHES_FOLDER);
+                        if !shown {
+                            v.hidden_folders.push(SKETCHES_FOLDER.to_string());
+                        }
+                    }
                     if (u.tab == "RENDER") != crate::render_workspace::active(app)
                         && let Err(e) = crate::render_workspace::enter(app, u.tab == "RENDER")
                     {
@@ -381,7 +429,7 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
                     u.ribbon_context = app.ui.ribbon_context.clone();
                     app.ui = u;
                     app.session.visibility = v;
-                    ok(serde_json::to_value(&app.ui).unwrap_or_default())
+                    ok(ui_state(app))
                 }
                 (Err(e), _) | (_, Err(e)) => err(e),
             }
@@ -675,9 +723,26 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
         }
         "ui.key" => {
             let Some(key) = s("key").and_then(key_from) else { return err("unknown key") };
-            let modifiers = egui::Modifiers { shift: b("shift"), command: b("cmd"), ctrl: b("cmd") || b("ctrl"), ..Default::default() };
-            app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
-            app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+            // Preserve the control channel's legacy primary-modifier alias. An explicit
+            // ctrl flag opts into physical Control/Command state (ctrl:false for Cmd alone).
+            let explicit_ctrl = p.get("ctrl").is_some();
+            let ctrl = if explicit_ctrl { b("ctrl") } else { b("cmd") };
+            let modifiers = egui::Modifiers { shift: b("shift"), alt: b("alt"), ctrl, command: b("cmd") || ctrl, mac_cmd: b("cmd") && explicit_ctrl };
+            let pressed = match p.get("pressed") {
+                None => None,
+                Some(Value::Bool(pressed)) => Some(*pressed),
+                Some(_) => return err("pressed must be a boolean"),
+            };
+            app.synthetic.push(egui::Event::ModifiersChanged(modifiers));
+            if pressed != Some(false) {
+                app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+            }
+            if pressed != Some(true) {
+                app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+            }
+            if pressed.is_none() {
+                app.synthetic.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+            }
             ok(Value::Null)
         }
         "ui.text" => {
@@ -1136,12 +1201,12 @@ mod tests {
         assert!(shot(&mut app, json!({})) == no_grid);
         assert!(shot(&mut app, json!({"grid": true})) == all);
         // With the Origin off too it has neither; `axes: true` puts the axes back.
-        app.ui.show_origin = false;
+        app.set_origin_shown(false);
         assert!(shot(&mut app, json!({})) == bare);
         assert!(shot(&mut app, json!({"axes": true})) == no_grid);
         // The Origin and the Grid back on: the first picture again.
         app.ui.show_grid = true;
-        app.ui.show_origin = true;
+        app.set_origin_shown(true);
         assert!(shot(&mut app, json!({})) == all);
         let _ = std::fs::remove_dir_all(&dir);
     }

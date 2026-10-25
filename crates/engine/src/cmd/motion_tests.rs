@@ -62,7 +62,7 @@ enum JoinSelection {
 fn joined_motion_part(authoring: PartAuthoring, selection: JoinSelection) -> Session {
     let mut s = Session::default();
     if matches!(authoring, PartAuthoring::InComponent) {
-        run(&mut s, "component.create", json!({"name":"Rotor"}));
+        run(&mut s, "component.create", json!({"name":"Rotor","grounded":false}));
     }
     run(&mut s, "solid.box", json!({"length":10,"width":8,"height":6,"body_name":"Part","name":"Base"}));
     run(&mut s, "select.set", json!({"items":[]}));
@@ -75,12 +75,12 @@ fn joined_motion_part(authoring: PartAuthoring, selection: JoinSelection) -> Ses
     run(&mut s, "solid.box", p);
     if !matches!(authoring, PartAuthoring::InComponent) {
         let parent = if matches!(authoring, PartAuthoring::RootThenNestedTransfer) {
-            run(&mut s, "component.create", json!({"name":"Group","activate":false}));
+            run(&mut s, "component.create", json!({"name":"Group","activate":false,"grounded":false}));
             "Group"
         } else {
             "root"
         };
-        run(&mut s, "component.create", json!({"name":"Rotor","parent":parent,"activate":false}));
+        run(&mut s, "component.create", json!({"name":"Rotor","parent":parent,"activate":false,"grounded":false}));
         run(&mut s, "component.move_bodies", json!({"bodies":["Part"],"component":"Rotor"}));
     }
     let driven = if matches!(authoring, PartAuthoring::RootThenNestedTransfer) { "Group" } else { "Rotor" };
@@ -95,7 +95,7 @@ fn attach_motion_rotor(s: &mut Session, component: &str, joint: &str) {
 
 fn unrelated_motion_rotor(s: &mut Session) {
     run(s, "component.activate", json!({"component":"root"}));
-    run(s, "component.create", json!({"name":"Unrelated"}));
+    run(s, "component.create", json!({"name":"Unrelated","grounded":false}));
     run(s, "solid.box", json!({"length":2,"width":2,"height":2,"corner":[100,100,100],"body_name":"Remote"}));
     attach_motion_rotor(s, "Unrelated", "Other turn");
 }
@@ -179,7 +179,7 @@ fn joint_pose_joined_cylinders_keep_mesh_cells_at_unseen_angles() {
         "solid.cylinder",
         json!({"radius":2.8,"height":30,"base":[0,36,0],"axis":[0.981627183447664,0,0.1908089953765448],"operation":"join","targets":["Crank"]}),
     );
-    run(&mut s, "component.create", json!({"name":"Crank","activate":false}));
+    run(&mut s, "component.create", json!({"name":"Crank","activate":false,"grounded":false}));
     run(&mut s, "component.move_bodies", json!({"bodies":["Crank"],"component":"Crank"}));
     run(&mut s, "joint.as_built", json!({"type":"revolute","name":"Crank","a":0,"b":"Crank","at":{"occurrence":0,"point":[0,0,0],"z":[0,1,0]}}));
     assert_joint_only_moves(&mut s, "Crank");
@@ -258,7 +258,7 @@ fn joint_pose_combine_ignores_unrelated_motion() {
 /// with the target preserves that volume and must preserve the computed definition too.
 fn cross_component_motion_cut(move_tool_with_target: bool, kind: &str) -> Session {
     let mut s = Session::default();
-    run(&mut s, "component.create", json!({"name":"MovingTarget"}));
+    run(&mut s, "component.create", json!({"name":"MovingTarget","grounded":false}));
     run(&mut s, "solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Target"}));
     run(&mut s, "component.activate", json!({"component":"root"}));
     if move_tool_with_target {
@@ -280,7 +280,7 @@ fn motion_target_volume(s: &Session) -> f64 {
 
 fn motion_combine_cut(kind: &str, together: bool) -> Session {
     let mut s = Session::default();
-    run(&mut s, "component.create", json!({"name":"MovingTarget"}));
+    run(&mut s, "component.create", json!({"name":"MovingTarget","grounded":false}));
     run(&mut s, "solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Target"}));
     run(&mut s, "component.activate", json!({"component":"root"}));
     run(&mut s, "component.create", json!({"name":"Tool"}));
@@ -440,7 +440,7 @@ fn joint_pose_undo_and_redo_match_fresh_geometry() {
 fn joint_pose_geometry_edit_invalidates_the_warm_definition_mesh() {
     let mut s = Session::default();
     run(&mut s, "parameters.add", json!({"name":"span","expression":"10 mm"}));
-    run(&mut s, "component.create", json!({"name":"Rotor"}));
+    run(&mut s, "component.create", json!({"name":"Rotor","grounded":false}));
     run(&mut s, "solid.box", json!({"length":"span","width":8,"height":6,"body_name":"Part"}));
     attach_motion_rotor(&mut s, "Rotor", "Turn");
     run(&mut s, "joint.drive", json!({"joint":"Turn","value":5}));
@@ -563,7 +563,7 @@ fn contact_check_finds_plates_crossing_face_to_face() {
 fn contact_uses_preserved_body_placements_after_component_reassignment() {
     let mut s = Session::default();
     run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "Transferred"}));
-    let component = run(&mut s, "component.create", json!({"name": "Carrier"}));
+    let component = run(&mut s, "component.create", json!({"name": "Carrier", "grounded": false}));
     run(&mut s, "occurrence.move", json!({"occurrence": component["occurrence"], "translate": [100, 0, 0]}));
     run(&mut s, "component.move_bodies", json!({"bodies": ["Transferred"], "component": component["component"]}));
     run(&mut s, "component.activate", json!({"component": "root"}));
@@ -581,7 +581,7 @@ fn contact_uses_preserved_body_placements_after_component_reassignment() {
 fn automatic_explode_centres_follow_reassigned_bodies() {
     let mut s = Session::default();
     run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "Transferred"}));
-    let component = run(&mut s, "component.create", json!({"name": "Carrier"}));
+    let component = run(&mut s, "component.create", json!({"name": "Carrier", "grounded": false}));
     run(&mut s, "occurrence.move", json!({"occurrence": component["occurrence"], "translate": [100, 0, 0]}));
     run(&mut s, "component.move_bodies", json!({"bodies": ["Transferred"], "component": component["component"]}));
     run(&mut s, "component.activate", json!({"component": "root"}));
@@ -825,9 +825,77 @@ fn an_animation_is_drawn_from_the_camera_given() {
 }
 
 #[test]
+fn an_exploded_view_animates_apart_and_back_without_moving_the_design() {
+    let mut s = rail();
+    run(&mut s, "explode.create", json!({"name": "Apart", "scale": 1}));
+    // Another view shown: the animation starts from the assembled placement all the same.
+    run(&mut s, "explode.create", json!({"name": "Up", "moves": [{"occurrence": "B", "translate": [0, 0, 50]}]}));
+    run(&mut s, "explode.show", json!({"view": "Up"}));
+    s.mark_saved();
+    let (doc, pending, undo) = (s.doc.clone(), s.pending_moves.clone(), s.undo.len());
+    // Each frame: the lowest x and z of each body drawn, rounded to a micrometre.
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = {
+        let seen = seen.clone();
+        move |scene: &crate::render::Scene, cam: &crate::render::Camera, w: u32, h: u32| {
+            let mut lows: Vec<[i64; 2]> =
+                scene.meshes.iter().map(|m| m.mesh.bounds().min).map(|v| [(v.x * 1e3).round() as i64, (v.z * 1e3).round() as i64]).collect();
+            lows.sort();
+            seen.lock().unwrap().push((lows, *cam));
+            cpu(scene, cam, w, h)
+        }
+    };
+    let dir = out_dir("explode");
+    let gif = dir.join("apart.gif");
+    let frames = |p: Value| {
+        let mut p = p;
+        p["path"] = json!(gif.to_string_lossy());
+        p["width"] = json!(24);
+        p["height"] = json!(16);
+        let r = super::animation::export_with(&s, &p, Some(&record)).unwrap();
+        let seen = std::mem::take(&mut *seen.lock().unwrap());
+        assert_eq!(r["frames"].as_u64(), Some(seen.len() as u64), "{r}");
+        assert_eq!(gif_frames(&std::fs::read(&gif).unwrap()), (24, 16, seen.len()));
+        seen
+    };
+    let lows = |seen: &[(Vec<[i64; 2]>, crate::render::Camera)]| seen.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>();
+    // A at x 0, B at x 20: each moves 10 mm out, at a steady pace.
+    let at = |x: i64| vec![[x * 1000, 0], [(20 - x) * 1000, 0]];
+    let apart = frames(json!({"view": "Apart", "samples": 3}));
+    assert_eq!(lows(&apart), [at(0), at(-5), at(-10)]);
+    // Back together too: exploded at the middle frame, assembled at both ends.
+    let round = frames(json!({"view": "Apart", "back": true, "samples": 5}));
+    assert_eq!(lows(&round), [at(0), at(-5), at(-10), at(-5), at(0)]);
+    // One camera for the whole clip, framing the parts assembled and exploded alike.
+    assert!(round.iter().all(|(_, c)| *c == round[0].1));
+    let mut framed = crate::render::Camera::default();
+    framed.fit(&solidcraft_geom::Aabb3 { min: Vec3::new(-10.0, 0.0, 0.0), max: Vec3::new(40.0, 10.0, 10.0) });
+    assert!(round[0].1.target.dist(framed.target) < 1e-9 && (round[0].1.distance - framed.distance).abs() < 1e-9, "{:?}", round[0].1);
+    // Without samples: 41 frames, or 81 with back (the middle one exploded).
+    assert_eq!(frames(json!({"view": "Apart"})).len(), 41);
+    let long = frames(json!({"view": "Up", "back": true}));
+    assert_eq!(long.len(), 81);
+    assert_eq!(long[40].0, [[0, 0], [20_000, 50_000]], "B up at the middle");
+    assert_eq!((long[0].0.clone(), long[80].0.clone()), (vec![[0, 0], [20_000, 0]], vec![[0, 0], [20_000, 0]]));
+    // The design keeps its placements, the view shown, its history and its saved state.
+    assert_eq!((&*s.doc, &s.pending_moves, s.undo.len()), (&*doc, &pending, undo));
+    // Through the registry too.
+    crate::capture::install_test_renderer();
+    let r = run(
+        &mut s,
+        "motion.export_animation",
+        json!({"view": "Apart", "back": true, "path": gif.to_string_lossy(), "samples": 3, "width": 16, "height": 16}),
+    );
+    assert_eq!(r["frames"], 3, "{r}");
+    assert_eq!((&*s.doc, &s.pending_moves, s.undo.len(), s.is_dirty()), (&*doc, &pending, undo, false));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn hostile_animation_params_are_refused() {
     let mut s = rail();
     run(&mut s, "motion.study", json!({"name": "Push", "steps": 10, "keys": [{"joint": "Rail", "points": [[0, 10], [10, 0]]}]}));
+    run(&mut s, "explode.create", json!({"name": "Apart", "scale": 1}));
     let dir = out_dir("hostile");
     let gif = dir.join("x.gif").to_string_lossy().to_string();
     let base = json!({"study": "Push", "path": gif, "samples": 2, "width": 16, "height": 16});
@@ -873,6 +941,12 @@ fn hostile_animation_params_are_refused() {
         json!({"study": null}),
         json!({"study": "Nope"}),
         json!({"study": null, "joint": "Rail"}),
+        json!({"back": true}),
+        json!({"view": "Apart"}),
+        json!({"study": null, "view": "Nope"}),
+        json!({"study": null, "view": [1]}),
+        json!({"study": null, "view": "Apart", "back": "yes"}),
+        json!({"study": null, "view": "Apart", "joint": "Rail", "from": 0, "to": 1}),
         // 4096 × 4096 frames: a GIF holds four of them.
         json!({"width": 4096, "height": 4096, "samples": 5}),
     ] {
@@ -891,6 +965,20 @@ fn hostile_animation_params_are_refused() {
         assert!(refused(json!({"path": root.join("in.gif").to_string_lossy()})).is_none());
     });
     assert!(root.join("in.gif").exists() && !dir.join("out").exists());
+    // A design file's exploded view moving parts by no number, too far, or parts gone: those
+    // moves are left out, here and in explode.show.
+    let b = occ(&s, "B");
+    let moves = vec![
+        (b, Vec3::new(f64::NAN, 0.0, 0.0)),
+        (b, Vec3::new(0.0, f64::INFINITY, 0.0)),
+        (b, Vec3::new(1e300, 0.0, 0.0)),
+        (999, Vec3::new(1.0, 0.0, 0.0)),
+    ];
+    s.doc_mut().assembly.exploded.push(solidcraft_doc::motion::ExplodedView { id: 900, name: "Bad".into(), moves });
+    let p = json!({"view": "Bad", "path": gif, "samples": 2, "width": 16, "height": 16});
+    super::animation::export_with(&s, &p, Some(&cpu)).unwrap();
+    run(&mut s, "explode.show", json!({"view": "Bad"}));
+    assert!(s.pending_moves.is_empty(), "{:?}", s.pending_moves);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -101,7 +101,7 @@ fn assistant(h: &mut Harness, requested: &mut BTreeMap<String, bool>) {
     use solidcraft_ui_egui::agent_chat::{Item, backend::ToolStatus};
     h.call("ui.agent_chat", json!({"features":true,"open":true,"picker":false,"width":440}));
     h.app.agent_chat.items = vec![
-        Item::User { text: "Round the plate edges".into(), image: false, pictures: vec![], files: vec![] },
+        Item::User { text: "Round the plate edges".into(), image: false, pictures: vec![], context: Default::default(), files: vec![] },
         Item::Tool {
             id: "audit".into(),
             title: "solid.fillet".into(),
@@ -483,7 +483,7 @@ fn offset_mode_artwork_review() {
             );
             let mut x = column as i32 * 200 + 8;
             for px in [64, 24, 16] {
-                let look = icon_svg::Look { dark, accent: resolved.accent, vision: ColorVision::Off };
+                let look = icon_svg::Look::themed(dark, resolved.accent, ColorVision::Off);
                 let pm = icon_svg::render(icon_svg::doc_for(resolved.master, px).unwrap(), look, px).unwrap();
                 sheet.draw_pixmap(x, row as i32 * 88 + 8, pm.as_ref(), &tiny_skia::PixmapPaint::default(), tiny_skia::Transform::identity(), None);
                 x += px as i32 + 16;

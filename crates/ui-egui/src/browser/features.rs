@@ -109,7 +109,7 @@ mod tests {
         h.app.tree.expanded.insert("c0/features".into());
         DRAWN.with(|d| d.borrow_mut().clear());
         let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))), ..Default::default() };
-        let _ = h.ctx.run_ui(raw, |ui| rows(&mut h.app, ui, 0, &[], 0, &mut Actions::default()));
+        h.ctx.run_ui(raw, |ui| rows(&mut h.app, ui, 0, &[], 0, &mut Actions::default())).textures_delta.clear();
         drawn_rows().into_iter().map(|(label, ..)| label).collect()
     }
 
