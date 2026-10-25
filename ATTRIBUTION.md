@@ -76,6 +76,31 @@ Editable drawing code, native projects and shipped exports are collected under `
 | docs/screenshots/android/20-custom-thread-clearance.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): editing a custom 1.5 mm thread's clearance from the History bar | MIT OR Apache-2.0 |
 | docs/screenshots/android/21-custom-thread-result.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): a custom 1.5 mm thread with 0.15 mm clearance | MIT OR Apache-2.0 |
 | docs/screenshots/android/22-render-workspace.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): the Render workspace | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-03-types.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): the Gear dialog's Type list | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-04-helical-preview.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a helical gear's live preview in the Gear dialog | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-07-undercut-warning.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): the Dimensions readouts with the undercut warning | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-08-mating-readouts.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): the mating gear's ratio, centre distance and contact ratio | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-09-refused.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a gear refused: the bore is larger than the root circle | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-12-bevel-dimensions.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a bevel gear's cone angles and cone distance in Edit Gear | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-13-spur.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a spur gear | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-14-helical.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a helical gear | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-15-herringbone.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a herringbone gear | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-16-internal.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): an internal (ring) gear | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-17-rack.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a rack | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-18-bevel.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a bevel gear | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-19-miter.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a miter gear | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-20-worm.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a single-start worm | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-21-worm-2-start.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a two-start worm after Edit Gear | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-22-worm-wheel.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a worm wheel | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-23-crossed-helical.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a crossed helical gear | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-tab-01-create-menu.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Samsung Galaxy Tab SM-X840): the Create menu with Gear | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-tab-02-dialog.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Samsung Galaxy Tab SM-X840): the Gear dialog with its readouts | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-tab-03-bore-hub-keyway.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Samsung Galaxy Tab SM-X840): a helical gear's bore, hub and keyway previewed | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-tab-04-helical-result.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Samsung Galaxy Tab SM-X840): the helical gear after OK | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-tab-05-context-menu.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Samsung Galaxy Tab SM-X840): Edit Gear in the browser's long-press menu | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-tab-06-edit-preview.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Samsung Galaxy Tab SM-X840): Edit Gear previewing 30 teeth, left hand | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-tab-07-edited.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Samsung Galaxy Tab SM-X840): the rebuilt helical gear | MIT OR Apache-2.0 |
+| docs/screenshots/android/gears-tab-08-all-types.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Samsung Galaxy Tab SM-X840): the ten gear types side by side | MIT OR Apache-2.0 |
 | docs/screenshots/android/threads-01-faceted-vs-helical.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): a faceted M8 thread beside helical B-rep threads (M8, a nut, a Ø33.25 custom shaft) | MIT OR Apache-2.0 |
 | docs/screenshots/android/threads-02-create-menu.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): the Create menu with Thread | MIT OR Apache-2.0 |
 | docs/screenshots/android/threads-03-dialog-iso-default.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel Tablet emulator): the Thread dialog as it opens, ISO metric | MIT OR Apache-2.0 |
@@ -409,6 +434,7 @@ Editable drawing code, native projects and shipped exports are collected under `
 | assets/icons/ui/design/svg/flat/shield.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/status_recovery.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/frame_member.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/model/spur_gear.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/placeholder.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/plane.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/plane_angle.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |

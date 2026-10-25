@@ -365,6 +365,8 @@ crate::dialog_descriptor::dialog_descriptors! {
             Appearance(crate::dialogs_appearance::Ap),
             /// Contact sets, motion studies, exploded views, configurations (`dialogs_motion`).
             Motion(crate::dialogs_motion::Mo),
+            /// Gear and Edit Gear (`dialogs_gears`).
+            Gear(crate::dialogs_gears::Gr),
             /// Insert Part from the standard parts library (`dialogs_parts`).
             Part(crate::dialogs_parts::Pt),
             PartSize(crate::dialogs_part_size::Resize),
@@ -842,6 +844,7 @@ impl Dialog {
                     .or_else(|| crate::dialogs_frame::start(app, id))
                     .or_else(|| crate::dialogs_appearance::start(app, id))
                     .or_else(|| crate::dialogs_motion::start(app, id))
+                    .or_else(|| crate::dialogs_gears::start(app, id))
                     .or_else(|| crate::dialogs_parts::start(app, id))
                     .or_else(|| crate::dialogs_part_size::start(app, id))
                     .or_else(|| crate::sketch_text::start(app, id))
@@ -983,6 +986,8 @@ impl Dialog {
             Kind::Plastic(k) => return k.previews(),
             Kind::Frame(_) => return true,
             Kind::Part(_) | Kind::PartSize(_) => return true,
+            // Web previews run synchronously; a helical gear's sweep can take seconds.
+            Kind::Gear(_) => return !cfg!(target_arch = "wasm32"),
             // Web previews run synchronously; a modelled thread can take seconds.
             Kind::Thread { helix, .. } => {
                 return !cfg!(target_arch = "wasm32") && (helix.custom || self.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false));
@@ -1826,6 +1831,13 @@ fn title(k: &Kind) -> &'static str {
         Kind::Frame(_) => "FRAME MEMBER",
         Kind::Appearance(_) => "APPEARANCE",
         Kind::Motion(k) => k.title(),
+        Kind::Gear(k) => {
+            if k.component.is_some() {
+                "EDIT GEAR"
+            } else {
+                "GEAR"
+            }
+        }
         Kind::Part(_) => "INSERT PART",
         Kind::PartSize(_) => "Change Part Size",
         Kind::Text(_) => "EDIT TEXT",
@@ -3986,6 +3998,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
         Kind::Frame(k) => return crate::dialogs_frame::commands(app, k, &d.inputs, &d.extra),
         Kind::Appearance(k) => return Ok(crate::dialogs_appearance::commands(k, &d.inputs)),
         Kind::Motion(k) => return crate::dialogs_motion::commands(app, k, &d.inputs),
+        Kind::Gear(k) => return crate::dialogs_gears::commands(k),
         Kind::Part(k) => return crate::dialogs_parts::commands(app, k, &d.inputs),
         Kind::PartSize(k) => return crate::dialogs_part_size::commands(app, k),
         Kind::Text(k) => return crate::sketch_text::commands(app, k),

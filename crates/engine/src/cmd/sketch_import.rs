@@ -154,6 +154,17 @@ fn insert(s: &mut Session, p: &Value, cmd: &str, svg: bool) -> Result<Value> {
     Ok(json!({"sketch": id, "created_sketch": created, "curves": curves.len(), "texts": n_text, "info": info}))
 }
 
+/// Add `geom` (sketch coordinates, mm) to the active sketch as it is, ends within 1e-6 mm
+/// joined; how many curves it made.
+pub(super) fn add_to_active(s: &mut Session, geom: &[Geom2], cmd: &str) -> Result<usize> {
+    let f = |q: Vec2| q;
+    let ((curves, _), _) = edit(s, &json!({}), cmd, false, |sk, _| {
+        let (cs, texts) = add_geometry(sk, geom, &f, 1.0, 1e-6)?;
+        Ok((ids_of(sk, &cs), texts))
+    })?;
+    Ok(curves.len())
+}
+
 fn insert_dxf(s: &mut Session, p: &Value) -> Result<Value> {
     insert(s, p, "sketch.insert_dxf", false)
 }
