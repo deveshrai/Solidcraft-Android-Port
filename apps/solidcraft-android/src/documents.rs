@@ -22,7 +22,7 @@ use jni::refs::Global;
 use jni::{Env, JValue, JavaVM, jni_sig, jni_str};
 use solidcraft_ui_egui::{FilePickerFuture, SolveApp};
 
-use crate::names::{file_name, mime};
+use crate::names::{file_name, mime, save_name};
 
 /// How often the local copies are checked for writes to copy out.
 const CHECK_EVERY: Duration = Duration::from_millis(250);
@@ -283,7 +283,16 @@ impl Documents {
     /// The picker chose `uri` (named `name`): open copies it in, save links a copy to write.
     fn picked(&mut self, uri: &str, name: &str) {
         let Some((purpose, asked)) = self.pick.as_ref().map(|p| (p.purpose, p.name.clone())) else { return };
-        let path = self.copy_path(uri, asked.as_deref().unwrap_or(name));
+        let name = match &asked {
+            Some(asked) => save_name(name, asked),
+            None => name.to_string(),
+        };
+        let path = self.copy_path(uri, &name);
+        if let Some(dir) = path.parent()
+            && let Err(e) = std::fs::create_dir_all(dir)
+        {
+            log::warn!("documents: {}: {e}", dir.display());
+        }
         let existing = self.links.iter().position(|l| l.uri == uri || l.path == path);
         let link = Link {
             path: path.clone(),
@@ -311,7 +320,8 @@ impl Documents {
     }
 
     /// The local copy for the document `uri` named `name`: its existing copy, else the name in
-    /// our folder, made unique when another document's copy has it.
+    /// our folder, or in a numbered folder inside it when another document's copy has that name
+    /// (the copy's name is the tab's, so it stays what the picker shows).
     fn copy_path(&self, uri: &str, name: &str) -> PathBuf {
         if let Some(l) = self.links.iter().find(|l| l.uri == uri) {
             return l.path.clone();
@@ -322,11 +332,7 @@ impl Documents {
         if !taken(&first) {
             return first;
         }
-        let (stem, ext) = match name.rsplit_once('.') {
-            Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
-            _ => (name.clone(), String::new()),
-        };
-        (2..1000).map(|n| self.dir.join(format!("{stem} ({n}){ext}"))).find(|p| !taken(p)).unwrap_or(first)
+        (2..1000).map(|n| self.dir.join(n.to_string()).join(&name)).find(|p| !taken(p)).unwrap_or(first)
     }
 
     /// Copy each local copy written since it last matched its document out to it, once the write
