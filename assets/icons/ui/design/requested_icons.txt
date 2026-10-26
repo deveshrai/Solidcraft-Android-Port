@@ -239,6 +239,7 @@ split	false
 split_body	false
 split_face	false
 spun	false
+spur_gear	false
 star	false
 status_error	false
 status_recovery	false

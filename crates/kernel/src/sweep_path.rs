@@ -532,6 +532,18 @@ pub fn sweep_path_with(plane: &Plane, region: &Region2, path: &[Vec3], ctl: &Swe
         .pop()
         .map(|r| r.oriented())
         .ok_or_else(|| KernelError::Invalid("profile".into()))?;
+    if !corner && !ctl.is_default() && ctl.rails.is_empty() && ctl.orientation == SweepOrientation::Perpendicular && straight(&pts) {
+        // A straight path that twists or scales (helical and tapered prisms such as gears): one
+        // smooth wall per profile segment, holes included, however many segments.
+        let n = smooth_count(pts.len(), ctl);
+        let sp = resample(&pts, n);
+        let tangents = central_tangents(&sp)?;
+        let st = controlled_stations(plane, &sp, &tangents, &[], ctl)?;
+        let v = swept_volume(plane, region.area().abs(), &st, &tangents);
+        if let Ok(b) = straight_walls(plane, &profile, &st, v) {
+            return Ok(b);
+        }
+    }
     if !corner && region.holes.is_empty() {
         // Smooth: evenly spaced stations, tangents from neighbours.
         let len: f64 = pts.windows(2).map(|w| w[0].dist(w[1])).sum();
@@ -844,6 +856,83 @@ fn smooth_walls(plane: &Plane, profile: &NumberedLoop, st: &[Station], expected:
     })
 }
 
+/// Whether the path's points all lie on the line from its first point to its last.
+fn straight(pts: &[Vec3]) -> bool {
+    let (Some(&a), Some(&b)) = (pts.first(), pts.last()) else { return false };
+    let Some(d) = (b - a).normalized() else { return false };
+    let tol = 1e-9 * (1.0 + a.dist(b));
+    pts.iter().all(|p| {
+        let v = *p - a;
+        (v - d * v.dot(d)).len() <= tol
+    })
+}
+
+/// Most profile segments [`straight_walls`] takes (a gear of a few hundred teeth).
+const MAX_STRAIGHT_SEGMENTS: usize = 20_000;
+
+/// The walls of a straight sweep through `st` (which twist or scale the profile): for every
+/// segment of every loop, outer and holes, one B-spline wall through the stations, closed by
+/// planar caps. Unlike [`smooth_walls`] it takes any number of segments and holes.
+fn straight_walls(plane: &Plane, profile: &NumberedRegion, st: &[Station], expected: f64) -> Result<Body> {
+    let fail = |w: &str| KernelError::Failed(format!("straight sweep: {w}"));
+    let loops: Vec<&NumberedLoop> = profile.loops().collect();
+    let total: usize = loops.iter().map(|l| l.lp.segs.len()).sum();
+    if total == 0 || total > MAX_STRAIGHT_SEGMENTS || st.len() < 4 || loops.iter().any(|l| l.lp.segs.is_empty()) {
+        return Err(fail("profile"));
+    }
+    let s0 = st.first().map(|s| s.at).unwrap_or_default();
+    let at = |i: usize, q: Vec2| st.get(i).map(|s| s.at + s.apply(plane.to_world(q) - s0)).unwrap_or_default();
+    let n = st.len() - 1;
+    let mut data: Vec<Vec<NetFit>> = Vec::with_capacity(loops.len());
+    for l in &loops {
+        let mut nets = Vec::with_capacity(l.lp.segs.len());
+        for s in &l.lp.segs {
+            let samples =
+                Grid::from_fn([n + 1, SEG_SAMPLES], |i, j| at(i, s.point_at(j as f64 / (SEG_SAMPLES - 1) as f64))).ok_or_else(|| fail("samples"))?;
+            nets.push(interpolate_net(&samples).ok_or_else(|| fail("wall surface"))?);
+        }
+        data.push(nets);
+    }
+    guard("straight sweep", || {
+        let mut walls: Vec<Side> = Vec::with_capacity(total);
+        let (mut w0s, mut w1s): (Vec<mt::Wire>, Vec<mt::Wire>) = (Vec::with_capacity(loops.len()), Vec::with_capacity(loops.len()));
+        for (l, nets) in loops.iter().zip(&data) {
+            let segs = &l.lp.segs;
+            let nseg = segs.len();
+            let start: Vec<mt::Vertex> = segs.iter().map(|s| builder::vertex(p3(at(0, s.start())))).collect();
+            let end: Vec<mt::Vertex> = segs.iter().map(|s| builder::vertex(p3(at(n, s.start())))).collect();
+            let (mut e0, mut e1, mut seams) = (Vec::with_capacity(nseg), Vec::with_capacity(nseg), Vec::with_capacity(nseg));
+            for (j, NetFit { u_ends: [c0, c1], v_ends: [seam, _], .. }) in nets.iter().enumerate() {
+                let (Some(a0), Some(b0), Some(a1), Some(b1)) = (start.get(j), start.get((j + 1) % nseg), end.get(j), end.get((j + 1) % nseg)) else {
+                    return Err(fail("vertices"));
+                };
+                e0.push(mt::Edge::try_new(a0, b0, mt::Curve::BSplineCurve(c0.clone())).map_err(|e| fail(&e.to_string()))?);
+                e1.push(mt::Edge::try_new(a1, b1, mt::Curve::BSplineCurve(c1.clone())).map_err(|e| fail(&e.to_string()))?);
+                seams.push(mt::Edge::try_new(a0, a1, mt::Curve::BSplineCurve(seam.clone())).map_err(|e| fail(&e.to_string()))?);
+            }
+            for (j, NetFit { surface: surf, .. }) in nets.iter().enumerate() {
+                let (Some(a), Some(b), Some(sa), Some(sb)) = (e0.get(j), e1.get(j), seams.get(j), seams.get((j + 1) % nseg)) else {
+                    return Err(fail("edges"));
+                };
+                let w: mt::Wire = vec![sa.clone(), b.clone(), sb.inverse(), a.inverse()].into();
+                let wall = mt::Face::try_new(vec![w], mt::Surface::BSplineSurface(surf.clone())).map_err(|e| fail(&e.to_string()))?;
+                walls.push((wall, Some(record::profile(l.numbers(j)))));
+            }
+            w0s.push(e0.iter().cloned().collect());
+            w1s.push(e1.iter().cloned().collect());
+        }
+        let tol = (profile.outer.lp.signed_area().abs().sqrt() * 0.02).max(1e-3);
+        for ws in [walls.clone(), walls.iter().map(|(f, prov)| (f.inverse(), prov.clone())).collect()] {
+            if let Ok(b) = cap_and_close(ws, &w0s, &w1s, false)
+                && b.tessellate(tol).is_ok_and(|m| (m.measure().volume - expected).abs() <= 0.05 * expected.abs())
+            {
+                return Ok(b);
+            }
+        }
+        Err(fail("the walls do not close a solid"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
@@ -1018,6 +1107,37 @@ mod tests {
         // The path running along the direction is refused.
         let along = SweepControl { orientation: SweepOrientation::Direction(Vec3::Z), ..SweepControl::default() };
         assert!(crate::sweep_with(&Plane::XY, &square(3.0), &up(10.0), &along).is_err());
+    }
+
+    /// A straight sweep that twists or tapers a profile of many segments with a hole (a gear with
+    /// a bore) has one smooth wall per segment and the profile's area times the length (twist) or
+    /// the frustum's volume (taper); it doesn't fall back to ruled strips.
+    #[test]
+    fn straight_sweeps_of_many_segments_and_holes_stay_smooth() {
+        let teeth = 40;
+        let pts: Vec<Vec2> = (0..teeth * 2)
+            .map(|i| {
+                let a = PI * i as f64 / teeth as f64;
+                let r = if i % 2 == 0 { 22.0 } else { 19.0 };
+                Vec2::new(r * a.cos(), r * a.sin())
+            })
+            .collect();
+        let outer = Loop2 { segs: pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| solidcraft_geom::Seg2::Line { a: *a, b: *b }).collect() };
+        let region = Region2 { outer, holes: vec![Loop2::circle(Vec2::ZERO, 5.0).reversed()] };
+        let area = region.area().abs();
+        let path = [Vec3::ZERO, Vec3::new(0.0, 0.0, 12.0)];
+        let twist = SweepControl { twist: 20f64.to_radians(), ..SweepControl::default() };
+        let b = sweep_path_with(&Plane::XY, &region, &path, &twist).unwrap_or_else(|e| panic!("{e}"));
+        let segs = region.outer.segs.len() + region.holes.iter().map(|h| h.segs.len()).sum::<usize>();
+        assert_eq!(b.solid.face_iter().count(), segs + 2);
+        let v = b.tessellate(0.01).map(|m| m.measure().volume).unwrap_or(0.0);
+        assert!((v - area * 12.0).abs() < 0.01 * area * 12.0, "{v} vs {}", area * 12.0);
+        let taper = SweepControl { scale: 0.6, ..SweepControl::default() };
+        let b = sweep_path_with(&Plane::XY, &region, &path, &taper).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(b.solid.face_iter().count(), segs + 2);
+        let frustum = area * 12.0 * (1.0 + 0.6 + 0.36) / 3.0;
+        let v = b.tessellate(0.01).map(|m| m.measure().volume).unwrap_or(0.0);
+        assert!((v - frustum).abs() < 0.01 * frustum, "{v} vs {frustum}");
     }
 
     /// Out-of-range options are refused, never a panic; the default options are a plain sweep.

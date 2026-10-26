@@ -176,6 +176,10 @@ mod android {
                 // No updates or agent services: the host has none to offer.
                 let documents = data.as_deref().and_then(|d| Documents::new(d, activity)).map(|d| Rc::new(RefCell::new(d)));
                 let mut app = SolveApp::new(Session::default(), services(documents.as_ref()));
+                // OK evaluates off the window thread, as on the desktop: a feature that takes
+                // longer than Android's input timeout (a gear, a helical thread, a large boolean)
+                // would otherwise have the system offer to close the app as not responding.
+                app.apply_off_thread = Some(solidcraft_ui_egui::dialogs::APPLY_AT_ONCE);
                 if let Some(p) = cc.storage.and_then(|s| solidcraft_ui_egui::prefs::stored(|k| s.get_string(k))) {
                     app.load_prefs(&p);
                 }

@@ -30,10 +30,11 @@ Tested on an Android 16 tablet emulator (Pixel Tablet, arm64, Vulkan through Mol
 | Mouse | Hover highlighting, click to select, the navigation preset's buttons (default Fusion: middle drag pans, Shift+middle and right drag orbit), the wheel zooms to the cursor, the right-click menu |
 | Keyboard | Shortcuts with and without modifiers (tested: Ctrl+Z, Ctrl+S, Ctrl+O, E, Esc, S to search), typing into fields |
 | Touch | One finger orbits, a tap selects, two fingers pan, a pinch zooms about the fingers; a finger drags a dialog's arrows (Extrude distance, Fillet radius…) |
+| Gears | Port-only: spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel and crossed helical gears, editable after ([android-gears.md](android-gears.md)) |
 | Threads | Port-only: modelled threads as exact helical B-rep, custom pitch on any diameter, clearance, offsets, left-handed ([android-threads.md](android-threads.md)); the faceted and cosmetic ISO threads are unchanged |
 | Rendering (0.22) | The Render workspace's live preview and CPU render work on the Fold (the GPU path tracer finds the Adreno 840) |
 | Back | Closes the open dialog, menu, tool, sketch or keyboard, as Escape; with nothing open, the app goes to the background as Home does, designs kept |
-| Tested devices | Pixel Tablet emulator (Android 16); Galaxy Z Fold (SM-F971B, Android 17, Adreno 840): inner screen, landscape and portrait |
+| Tested devices | Pixel Tablet emulator (Android 16); Galaxy Z Fold (SM-F971B, Android 17, Adreno 840): inner screen, landscape and portrait; Galaxy Tab (SM-X840, Android 17, Mali-G1-Ultra): gears |
 | Files | Open, Open Recent, Save, Save As, Insert STEP/Mesh/Design, Save as mesh (STL, 3MF…), Export STEP/OBJ/DXF/URDF/JSON, from and to any documents provider (device, SD card, Drive…) |
 
 ## Building and installing
@@ -223,6 +224,13 @@ these docs). Upstream files changed, and why:
 | `crates/engine/src/cmd/features.rs` | `solid.thread`'s helical parameters |
 | `crates/ui-egui/src/dialogs_thread.rs`, `dialogs.rs`, `dialogs_dense.rs` | The Thread dialog's Type, Geometry and Helical B-rep section |
 | `crates/*/src/thread_tests.rs`, `dialogs_all_tests.rs` | Tests for the helical threads; the Thread dialog's first row is now Type |
+| `crates/engine/src/gear_profile.rs`, `cmd/gears.rs`, `cmd/gears_tests.rs` (new), `cmd/mod.rs`, `lib.rs` | Port-only feature: the Gear commands `gear.create`, `gear.info`, `gear.edit` ([android-gears.md](android-gears.md)) |
+| `crates/engine/src/cmd/sketch_import.rs` | `add_to_active`, which the gears use to sketch their outlines |
+| `crates/kernel/src/sweep_path.rs` | Straight sweeps that twist or scale keep smooth walls with any number of segments and holes (before: ruled strips past 64 segments or with a hole) |
+| `apps/solidcraft-android/android/app/src/main/java/io/solidcraft/android/SolidCraftActivity.java` | `hideSystemBars`: the navigation bar and a tablet's taskbar hidden immersively (a swipe shows them), so they don't cover the History bar or a tall dialog's OK |
+| `apps/solidcraft-android/src/lib.rs` | OK evaluates off the window thread (`apply_off_thread`, as the desktop app does), so a long feature doesn't trip Android's not-responding dialog |
+| `crates/ui-egui/src/dialogs_gears.rs` (new), `dialogs.rs`, `dialogs_dense.rs`, `browser.rs`, `context_menu.rs`, `workspace.rs`, `lib.rs` | The Gear / Edit Gear dialog and where it opens from |
+| `assets/icons/ui/design/svg/model/spur_gear.svg` (new), `ATTRIBUTION.md`, `assets/locales/*.json` | The Gear icon and labels |
 | `xtask/src/layers.rs` | `solidcraft-android` registered as an app (exempt from layering, like the web app) |
 | `xtask/src/assets.rs` | The asset check skips Gradle's `build/` output |
 | `AGENTS.md` | The Android crate's two `unsafe` exceptions added to the list |
@@ -233,7 +241,9 @@ these docs). Upstream files changed, and why:
 The Android changes keep the desktop and browser builds as they were: the Android code paths are
 behind `cfg(target_os = "android")`, and the touch changes act only on touch input. The thread
 changes are a feature in the shared crates, so they are in every build made from this repository;
-the faceted and cosmetic threads behave as upstream's.
+the faceted and cosmetic threads behave as upstream's. So are the gears; they keep their
+parameters in component metadata, so they need no design-format change and open upstream as plain
+components.
 
 **Design files.** The helical thread fields are a pending design-format change, so the port
 writes one format number past upstream's release (36 while upstream's is 35) with

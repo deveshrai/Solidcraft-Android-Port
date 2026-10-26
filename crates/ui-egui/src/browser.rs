@@ -1094,6 +1094,8 @@ fn component_rows(app: &mut SolveApp, ui: &mut egui::Ui, id: u64, depth: usize, 
     if r.double {
         if app.session.doc.parts.contains_key(&id) {
             crate::dialogs_part_size::open(app, id);
+        } else if crate::dialogs_gears::is_gear(app, id) {
+            crate::dialogs_gears::open(app, id);
         } else {
             let _ = app.run("component.activate", json!({ "component": id }));
         }
@@ -1205,11 +1207,15 @@ fn occurrence_rows(app: &mut SolveApp, ui: &mut egui::Ui, path: Vec<u64>, depth:
     if r.eye {
         let _ = app.run("browser.visibility", json!({"visible": app.session.occurrence_hidden(&path), "paths": [path]}));
     }
-    if r.radio || (r.double && !app.session.doc.parts.contains_key(&placement.component)) {
+    let gear = crate::dialogs_gears::is_gear(app, placement.component);
+    if r.radio || (r.double && !app.session.doc.parts.contains_key(&placement.component) && !gear) {
         let _ = app.run("component.activate", json!({"component": placement.component, "occurrence": placement.occurrence, "path": path}));
     }
     if r.double && app.session.doc.parts.contains_key(&placement.component) {
         crate::dialogs_part_size::open(app, placement.component);
+    }
+    if r.double && gear {
+        crate::dialogs_gears::open(app, placement.component);
     }
     if r.clicked {
         click_select(app, ui, key.clone(), Some(Sel::Occurrence { path: path.clone() }));

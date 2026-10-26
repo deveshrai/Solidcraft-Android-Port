@@ -14,6 +14,7 @@ pub mod control_pending;
 pub mod crash;
 pub mod frames;
 pub mod fuzz;
+pub mod gear_profile;
 pub mod licences;
 pub mod occurrences;
 pub mod params;
@@ -34,7 +35,9 @@ use serde_json::Value;
 use solidcraft_doc::{Document, Model, ModelState};
 use solidcraft_geom::Vec3;
 
-pub use cmd::{CommandInfo, CommandSpec, auto_operation, command_specs, extrude_reach, find_command, standard_view};
+pub use cmd::{
+    CommandInfo, CommandSpec, GEAR_KEY, GEAR_TYPES, auto_operation, command_specs, extrude_reach, find_command, standard_view, stored_gear,
+};
 pub use solidcraft_doc as doc;
 pub use solidcraft_doc::Visibility;
 pub use solidcraft_geom as geom;
