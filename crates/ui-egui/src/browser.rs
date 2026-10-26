@@ -24,6 +24,39 @@ pub(crate) fn reveal_feature(app: &mut SolveApp, id: u64, body: &str) {
     features::reveal(app, id, body);
 }
 
+/// Find in Browser for a body: open every row that holds it (the document, the placements down
+/// to it, its Bodies folder and any group around it) and scroll its row into view. The rows
+/// are opened here, not while drawing, because a collapsed ancestor never draws its children.
+pub(crate) fn reveal_body(app: &mut SolveApp, body: &str) {
+    app.ui.show_browser = true;
+    app.preferences.timeline_left_browser_collapsed = false;
+    app.tree.reveal_feature = None;
+    app.tree.reveal = Some(body.to_string());
+    let state = app.session.model.state();
+    let Some(source) = app.session.world_state().body(body).map(|selected| selected.definition_name().to_string()) else { return };
+    let Some(component) = state.body(&source).map(|definition| definition.component) else { return };
+    // Every component's first placement keeps the definition's name, so the owner must match too.
+    let Some((_, path, _)) = app
+        .session
+        .doc
+        .placements()
+        .into_iter()
+        .find(|(owner, path, _)| *owner == component && app.session.doc.world_body_name(&state, &source, *owner, path) == body)
+    else {
+        return;
+    };
+    app.tree.collapsed.remove("c0");
+    for depth in 1..=path.len() {
+        app.tree.collapsed.remove(&occurrence_key(&path[..depth]));
+    }
+    let scope = if path.is_empty() { format!("c{component}") } else { occurrence_key(&path) };
+    app.tree.collapsed.remove(&scope);
+    app.tree.collapsed.remove(&format!("{scope}/bodies"));
+    for g in app.session.doc.browser_groups.iter().filter(|g| g.component == component && g.folder == "bodies" && g.items.contains(&source)) {
+        app.tree.collapsed.remove(&format!("{scope}/g{}", g.id));
+    }
+}
+
 #[cfg(test)]
 #[path = "browser_model_tests.rs"]
 mod model_tests;
@@ -72,7 +105,7 @@ pub struct TreeState {
     /// of a part apart) and open the components, placements and folders above it: Find in
     /// Browser, and a body picked in the viewport (#3005).
     pub reveal: Option<String>,
-    /// A native feature to reveal in its placed component's Features folder.
+    /// A native feature to reveal in its placed component's Features folder (Find in Timeline).
     pub(super) reveal_feature: Option<features::Reveal>,
     /// The Move/Copy panel of an occurrence.
     pub occurrence_move: Option<OccMove>,
@@ -89,6 +122,9 @@ pub struct TreeState {
     pub picked_timeline_groups: Vec<u64>,
     /// Last feature-history item clicked, for Shift ranges (`f:<id>` or `g:<id>`).
     pub timeline_anchor: Option<String>,
+    /// Find in Timeline: the feature the history scrolls to the next time it draws its items, in
+    /// the bottom strip or in the history on the left (#5850).
+    pub timeline_reveal: Option<u64>,
     /// The Edit Canvas / Calibrate panel.
     pub canvas_panel: Option<CanvasPanel>,
     /// A Section Analysis hidden with its eye in the Analysis folder: its plane (origin,
@@ -149,13 +185,8 @@ pub fn sketch_visible(app: &SolveApp, id: u64) -> bool {
 }
 
 pub fn set_sketch_visible(app: &mut SolveApp, id: u64, on: bool) {
-    app.session.visibility.hidden_sketches.retain(|x| *x != id);
-    app.session.visibility.shown_sketches.retain(|x| *x != id);
-    if on {
-        app.session.visibility.shown_sketches.push(id);
-    } else {
-        app.session.visibility.hidden_sketches.push(id);
-    }
+    // Through the command, so showing or hiding a sketch is an undo step too (#2219).
+    let _ = app.run("browser.visibility", json!({ "items": [id], "visible": on }));
 }
 
 pub fn redefine_sketch(app: &mut SolveApp, id: u64) {
@@ -265,7 +296,7 @@ pub fn group_action(app: &mut SolveApp, action: &str, p: &Value) {
                 && let Some(g) = r.get("group").and_then(Value::as_u64)
             {
                 app.tree.collapsed.remove(&format!("c{comp}/{folder}"));
-                app.tree.collapsed.remove(&format!("g{g}"));
+                app.tree.collapsed.remove(&format!("c{comp}/g{g}"));
             }
         }
         "ui.ungroup" => {
@@ -1365,11 +1396,8 @@ fn origin_rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &Actio
             &Row { depth: depth + 1, eye: Some(visible), icon, label, selected, dim: !visible || !app.origin_shown(), mark, ..Default::default() },
         );
         if r.eye {
-            if visible {
-                app.session.visibility.hidden_origin.push(k.into());
-            } else {
-                app.session.visibility.hidden_origin.retain(|h| h != k);
-            }
+            // Through the command, so the Origin row's eye is an undo step (#2219).
+            let _ = app.run("browser.visibility", json!({ "items": [k], "visible": !visible }));
         }
         if let Some(p) = r.secondary
             && icon == "plane"
@@ -1825,14 +1853,13 @@ fn arrange(app: &SolveApp, comp: u64, folder: &str, all: Vec<Entry>) -> (Vec<(so
     (grouped, loose)
 }
 
-/// Show or hide items of a folder.
+/// Show or hide items of a folder, through `browser.visibility` so each is an undo step (#2219).
 fn set_visible(app: &mut SolveApp, folder: &str, items: &[&Entry], on: bool) {
     for e in items {
         match folder {
             "bodies" => {
-                app.session.visibility.hidden_bodies.retain(|b| !e.bodies.contains(b));
-                if !on {
-                    app.session.visibility.hidden_bodies.extend(e.bodies.clone());
+                if !e.bodies.is_empty() {
+                    let _ = app.run("browser.visibility", json!({ "items": e.bodies.clone(), "visible": on }));
                 }
             }
             "sketches" => {
@@ -1841,10 +1868,7 @@ fn set_visible(app: &mut SolveApp, folder: &str, items: &[&Entry], on: bool) {
                 }
             }
             _ => {
-                app.session.visibility.hidden_origin.retain(|p| *p != e.label);
-                if !on {
-                    app.session.visibility.hidden_origin.push(e.label.clone());
-                }
+                let _ = app.run("browser.visibility", json!({ "items": [e.label], "visible": on }));
             }
         }
     }

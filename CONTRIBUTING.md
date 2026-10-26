@@ -280,6 +280,9 @@ and a fresh CI run:
   after each merge by the Generated files workflow (`cargo xtask licences`, `cargo xtask
   features`). Don't regenerate or edit them in a pull request.
 - **Design format**: one file per change, never an edit to a shared number (above).
+- **New UI strings and attribution rows**: one new file per change, `assets/locales/pending/<slug>.json`
+  and `attribution/pending/<slug>.md`, instead of editing the catalogs or the ATTRIBUTION.md table;
+  `cargo xtask fold-pending` folds them on `main` (see the README in each folder).
 
 ## Sending a change
 
@@ -345,6 +348,10 @@ Much of SolidCraft so far was written by AI coding agents (Claude) working in pa
 owning one area, with a human setting direction and reporting bugs. Their working notes are in
 [AGENTS.md](AGENTS.md). Human contributors are just as welcome. Use whatever tools you like, as
 long as the change meets the rules above.
+
+Two quick checks run on every pull request (`.github/workflows/pr-checks.yml`, not required): it
+fails when a lower-numbered open PR by someone else already closes the same issue (the label
+`not-a-duplicate` skips it), or when the description lacks the `Changes a default: no` / `Changes a default: yes — <what>, old behaviour kept behind preference <name>` line (docs-only and bot PRs are exempt).
 
 ## Labels and triage
 

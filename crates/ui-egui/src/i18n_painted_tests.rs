@@ -13,7 +13,7 @@ use crate::{Services, SolveApp};
 
 /// English text → the catalog ids that carry it.
 fn english_ids() -> BTreeMap<String, Vec<String>> {
-    const EN: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/en.json"));
+    const EN: &str = include_str!(concat!(env!("OUT_DIR"), "/locales/en.json"));
     let messages: BTreeMap<String, String> = serde_json::from_str(EN).unwrap();
     let mut ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (id, text) in messages {

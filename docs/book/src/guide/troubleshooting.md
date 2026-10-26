@@ -61,6 +61,10 @@ saying what failed (earlier versions closed without a word). Things to try:
 - In a virtual machine, turn on 3D acceleration. Over Remote Desktop, try it on the machine itself.
 - Run `solidcraft --crash-log` to list recent crash reports, and attach the newest one to an
   issue.
+- On an Intel Mac (Intel Iris graphics, macOS 12), "Parent device is lost" at start comes from
+  the Metal compiler refusing wgpu's indirect-call validation shader. SolidCraft leaves that
+  validation off on Intel Macs. To change it, set `WGPU_VALIDATION_INDIRECT_CALL=1` (on) or `0`
+  (off) before starting; a value you set is always kept.
 
 ## The desktop stutters or freezes while SolidCraft builds bodies
 
@@ -90,6 +94,11 @@ set WGPU_BACKEND=dx12
 from the Start menu after you sign in again. From 0.11.1 the setting can also live in
 `graphics.json` in the settings folder, as `{"msaa": 4, "backend": "dx12"}` (`auto` is the
 order above). Safe mode ignores it and always uses the software renderer.
+
+With OpenGL on Windows, the window has the Windows title bar above SolidCraft's application bar
+instead of using the application bar as its title bar. Some OpenGL drivers (older Intel HD and
+UHD graphics) otherwise show the picture a title bar's height lower than the window, so clicks
+land above what they point at.
 
 ## SolidCraft restarted, saying the graphics device was reset
 

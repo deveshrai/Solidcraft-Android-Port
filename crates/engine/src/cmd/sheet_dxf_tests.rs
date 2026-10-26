@@ -471,6 +471,46 @@ fn a_bend_note_sits_beside_each_bend_line_when_asked_for() {
     assert!(note.is_some_and(|e| values(e, 40) == [5.0]));
 }
 
+#[test]
+fn a_bend_note_gives_the_included_angle_when_the_rule_reads_it_so() {
+    // The included angle is 180° less the bend angle: 122° for a 58° bend, 90° for a 90° one.
+    for (deg, included) in [(58.0, 122.0), (90.0, 90.0)] {
+        let mut plain = Vec::new();
+        for display in ["bend", "included"] {
+            let mut s = sheet_of_2mm();
+            run(&mut s, "sheet.manage_rules", json!({"name": "Sheet2", "angle_display": display}));
+            let mut s = plate_in(s, &[]);
+            run(&mut s, "sheet.flange", json!({"edges": [[50, 0, 2]], "height": 20, "angle": format!("{deg} deg")}));
+            let dxf = export(&mut s, json!({"bend_notes": true}));
+            let notes: Vec<String> = entities(&dxf).iter().filter(|e| e.0 == "TEXT").map(|e| string(e, 1)).collect();
+            let shown = if display == "included" { included } else { deg };
+            assert_eq!(notes, [format!("B1 UP {shown}%%d R1")], "{deg}° under {display}");
+            plain.push(export(&mut s, json!({})));
+        }
+        // Without notes the setting changes nothing in the file.
+        assert_eq!(plain.first(), plain.get(1), "{deg}°");
+    }
+}
+
+/// A body whose base flange names its rule keeps that rule's notes whichever rule is active when
+/// the DXF is written, and a bend down reads its included angle the same way.
+#[test]
+fn a_bend_note_follows_the_bodys_own_rule_and_bends_down_too() {
+    let mut s = sheet_of_2mm();
+    run(&mut s, "sheet.manage_rules", json!({"name": "Sheet2", "angle_display": "included"}));
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Base"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [100, 60]}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "sheet.flange", json!({"sketch": "Base", "rule": "Sheet2"}));
+    run(&mut s, "sheet.flange", json!({"edges": [[50, 0, 2]], "height": 20, "angle": "58 deg", "flip": true}));
+    let notes = |s: &mut Session| -> Vec<String> {
+        entities(&export(s, json!({"bend_notes": true}))).iter().filter(|e| e.0 == "TEXT").map(|e| string(e, 1)).collect()
+    };
+    assert_eq!(notes(&mut s), ["B1 DOWN 122%%d R1"]);
+    run(&mut s, "sheet.manage_rules", json!({"name": "Other", "thickness": "2 mm", "angle_display": "bend", "active": true}));
+    assert_eq!(notes(&mut s), ["B1 DOWN 122%%d R1"], "another active rule does not change this body's notes");
+}
+
 /// Two sheet bodies: a lid and, 200 mm away, a side wall with one bend.
 fn lid_and_wall() -> Session {
     let mut s = Session::default();
@@ -553,4 +593,24 @@ fn the_file_of_a_body_is_named_after_it_and_no_two_share_a_name() {
     assert_eq!(names("p.dxf", &["a/b:c", "  ", "wall."]), ["p-a_b_c.dxf", "p-body.dxf", "p-wall.dxf"]);
     // Two bodies that would share a file (in any case) get a number.
     assert_eq!(names("p.dxf", &["Lid", "lid", "LID", "Lid_2"]), ["p-Lid.dxf", "p-lid_2.dxf", "p-LID_3.dxf", "p-Lid_2_2.dxf"]);
+}
+
+/// #4314: a cutter that cuts every line gets a file without the bend lines, or with everything
+/// on layer 0. The default keeps the role layers and the dashed bend lines.
+#[test]
+fn bend_lines_can_be_left_out_and_everything_put_on_layer_0() {
+    let mut s = tray_with(&marks());
+    let layer = |e: &Entity| e.1.iter().find(|(c, _)| *c == 8).map(|(_, v)| v.clone()).unwrap_or_default();
+    let default = entities(&export(&mut s, json!({})));
+    let bends = |es: &[Entity]| es.iter().filter(|e| matches!(layer(e).as_str(), "BEND_UP" | "BEND_DOWN")).count();
+    assert_eq!(bends(&default), 4, "the tray's four bends");
+    let without = entities(&export(&mut s, json!({"bend_lines": false})));
+    assert_eq!(bends(&without), 0);
+    assert_eq!(without.len(), default.len() - 4, "only the bend lines go");
+    let single = entities(&export(&mut s, json!({"layers": "single"})));
+    assert_eq!(single.len(), default.len());
+    assert!(single.iter().all(|e| layer(e) == "0"), "{:?}", single.iter().map(layer).collect::<Vec<_>>());
+    for bad in [json!({"bend_lines": "no"}), json!({"layers": "one"})] {
+        assert!(s.execute("sheet.export_dxf", &bad).is_err(), "{bad}");
+    }
 }

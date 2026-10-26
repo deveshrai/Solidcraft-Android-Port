@@ -25,7 +25,36 @@ fn labels(h: &Harness) -> Vec<String> {
 }
 
 fn curves(h: &Harness) -> Vec<String> {
-    h.app.session.selection.iter().filter_map(|s| if let Sel::SketchCurve { id } = s { Some(id.clone()) } else { None }).collect()
+    h.app.session.selection.iter().filter_map(|s| if let Sel::SketchCurve { id, .. } = s { Some(id.clone()) } else { None }).collect()
+}
+
+/// Two lines of the sketch's own apart from each other (`l1` on x 0–15, `l2` on x 25–40, at
+/// y 10): screen points on each.
+fn two_lines_apart() -> (Harness, Value, Value) {
+    let mut h = Harness::new();
+    h.app.set_origin_shown(false);
+    h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+    for (x0, x1) in [(0, 15), (25, 40)] {
+        h.app.run("sketch.line", json!({"points":[[x0,10],[x1,10]],"infer":false,"connect":false})).unwrap();
+    }
+    h.app.cam.distance = 100.0;
+    h.settle();
+    let at = |h: &mut Harness, x: f64| h.call("ui.at", json!({"sketch":[x,10]}))["result"].clone();
+    // Away from the midpoints (7.5 and 32.5), which are picks of their own.
+    let (at_a, at_b) = (at(&mut h, 3.0), at(&mut h, 37.0));
+    (h, at_a, at_b)
+}
+
+/// The open list's row of sketch curve `id`.
+fn row_of(h: &Harness, id: &str) -> usize {
+    let rows = crate::select_other::describe(&h.app)["rows"].clone();
+    let sels: Vec<Sel> = rows.as_array().into_iter().flatten().filter_map(|r| serde_json::from_value(r["sel"].clone()).ok()).collect();
+    sels.iter().position(|s| matches!(s, Sel::SketchCurve { id: x, .. } if x == id)).unwrap_or_else(|| panic!("no row for {id}: {rows}"))
+}
+
+fn sorted(mut v: Vec<String>) -> Vec<String> {
+    v.sort();
+    v
 }
 
 #[test]
@@ -251,4 +280,31 @@ fn overlapping_midpoints_can_be_selected_individually_without_creating_points() 
     assert_eq!(h.app.session.selection, vec![Sel::SketchMidpoint { id: "l2".into() }, Sel::SketchMidpoint { id: "l1".into() }]);
     assert_eq!(h.app.session.doc.to_json(), before);
     assert_eq!(h.app.session.undo.len(), undo);
+}
+
+#[test]
+fn select_other_opened_with_shift_adds_its_choice_to_the_selection() {
+    // From the viewport menu, opened by a Shift right-click: the right-click's own pick doesn't
+    // stay, and the choice adds without Shift still held.
+    let (mut h, at_a, at_b) = two_lines_apart();
+    h.step(&json!({"click": at_a})).unwrap();
+    assert_eq!(curves(&h), ["l1"]);
+    h.frames(30);
+    h.step(&json!({"click": at_b, "button": "right", "shift": true})).unwrap();
+    let r = h.call("ui.menuPick", json!({"item": "ui.selectOther"}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(curves(&h), ["l1"], "opening the list put the selection back");
+    let i = row_of(&h, "l2");
+    h.step(&json!({"click": {"handle": format!("select_other:{i}")}})).unwrap();
+    assert_eq!(sorted(curves(&h)), ["l1", "l2"]);
+    // By press and hold with Shift.
+    h.frames(30);
+    h.step(&json!({"click": at_a})).unwrap();
+    assert_eq!(curves(&h), ["l1"]);
+    h.frames(30);
+    h.step(&json!({"hold": at_b, "shift": true})).unwrap();
+    assert!(crate::select_other::is_open(&h.app));
+    let i = row_of(&h, "l2");
+    h.step(&json!({"click": {"handle": format!("select_other:{i}")}})).unwrap();
+    assert_eq!(sorted(curves(&h)), ["l1", "l2"]);
 }

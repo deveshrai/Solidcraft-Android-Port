@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::persistent_name::{Base, FaceName, FeatureId};
 use crate::{FeatureKind, PlaneRef};
 
 /// Remap persistent topology tokens without rewriting arbitrary user expressions or labels.
@@ -21,6 +22,14 @@ pub fn remap_topology(name: &str, ids: &BTreeMap<u64, u64>, bodies: &BTreeMap<St
         && let Some(new) = bodies.get(body)
     {
         return format!("{new}:face:{suffix}");
+    }
+    // A name that reads is remapped by its structure: every feature it names, and a body
+    // face's body. Text of no known form is remapped token by token below.
+    if let Ok(face) = FaceName::parse(name)
+        && !matches!(face.base, Base::Other(_))
+        && let Some(mapped) = face.map(&mut |id, _| Some(ids.get(&id.0).map_or(id, |n| FeatureId(*n))), &mut |b| bodies.get(b).cloned())
+    {
+        return mapped.to_string();
     }
     let mut out = String::new();
     let mut at = 0;
@@ -106,6 +115,10 @@ fn remap_plane(p: &mut PlaneRef, ids: &BTreeMap<u64, u64>, bodies: &BTreeMap<Str
     }
     match p {
         PlaneRef::Offset { base, .. } | PlaneRef::AtAngle { base, .. } | PlaneRef::Flipped { base, .. } => remap_plane(base, ids, bodies, depth + 1)?,
+        PlaneRef::ThroughPoint { base, point } => {
+            remap_plane(base, ids, bodies, depth + 1)?;
+            remap_geo(point, ids, bodies, depth + 1)?;
+        }
         PlaneRef::Face { name, anchor, .. } => {
             if let Some(name) = name {
                 *name = remap_topology(name, ids, bodies);
@@ -284,6 +297,10 @@ fn checked_plane(p: &PlaneRef, depth: usize) -> crate::Result<()> {
         PlaneRef::Perpendicular { plane, line } => {
             checked_geo(plane, depth + 1)?;
             checked_geo(line, depth + 1)?;
+        }
+        PlaneRef::ThroughPoint { base, point } => {
+            checked_plane(base, depth + 1)?;
+            checked_geo(point, depth + 1)?;
         }
         PlaneRef::ThreePoints { a, b, c } => {
             checked_geo(a, depth + 1)?;

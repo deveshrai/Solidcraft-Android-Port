@@ -57,7 +57,7 @@ pub fn boxes_for(cmd: &str, n: usize) -> Vec<DimBox> {
 /// A locked box's value (mm or radians).
 fn locked(app: &SolveApp, t: &Tool, label: &str) -> Option<f64> {
     let b = t.dims.iter().chain(&t.dim_history).find(|b| b.label == label && b.locked)?;
-    app.session.doc.eval(&b.value, b.kind).ok().filter(|v| v.is_finite())
+    crate::length_input::eval(&app.session.doc, &b.value, b.kind).ok().filter(|v| v.is_finite())
 }
 
 fn dir_or_x(v: Vec2) -> Vec2 {
@@ -346,7 +346,8 @@ pub fn validate(app: &SolveApp, t: &Tool) -> Result<(), String> {
         if dimension.value.len() > 4096 {
             return Err(format!("{} expression is too long", dimension.label));
         }
-        let value = app.session.doc.eval(&dimension.value, dimension.kind).map_err(|error| format!("{}: {error}", dimension.label))?;
+        let value =
+            crate::length_input::eval(&app.session.doc, &dimension.value, dimension.kind).map_err(|error| format!("{}: {error}", dimension.label))?;
         if !value.is_finite() || value.abs() > 1e9 {
             return Err(format!("{} must be finite and within the model's size limits", dimension.label));
         }

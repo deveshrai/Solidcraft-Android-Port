@@ -227,7 +227,10 @@ pub fn study_tracks(s: &Session, key: &str, id_first: bool) -> Result<(u64, Stri
             let joint = s.doc.assembly.joints.iter().position(|j| j.id == k.joint)?;
             let angle = s.doc.assembly.joints.get(joint)?.kind.is_angle(k.index);
             let value = |v: f64| {
-                let (x, unit) = if angle { (v.to_degrees(), "deg") } else { (v, "mm") };
+                if !angle {
+                    return crate::length_input::model(&s.doc, v);
+                }
+                let (x, unit) = (v.to_degrees(), "deg");
                 // Short where that keeps the value; else all its digits, so OK keeps the key.
                 let short = crate::dialogs_assembly::num(x, unit);
                 let kept = short.split(' ').next().and_then(|n| n.parse::<f64>().ok()).is_some_and(|y| (y - x).abs() <= 1e-9 * x.abs().max(1.0));
@@ -267,7 +270,9 @@ pub fn study_params(s: &Session, name: &str, study: Option<&str>, steps: &str, t
         .filter(|t| !t.points.is_empty())
         .map(|t| {
             let j = s.doc.assembly.joints.get(t.joint).ok_or("no such joint")?;
-            Ok(json!({"joint": j.id, "index": t.index, "points": t.points.iter().map(|(st, v)| json!([st, v])).collect::<Vec<_>>()}))
+            let kind = if j.kind.is_angle(t.index) { solidcraft_engine::doc::expr::Kind::Angle } else { solidcraft_engine::doc::expr::Kind::Length };
+            let points: Vec<_> = t.points.iter().map(|(st, v)| json!([st, crate::length_input::expression(&s.doc, v, kind)])).collect();
+            Ok(json!({"joint": j.id, "index": t.index, "points": points}))
         })
         .collect::<Result<_, &str>>()?;
     if keys.is_empty() {
@@ -282,6 +287,7 @@ pub fn study_params(s: &Session, name: &str, study: Option<&str>, steps: &str, t
 }
 
 /// The configurations table: columns and rows (name, value per column).
+#[derive(Debug)]
 pub struct Table {
     pub columns: Vec<String>,
     pub rows: Vec<(String, Vec<String>)>,
@@ -669,8 +675,14 @@ fn motion_study_rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Mo, inputs: 
                     .clicked()
                     && !tr.points.iter().any(|(s, _)| *s == now)
                 {
-                    let unit =
-                        app.session.doc.assembly.joints.get(tr.joint).map(|j| if j.kind.is_angle(tr.index) { "deg" } else { "mm" }).unwrap_or("mm");
+                    let unit = app
+                        .session
+                        .doc
+                        .assembly
+                        .joints
+                        .get(tr.joint)
+                        .map(|j| if j.kind.is_angle(tr.index) { "deg" } else { crate::length_input::unit(&app.session.doc) })
+                        .unwrap_or(crate::length_input::unit(&app.session.doc));
                     tr.points.push((now, format!("0 {unit}")));
                     tr.points.sort_by_key(|p| p.0);
                 }
@@ -691,7 +703,7 @@ fn motion_study_rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Mo, inputs: 
                 .clicked()
                 && let Some((ji, _, kind)) = moving.first()
             {
-                let unit = if kind.is_angle(0) { "deg" } else { "mm" };
+                let unit = if kind.is_angle(0) { "deg" } else { crate::length_input::unit(&app.session.doc) };
                 tracks.push(Track { joint: *ji, index: 0, points: vec![(now, format!("0 {unit}"))] });
             }
             export = crate::ui_kit::button(ui, crate::i18n::tr_label("Export Animation…"), crate::ui_kit::Button::Normal)
@@ -967,7 +979,7 @@ mod tests {
         click_config_handle(&mut h, "config:preview_row");
         assert_eq!(h.app.session.doc.configs.rules[0].id, "last");
         reveal_config_handle(&mut h, "config:preview:param:length");
-        assert!(h.widget("length = 10 mm").is_some());
+        assert!(h.widget("length = 10").is_some());
         assert_eq!(h.app.session.doc.param("length").unwrap().expr, "40 mm");
     }
 
@@ -1001,7 +1013,8 @@ mod tests {
         configuration_steps(&mut h, &json!([{"widget":"Preview Row"}])).unwrap();
         assert_eq!(h.app.session.doc, before);
         configuration_steps(&mut h, &json!([{"widget":"Apply"}])).unwrap();
-        assert_eq!(h.app.session.doc.param("length").unwrap().expr, "10 mm");
+        assert_eq!(h.app.session.doc.param("length").unwrap().expr, "10");
+        assert_eq!(h.app.session.doc.eval("length", solidcraft_engine::doc::expr::Kind::Length).unwrap(), 10.0);
         assert!(h.app.session.doc.configuration_matches());
         configuration_steps(
             &mut h,

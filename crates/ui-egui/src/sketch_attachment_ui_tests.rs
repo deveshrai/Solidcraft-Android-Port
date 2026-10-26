@@ -63,8 +63,6 @@ fn lost_attachment_ghost_rebind_preview_cancel_apply_and_undo_preserve_sketch() 
     assert!(h.app.session.world_state().sketch(sketch).is_none(), "saved repair guides are not solved sketch geometry");
     let raw = raw_sketch(&h, sketch);
     let before = h.app.session.doc.to_json();
-    let undo = h.app.session.undo.len();
-    let redo = h.app.session.redo.len();
     h.app.edit_sketch(sketch);
     h.frames(4);
     assert_eq!(h.app.tree.redefine, Some(sketch));
@@ -82,6 +80,9 @@ fn lost_attachment_ghost_rebind_preview_cancel_apply_and_undo_preserve_sketch() 
     assert!(h.app.session.selection.is_empty(), "saved lost-plane guides must not be selectable geometry");
     assert!(h.app.session.active_sketch.is_none());
     h.app.run("browser.visibility", json!({"items":["ControlBox"],"visible":true})).unwrap();
+    // After the setup's two hide/show commands: each is an undo step of its own now (#2219).
+    let undo = h.app.session.undo.len();
+    let redo = h.app.session.redo.len();
     h.frames(4);
     h.step(&json!({"click":{"world":[3,4,30]}})).unwrap();
     assert!(matches!(h.app.session.selection.first(), Some(solidcraft_engine::Sel::Face { body, .. }) if body=="ControlBox"));
@@ -398,4 +399,23 @@ fn plane_redefinition_uses_dense_card_and_keeps_command_preview_cancel_and_ok() 
         }
         assert_eq!(h.app.session.doc.to_json(), before);
     }
+}
+
+/// #5103: Redefine Sketch Plane names the plane a sketch is on now, not only "no body-face
+/// attachment": an origin plane, a construction plane, and planes built from them.
+#[test]
+fn redefine_panel_names_the_plane_a_sketch_is_on() {
+    use crate::sketch_attachment_ui::plane_description;
+    let mut h = Harness::new();
+    h.app.run("construct.plane.offset", json!({"base": "XY", "offset": 10, "name": "Shelf"})).unwrap();
+    for (plane, expected) in [("XZ", "The XZ plane"), ("Shelf", "Shelf")] {
+        let id = h.app.run("sketch.create", json!({"plane": plane})).unwrap()["sketch"].as_u64().unwrap();
+        h.app.run("sketch.finish", json!({})).unwrap();
+        let FeatureKind::Sketch { plane: on, .. } = &h.app.session.doc.feature(id).unwrap().kind else { panic!("a sketch") };
+        assert_eq!(plane_description(on), expected, "{plane}");
+    }
+    let xy = Box::new(PlaneRef::Origin { name: "XY".into() });
+    let offset = PlaneRef::Offset { base: xy.clone(), distance: "12 mm".into() };
+    assert_eq!(plane_description(&offset), "The XY plane, offset by 12 mm");
+    assert_eq!(plane_description(&PlaneRef::Flipped { base: xy, about_y: false }), "The XY plane, from its other side");
 }

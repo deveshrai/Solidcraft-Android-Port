@@ -69,21 +69,21 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Asm, Vec<SelInput>)> {
             "joint.gear",
             first(&turns),
             turns.get(1).map(|j| j.0).unwrap_or(0),
-            ["10 mm".to_string(), "20 mm".to_string()],
+            [crate::dialogs::length_default(&app.session, "10"), crate::dialogs::length_default(&app.session, "20")],
             vec![SelInput::new("Gear 1 (optional)", ROUND, false), SelInput::new("Gear 2 (optional)", ROUND, false)],
         ),
         "joint.rack_pinion" => (
             "joint.rack_pinion",
             first(&turns),
             first(&b_list),
-            ["10 mm".to_string(), String::new()],
+            [crate::dialogs::length_default(&app.session, "10"), String::new()],
             vec![SelInput::new("Pinion (optional)", ROUND, false)],
         ),
         "joint.screw" => {
             // A joint that turns and slides is a screw on its own.
             let both = turns.iter().find(|t| b_list.iter().any(|l| l.0 == t.0)).map(|t| t.0);
             let a = both.unwrap_or(first(&turns));
-            ("joint.screw", a, both.unwrap_or(first(&b_list)), ["1.5 mm".to_string(), String::new()], vec![])
+            ("joint.screw", a, both.unwrap_or(first(&b_list)), [crate::dialogs::length_default(&app.session, "1.5"), String::new()], vec![])
         }
         _ => return None,
     };
@@ -113,7 +113,9 @@ fn picked_radius(s: &Session, inputs: &[SelInput], i: usize) -> Option<f64> {
 
 /// Size `i` in mm: the picked face's radius, or the typed one.
 fn size(s: &Session, f: &CouplingForm, inputs: &[SelInput], i: usize) -> Option<f64> {
-    picked_radius(s, inputs, i).or_else(|| s.doc.eval(f.sizes.get(i)?, ValueKind::Length).ok()).filter(|v| v.is_finite() && *v > 0.0)
+    picked_radius(s, inputs, i)
+        .or_else(|| crate::length_input::eval(&s.doc, f.sizes.get(i)?, ValueKind::Length).ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
 }
 
 /// A joint row: the joints `list` offers, `sel` the chosen id.

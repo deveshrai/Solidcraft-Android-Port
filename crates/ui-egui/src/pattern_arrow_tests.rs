@@ -116,3 +116,32 @@ fn a_pattern_of_features_puts_its_arrow_on_the_patterned_feature() {
     assert!(vx * ux + vy * uy > 0.0, "tip {tip:?} base {b:?}");
     assert!((vx * uy - vy * ux).abs() / (ux * ux + uy * uy).sqrt() < 3.0, "tip {tip:?} off the X line through {b:?}");
 }
+
+#[test]
+fn inch_pattern_arrows_follow_bare_primary_and_secondary_distances() {
+    let mut h = Harness::new();
+    h.app.run("solid.box", json!({"length":10,"width":10,"height":10})).unwrap();
+    h.app.run("document.units", json!({"units":"in"})).unwrap();
+    h.run(&json!([
+        {"call":"ui.view","params":{"view":"iso"}},
+        {"start":"solid.pattern.rectangular"},
+        {"click":{"world":[5,5,10]}},
+        {"call":"ui.dialogInput","params":{"index":1}}, {"click":{"axis":"X"}},
+        {"call":"ui.dialogInput","params":{"index":2}}, {"click":{"axis":"Y"}}
+    ]))
+    .unwrap();
+    if let Kind::PatternRect { spacing, spacing2, .. } = &mut h.app.dialog.as_mut().unwrap().kind {
+        *spacing = "0.5".into();
+        *spacing2 = "0.25".into();
+    }
+    h.settle();
+    let bare = (handle_at("arrow").unwrap(), handle_at("arrow2").unwrap());
+    if let Kind::PatternRect { spacing, spacing2, .. } = &mut h.app.dialog.as_mut().unwrap().kind {
+        *spacing = "12.7 mm".into();
+        *spacing2 = "6.35 mm".into();
+    }
+    h.settle();
+    let explicit = (handle_at("arrow").unwrap(), handle_at("arrow2").unwrap());
+    assert!(bare.0.distance(explicit.0) < 0.01, "primary: {bare:?} vs {explicit:?}");
+    assert!(bare.1.distance(explicit.1) < 0.01, "secondary: {bare:?} vs {explicit:?}");
+}

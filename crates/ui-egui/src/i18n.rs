@@ -31,36 +31,33 @@ impl Catalog {
     }
 }
 
-static ENGLISH: Catalog = Catalog::new("en", "English", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/en.json")));
-static CZECH: Catalog = Catalog::new("cs", "Čeština", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/cs.json")));
-static DANISH: Catalog = Catalog::new("da", "Dansk", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/da.json")));
-static GERMAN: Catalog = Catalog::new("de", "Deutsch", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/de.json")));
+static ENGLISH: Catalog = Catalog::new("en", "English", include_str!(concat!(env!("OUT_DIR"), "/locales/en.json")));
+static CZECH: Catalog = Catalog::new("cs", "Čeština", include_str!(concat!(env!("OUT_DIR"), "/locales/cs.json")));
+static DANISH: Catalog = Catalog::new("da", "Dansk", include_str!(concat!(env!("OUT_DIR"), "/locales/da.json")));
+static GERMAN: Catalog = Catalog::new("de", "Deutsch", include_str!(concat!(env!("OUT_DIR"), "/locales/de.json")));
 /// English in UK spelling: only the messages whose spelling differs; the rest are English's.
-static ENGLISH_UK: Catalog =
-    Catalog::new("en-GB", "English (UK)", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/en-GB.json")));
-static SPANISH: Catalog = Catalog::new("es", "Español (España)", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/es.json")));
-static FRENCH: Catalog = Catalog::new("fr", "Français", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/fr.json")));
-static GALICIAN: Catalog = Catalog::new("gl", "Galego", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/gl.json")));
-static HUNGARIAN: Catalog = Catalog::new("hu", "Magyar", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/hu.json")));
-static INDONESIAN: Catalog =
-    Catalog::new("id", "Bahasa Indonesia", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/id.json")));
-static ITALIAN: Catalog = Catalog::new("it", "Italiano", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/it.json")));
-static JAPANESE: Catalog = Catalog::new("ja", "日本語", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/ja.json")));
-static KOREAN: Catalog = Catalog::new("ko", "한국어", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/ko.json")));
-static MALAY: Catalog = Catalog::new("ms", "Bahasa Melayu", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/ms.json")));
-static DUTCH: Catalog = Catalog::new("nl", "Nederlands", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/nl.json")));
-static POLISH: Catalog = Catalog::new("pl", "Polski", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/pl.json")));
-static PORTUGUESE_BR: Catalog =
-    Catalog::new("pt-BR", "Português (Brasil)", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/pt-BR.json")));
-static ROMANIAN: Catalog = Catalog::new("ro", "Română", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/ro.json")));
-static RUSSIAN: Catalog = Catalog::new("ru", "Русский", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/ru.json")));
-static SWEDISH: Catalog = Catalog::new("sv", "Svenska", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/sv.json")));
-static TURKISH: Catalog = Catalog::new("tr", "Türkçe", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/tr.json")));
-static UKRAINIAN: Catalog = Catalog::new("uk", "Українська", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/uk.json")));
-static VIETNAMESE: Catalog = Catalog::new("vi", "Tiếng Việt", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/vi.json")));
-static CHINESE: Catalog = Catalog::new("zh", "中文", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/zh.json")));
-static CHINESE_TRADITIONAL: Catalog =
-    Catalog::new("zh-TW", "繁體中文", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/zh-TW.json")));
+static ENGLISH_UK: Catalog = Catalog::new("en-GB", "English (UK)", include_str!(concat!(env!("OUT_DIR"), "/locales/en-GB.json")));
+static SPANISH: Catalog = Catalog::new("es", "Español (España)", include_str!(concat!(env!("OUT_DIR"), "/locales/es.json")));
+static FRENCH: Catalog = Catalog::new("fr", "Français", include_str!(concat!(env!("OUT_DIR"), "/locales/fr.json")));
+static GALICIAN: Catalog = Catalog::new("gl", "Galego", include_str!(concat!(env!("OUT_DIR"), "/locales/gl.json")));
+static HUNGARIAN: Catalog = Catalog::new("hu", "Magyar", include_str!(concat!(env!("OUT_DIR"), "/locales/hu.json")));
+static INDONESIAN: Catalog = Catalog::new("id", "Bahasa Indonesia", include_str!(concat!(env!("OUT_DIR"), "/locales/id.json")));
+static ITALIAN: Catalog = Catalog::new("it", "Italiano", include_str!(concat!(env!("OUT_DIR"), "/locales/it.json")));
+static JAPANESE: Catalog = Catalog::new("ja", "日本語", include_str!(concat!(env!("OUT_DIR"), "/locales/ja.json")));
+static KOREAN: Catalog = Catalog::new("ko", "한국어", include_str!(concat!(env!("OUT_DIR"), "/locales/ko.json")));
+static MALAY: Catalog = Catalog::new("ms", "Bahasa Melayu", include_str!(concat!(env!("OUT_DIR"), "/locales/ms.json")));
+static NORWEGIAN: Catalog = Catalog::new("nb", "Norsk bokmål", include_str!(concat!(env!("OUT_DIR"), "/locales/nb.json")));
+static DUTCH: Catalog = Catalog::new("nl", "Nederlands", include_str!(concat!(env!("OUT_DIR"), "/locales/nl.json")));
+static POLISH: Catalog = Catalog::new("pl", "Polski", include_str!(concat!(env!("OUT_DIR"), "/locales/pl.json")));
+static PORTUGUESE_BR: Catalog = Catalog::new("pt-BR", "Português (Brasil)", include_str!(concat!(env!("OUT_DIR"), "/locales/pt-BR.json")));
+static ROMANIAN: Catalog = Catalog::new("ro", "Română", include_str!(concat!(env!("OUT_DIR"), "/locales/ro.json")));
+static RUSSIAN: Catalog = Catalog::new("ru", "Русский", include_str!(concat!(env!("OUT_DIR"), "/locales/ru.json")));
+static SWEDISH: Catalog = Catalog::new("sv", "Svenska", include_str!(concat!(env!("OUT_DIR"), "/locales/sv.json")));
+static TURKISH: Catalog = Catalog::new("tr", "Türkçe", include_str!(concat!(env!("OUT_DIR"), "/locales/tr.json")));
+static UKRAINIAN: Catalog = Catalog::new("uk", "Українська", include_str!(concat!(env!("OUT_DIR"), "/locales/uk.json")));
+static VIETNAMESE: Catalog = Catalog::new("vi", "Tiếng Việt", include_str!(concat!(env!("OUT_DIR"), "/locales/vi.json")));
+static CHINESE: Catalog = Catalog::new("zh", "中文", include_str!(concat!(env!("OUT_DIR"), "/locales/zh.json")));
+static CHINESE_TRADITIONAL: Catalog = Catalog::new("zh-TW", "繁體中文", include_str!(concat!(env!("OUT_DIR"), "/locales/zh-TW.json")));
 /// English first (the fallback), then by language id, one per line so that adding a language
 /// doesn't edit a line another addition edits.
 #[rustfmt::skip]
@@ -79,6 +76,7 @@ pub const LOCALES: &[&Catalog] = &[
     &JAPANESE,
     &KOREAN,
     &MALAY,
+    &NORWEGIAN,
     &DUTCH,
     &POLISH,
     &PORTUGUESE_BR,
@@ -168,6 +166,22 @@ impl Locale {
     /// a UI label ("Fillet", "Boss"); only the default names are translated.
     pub fn given_name(self, text: &str) -> String {
         self.default_name(text).unwrap_or_else(|| text.to_string())
+    }
+
+    /// Evaluation errors stay English for scripts; the empty Cut/Intersect hint that names
+    /// another component is translated where it is shown. Other text is returned unchanged.
+    pub fn diagnostic(self, text: &str) -> String {
+        const PREFIX: &str = "there is no body to cut or intersect in component '";
+        if let Some((before, detail)) = text.split_once(PREFIX)
+            && let Some((component, detail)) = detail.split_once("'; the tool may overlap '")
+            && let Some((body, detail)) = detail.split_once("' in component '")
+            && let Some((other, after)) = detail.split_once("' — activate that component or pick the body as a target")
+        {
+            let (component, body, other) = (self.given_name(component), self.given_name(body), self.given_name(other));
+            let message = self.format("diagnostic.empty_boolean_component", &[("component", &component), ("body", &body), ("other", &other)]);
+            return format!("{before}{message}{after}");
+        }
+        text.to_string()
     }
 
     /// Translate generated browser names and labels, preserving custom names otherwise.
@@ -262,13 +276,30 @@ pub fn tr_dyn(text: &str) -> String {
 pub fn tr_name(text: &str) -> String {
     CURRENT.with(|current| current.get().given_name(text))
 }
+pub fn tr_diagnostic(text: &str) -> String {
+    CURRENT.with(|current| current.get().diagnostic(text))
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Strings a pull request adds under `assets/locales/pending/` work before they are folded
+    /// into the catalogs (the build merges them in).
     #[test]
+    fn pending_messages_are_in_the_catalogs() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/locales/pending");
+        for entry in std::fs::read_dir(dir).unwrap().filter_map(Result::ok).filter(|e| e.path().extension().is_some_and(|x| x == "json")) {
+            let pending: BTreeMap<String, Messages> = serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap()).unwrap();
+            for (locale, messages) in pending {
+                for (id, text) in messages {
+                    assert_eq!(Locale::for_language(&locale).text(&id), text, "{locale}: {id}");
+                }
+            }
+        }
+    }
 
+    #[test]
     fn alias_resolution_regression() {
         static LEGACY: Catalog = Catalog::new("test-legacy", "Test", r#"{"Pitch":"legacy pitch"}"#);
         static ALIAS: Catalog = Catalog::new("test-alias", "Test", r#"{"coupling.pitch":"mechanical pitch"}"#);
@@ -281,6 +312,37 @@ mod tests {
         assert_eq!(alias.label("Pitch"), "mechanical pitch");
         assert_eq!(alias.label("coupling.pitch"), "mechanical pitch");
         assert_eq!(alias.label("original unknown caption"), "original unknown caption");
+    }
+
+    #[test]
+    fn timeline_feature_hint_comes_from_the_catalog() {
+        let id = "timeline.feature_hint";
+        let english = "Double-click to edit · drag to reorder · right-click for more";
+        assert_eq!(ENGLISH.messages().get(id).map(String::as_str), Some(english));
+        for language in ["en", "ja", "zh", "de", "ko", "es"] {
+            let _scope = scope(language);
+            let hint = tr(id);
+            assert_eq!(hint, Locale::for_language(language).text(id));
+            assert_ne!(hint, id);
+            if ["ja", "zh", "de", "ko"].contains(&language) {
+                assert_ne!(hint, english, "{language}: the hint must be translated");
+            }
+        }
+    }
+
+    #[test]
+    fn empty_boolean_component_diagnostic_translates_with_literal_names() {
+        let message = "solid.extrude: there is no body to cut or intersect in component 'Part {1}'; the tool may overlap 'Bracket' in component 'Imported STEP' — activate that component or pick the body as a target";
+        assert_eq!(Locale::for_language("en").diagnostic(message), message);
+        for (language, prefix) in [("ja", "solid.extrude: コンポーネント"), ("zh", "solid.extrude: 组件")] {
+            let translated = Locale::for_language(language).diagnostic(message);
+            assert!(translated.starts_with(prefix), "{translated}");
+            for name in ["Part {1}", "Bracket", "Imported STEP"] {
+                assert!(translated.contains(name), "{translated}");
+            }
+        }
+        let plain = "there is no body to cut or intersect";
+        assert_eq!(Locale::for_language("ja").diagnostic(plain), plain);
     }
 
     /// English first, then by id, so adding a locale edits only its own line.
@@ -420,6 +482,7 @@ mod tests {
         let cases = [
             ("cs", "Příruba", "Zebra analýza", "Studie pohybu"),
             ("da", "Flange", "Zebraanalyse", "Bevægelsesanalyse"),
+            ("nb", "Flens", "Zebraanalyse", "Bevegelsesanalyse"),
             ("zh", "法兰", "斑马纹分析", "运动研究"),
             ("ja", "フランジ", "ゼブラ解析", "モーション スタディ"),
             ("de", "Flansch", "Zebra-Analyse", "Bewegungsuntersuchung"),

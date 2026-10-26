@@ -19,6 +19,8 @@ use solidcraft_engine::licences::{LICENSE_APACHE, LICENSE_MIT, NOTICE, THIRD_PAR
 pub struct HelpState {
     pub menu: bool,
     pub about: bool,
+    /// The result of Connect AI assistants, one line per client, while its window is open.
+    pub connect: Option<Vec<String>>,
     /// The GPU the window renders with (set by the host).
     pub gpu: Option<String>,
 }
@@ -38,7 +40,7 @@ pub fn diagnostics(app: &SolveApp) -> String {
     )
 }
 
-/// Run a Help menu item: `docs`, `about`, `shortcuts`, `messages`, `report`, `crashes`.
+/// Run a Help menu item: `docs`, `about`, `shortcuts`, `messages`, `report`, `crashes`, `connect`, `install_cli` (macOS).
 pub fn run(app: &mut SolveApp, ctx: &egui::Context, item: &str) {
     app.help.menu = false;
     match item {
@@ -49,6 +51,11 @@ pub fn run(app: &mut SolveApp, ctx: &egui::Context, item: &str) {
             app.keymap.read_only = true;
         }
         "crashes" => crate::crash_ui::open(app),
+        "connect" => app.help.connect = Some(connect_assistants()),
+        "install_cli" => {
+            let (msg, error) = crate::cli_link::install_from_menu();
+            app.set_status(msg, error);
+        }
         "messages" => app.messages.open = true,
         "report" => {
             let dialog = app.dialog.clone();
@@ -56,6 +63,47 @@ pub fn run(app: &mut SolveApp, ctx: &egui::Context, item: &str) {
             crate::issue_report::begin(app, ctx, dialog.as_ref(), error.as_deref());
         }
         _ => {}
+    }
+}
+
+/// Add SolidCraft's MCP server to the AI assistants installed here (`solidcraft-cli mcp setup`),
+/// with the `solidcraft-cli` beside this program. One line per client.
+#[cfg(not(target_arch = "wasm32"))]
+fn connect_assistants() -> Vec<String> {
+    use solidcraft_engine::agent_setup as setup;
+    let Some(cli) = crate::agent_chat::find_cli() else {
+        return vec!["solidcraft-cli was not found next to SolidCraft; run `solidcraft-cli mcp setup` from a terminal.".into()];
+    };
+    let cli = cli.canonicalize().unwrap_or(cli).to_string_lossy().trim_start_matches(r"\\?\").to_owned();
+    match setup::setup(&[], &setup::Env::from_process(), &cli) {
+        Ok((lines, _)) => lines,
+        Err(e) => vec![e],
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn connect_assistants() -> Vec<String> {
+    vec!["Connecting AI assistants needs the desktop app.".into()]
+}
+
+/// The Connect AI assistants result window.
+fn connect(app: &mut SolveApp, ctx: &egui::Context) {
+    let Some(lines) = app.help.connect.clone() else {
+        return;
+    };
+    let (closed, action) = ui_kit::Window::new(egui::Id::new("sc_connect_assistants"), "help", crate::i18n::tr_label("Connect AI assistants"))
+        .cards(2.0)
+        .actions("", "Close", None)
+        .show(ctx, true, |ui| {
+            ui_kit::text(
+                ui,
+                crate::i18n::tr_label("Restart each assistant to load the SolidCraft server. Each file was backed up as .bak before it changed."),
+                ui_kit::Text::Note("connect_note"),
+            );
+            ui_kit::text(ui, &lines.join("\n"), ui_kit::Text::Report("connect", false));
+        });
+    if closed || action == ui_kit::Action::Cancel {
+        app.help.connect = None;
     }
 }
 
@@ -77,7 +125,12 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context, anchor: egui::Pos2) {
                         ("messages", "Messages…", "list"),
                         ("report", "Report an Issue…", "bug_report"),
                         ("crashes", "Crash Reports…", "status_error"),
-                    ] {
+                        ("connect", "Connect AI assistants…", "settings"),
+                        ("install_cli", "Install solidcraft-cli command", "settings"),
+                    ]
+                    .into_iter()
+                    .filter(|(id, ..)| *id != "install_cli" || cfg!(target_os = "macos"))
+                    {
                         if crate::context_menu::list_row(ui, &crate::context_menu::Item::action(id, label, icon)).is_some() {
                             pick = Some(id);
                         }
@@ -95,6 +148,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context, anchor: egui::Pos2) {
         ctx.data_mut(|d| d.insert_temp(egui::Id::new("sc_help_opened"), false));
     }
     about(app, ctx);
+    connect(app, ctx);
     crate::crash_ui::show(app, ctx);
     crate::messages::show(app, ctx);
 }

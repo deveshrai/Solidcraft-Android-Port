@@ -12,6 +12,7 @@ mod icons;
 mod layers;
 mod licences;
 mod lists;
+mod pending;
 mod render_assets;
 mod test;
 mod test_nextest;
@@ -55,6 +56,9 @@ commands:
                   write THIRD-PARTY-LICENSES.txt (the licences of every shipped crate, embedded
                   in the programs); --check only reports when it is out of date: pull requests
                   leave it to the Generated files workflow on main
+  fold-pending    fold assets/locales/pending/*.json into the catalogs and attribution/pending/*.md
+                  into ATTRIBUTION.md, and delete them (the Generated files workflow runs this on
+                  main; pull requests add the pending files instead of editing the shared ones)
   lists [--fix]   check that files many changes add to are sorted one item per line (the
                   message catalogs in assets/locales); --fix sorts them
   test [CARGO ARGS] [-- TEST ARGS]
@@ -92,6 +96,7 @@ fn main() -> ExitCode {
         }
         Some("book") => book::run(&root(), !rest.contains(&"--no-build")),
         Some("licences") => licences::run(&root(), rest.contains(&"--check")),
+        Some("fold-pending") => pending::run(&root()),
         Some("lists") => lists::run(&root(), rest.contains(&"--fix")),
         Some("test") => {
             let (cargo_args, test_args) = rest.iter().position(|a| *a == "--").map_or((&rest[..], &[][..]), |i| (&rest[..i], &rest[i + 1..]));

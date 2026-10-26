@@ -357,3 +357,61 @@ fn an_inserted_assembly_exports_its_nested_parts_where_they_are() {
     assert_eq!(shown_boxes(&back), placed);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The parts of one STEP import share their face names, and each keeps its body where the file
+/// has it, placed in its component by an offset. A joint on one part's hole takes that part's
+/// hole, not the other part's hole of that name, though the pick (in the part's own coordinates)
+/// lies nearer that one as the bodies lie.
+#[test]
+fn a_joint_on_an_imported_part_takes_its_own_hole() {
+    // Two 40 × 30 × 5 plates with a 6.2 mm hole through each: A's at (28, 20), B's at (10, 10);
+    // B placed 60 mm along X, so its hole is at (70, 10) in the world.
+    let plate = |x: f64, y: f64| {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length": 40, "width": 30, "height": 5}));
+        run(&mut s, "solid.hole", json!({"position": [x, y, 5], "diameter": 6.2, "depth": 5}));
+        s.model.state().bodies[0].body.clone()
+    };
+    let (a, b) = (plate(28.0, 20.0), plate(10.0, 10.0));
+    let part = |name: &str, body| ExportProduct {
+        name: name.into(),
+        bodies: vec![ExportBody { name: name.into(), body, color: None }],
+        children: Vec::new(),
+    };
+    let products = vec![
+        ExportProduct {
+            name: "Pair".into(),
+            bodies: Vec::new(),
+            children: vec![(1, at(0.0, 0.0, 0.0), "A-1".into()), (2, at(60.0, 0.0, 0.0), "B-1".into())],
+        },
+        part("A", &a),
+        part("B", &b),
+    ];
+    let dir = temp_dir("own-hole");
+    let path = dir.join("pair.step");
+    std::fs::write(&path, step_export_products(&products, 0, &StepHeader::default()).unwrap()).unwrap();
+    let mut s = Session::default();
+    run(&mut s, "file.insert_step", json!({"path": path.to_string_lossy()}));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // A pin jointed into B's hole, picked on its wall.
+    let on_b = occurrence_named(&s, "B:1");
+    let pin = run(&mut s, "component.create", json!({"name": "Pin"}))["occurrence"].as_u64().unwrap();
+    run(&mut s, "solid.cylinder", json!({"radius": 3, "height": 10, "base": [0, -40, 0]}));
+    run(&mut s, "component.activate", json!({"component": "root"}));
+    let a = json!({"occurrence": pin, "point": [0, -40, 0]});
+    run(&mut s, "joint.create", json!({"type": "rigid", "name": "Into B", "a": a, "b": {"occurrence": on_b, "circle": [73.1, 10, 2.5]}}));
+    let o = s.doc.assembly.joints.iter().find(|j| j.name == "Into B").unwrap().b.clone();
+    let st = s.model.state();
+    // A's hole has the very name B's has (the case this is about).
+    let solidcraft_doc::joints::Snap::CircleCenter { face: Some(name), .. } = &o.snap else { panic!("{:?}", o.snap) };
+    let a_comp = s.doc.occurrences.iter().find(|x| x.id == occurrence_named(&s, "A:1")).unwrap().component;
+    let a_body = st.bodies.iter().find(|x| s.doc.model_body_component(x) == a_comp).unwrap();
+    assert!(solidcraft_doc::naming::face_names(a_body).iter().any(|n| n == name), "{name}");
+    let f = solidcraft_doc::joints::resolve_origin(&s.doc, &st, &o).unwrap();
+    let at = solidcraft_doc::apply_point(&solidcraft_doc::joints::occurrence_world(&s.doc, on_b), Vec3::new(f[3][0], f[3][1], f[3][2]));
+    assert!(Vec3::new(at.x, at.y, 0.0).dist(Vec3::new(70.0, 10.0, 0.0)) < 1e-6, "B's hole is at (70, 10), the joint at {at:?}");
+    // And the pin stands in it.
+    let pin_at = solidcraft_doc::apply_point(&solidcraft_doc::joints::occurrence_world(&s.doc, pin), Vec3::new(0.0, -40.0, 0.0));
+    assert!(Vec3::new(pin_at.x, pin_at.y, 0.0).dist(Vec3::new(70.0, 10.0, 0.0)) < 1e-6, "the pin's base is at {pin_at:?}");
+}

@@ -217,6 +217,51 @@ fn block_in_component() -> Session {
     s
 }
 
+/// Edit Feature passes a primitive's placement through as saved, so changing the radius of
+/// Leaf B's rod in the Hinge Assembly leaves the leaf where it was (#2926).
+#[test]
+fn editing_a_primitive_in_a_turned_component_keeps_its_placement() {
+    let sample = crate::sample::samples().into_iter().find(|x| x.name == "Hinge Assembly").unwrap();
+    let mut s = Session::default();
+    s.run_script(&(sample.script)()).unwrap();
+    let (plate_lo, plate_hi) = world_bbox(&s, "Body3");
+    let (rod_lo, rod_hi) = world_bbox(&s, "Body4");
+    // What the dialog sends: the saved definition, with the new radius.
+    let definition = run(&mut s, "timeline.inspect", json!({"feature": "Cylinder2"}))["definition"].clone();
+    let params = json!({"base": definition["base"], "axis": definition["axis"], "radius": "6", "height": "40", "operation": "new_body"});
+    run(&mut s, "timeline.redefine", json!({"feature": "Cylinder2", "command": "solid.cylinder", "params": params}));
+    let after = run(&mut s, "timeline.inspect", json!({"feature": "Cylinder2"}))["definition"].clone();
+    assert_eq!((&after["base"], &after["axis"]), (&definition["base"], &definition["axis"]));
+    let (lo, hi) = world_bbox(&s, "Body3");
+    assert!(near(lo, plate_lo) && near(hi, plate_hi), "the leaf moved: {lo:?} {hi:?}");
+    // The rod grows about its own axis (its mesh is faceted, so its size is close, not exact).
+    let (lo, hi) = world_bbox(&s, "Body4");
+    assert!(((lo + hi) * 0.5).dist((rod_lo + rod_hi) * 0.5) < 1e-3, "the rod moved: {lo:?} {hi:?}");
+    let (size, before) = (hi - lo, rod_hi - rod_lo);
+    assert!((size.x - before.x).abs() < 1e-6 && (size.y - 12.0).abs() < 0.05 && (size.z - 12.0).abs() < 0.05, "{size:?}");
+}
+
+/// A new placement given to `timeline.redefine` is still a world point.
+#[test]
+fn a_new_primitive_placement_is_still_mapped_from_the_world() {
+    let mut s = moved_part();
+    run(&mut s, "component.activate", json!({"component": "Part"}));
+    run(&mut s, "solid.cylinder", json!({"base": [60, 10, 10], "radius": 2, "height": 5, "operation": "new", "name": "Peg"}));
+    let base = |s: &mut Session| run(s, "timeline.inspect", json!({"feature": "Peg"}))["definition"]["base"].clone();
+    assert_eq!(base(&mut s), json!([10.0, 10.0, 10.0]));
+    let redefine = |s: &mut Session, at: Value| {
+        run(
+            s,
+            "timeline.redefine",
+            json!({"feature": "Peg", "command": "solid.cylinder", "params": {"base": at, "radius": 3, "height": 5, "operation": "new"}}),
+        );
+    };
+    redefine(&mut s, json!([10, 10, 10]));
+    assert_eq!(base(&mut s), json!([10.0, 10.0, 10.0]));
+    redefine(&mut s, json!([70, 10, 10]));
+    assert_eq!(base(&mut s), json!([20.0, 10.0, 10.0]));
+}
+
 /// The user's "big square": a sketch made in the root on a moved component's face lies on the
 /// face where it is shown, its projected loop on the face's edges (moved and turned), and it
 /// follows when the occurrence moves on.
@@ -285,4 +330,43 @@ fn root_picks_on_a_moved_component_build_where_it_is_shown() {
     run(&mut s, "construct.plane.along_path", json!({"path": {"edge": [65, 40, 0]}, "t": 0.5, "name": "Across"}));
     let across = crate::view::construction_planes(&s).into_iter().find(|(_, n, _)| n == "Across").unwrap().2;
     assert!((across.origin.y - 40.0).abs() < 1e-6, "{across:?}");
+}
+
+/// #6000: in a turned component, a named plane ("XY") is the component's own; an explicit
+/// `{origin, x_dir, y_dir}` is world unless `frame: "component"` says otherwise. The reply says
+/// which, with a note when the two differ.
+#[test]
+fn an_explicit_sketch_plane_is_read_in_the_frame_asked_for() {
+    let mut s = moved_part();
+    run(&mut s, "occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "30 deg", "move_grounded": true}));
+    let explicit = json!({"origin": [0, 0, 0], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]});
+    let centre = |s: &mut Session, name: &str, p: Value| {
+        let r = run(s, "sketch.create", p);
+        run(s, "sketch.circle.center", json!({"center": [20, 10], "radius": 6}));
+        run(s, "sketch.finish", json!({}));
+        (r, *sketch_world_points(s, name).last().unwrap())
+    };
+    let (named, own) = centre(&mut s, "Named", json!({"plane": "XY", "name": "Named"}));
+    assert!(named.get("frame").is_none(), "{named}");
+    assert!((own.z - 5.0).abs() < 1e-6, "the component's XY is turned with it: {own:?}");
+
+    let (world, at) = centre(&mut s, "World", json!({"plane": explicit, "name": "World"}));
+    assert_eq!(world["frame"], "world");
+    assert!(world["note"].as_str().is_some_and(|n| n.contains("frame")), "{world}");
+    assert!(at.z.abs() < 1e-6, "today's reading: on the world XY plane: {at:?}");
+
+    let (comp, at) = centre(&mut s, "Own", json!({"plane": explicit, "frame": "component", "name": "Own"}));
+    assert_eq!(comp["frame"], "component");
+    assert!(comp.get("note").is_none(), "{comp}");
+    assert!(near(at, own), "the component's XY written out: {at:?} vs {own:?}");
+
+    // Redefine reads the same way.
+    let r = run(&mut s, "sketch.redefine", json!({"sketch": "World", "plane": explicit, "frame": "component"}));
+    assert_eq!(r["frame"], "component");
+    assert!(near(*sketch_world_points(&mut s, "World").last().unwrap(), own));
+
+    for (p, why) in [(json!({"plane": "XY", "frame": "component"}), "explicit"), (json!({"plane": explicit, "frame": "local"}), "world")] {
+        let e = s.execute("sketch.create", &p).expect_err("refused").to_string();
+        assert!(e.contains(why), "{p}: {e}");
+    }
 }

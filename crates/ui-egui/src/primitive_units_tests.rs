@@ -141,7 +141,7 @@ fn in_an_inch_design_primitive_dialogs_show_inches_and_read_bare_numbers_as_inch
     type_into(&mut h, "height", "10 mm");
     h.frames(2);
     let (_, params) = apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap().remove(0);
-    assert_eq!((&params["length"], &params["width"], &params["height"]), (&json!("20 in"), &json!("2"), &json!("10 mm")));
+    assert_eq!((&params["length"], &params["width"], &params["height"]), (&json!("20 in"), &json!("2 in"), &json!("10 mm")));
     ok(&mut h);
     assert_size(&mut h.app.session, [508.0, 50.8, 10.0]);
 }
@@ -271,4 +271,125 @@ fn editing_a_coil_reopens_its_dialog_filled_in_and_ok_redefines_it() {
         }
         other => panic!("not a coil: {other:?}"),
     }
+}
+
+/// #3271: cover secondary and optional lengths as well as each tool's primary canvas value.
+#[test]
+fn operation_length_defaults_follow_every_design_unit() {
+    const CASES: &[(&str, &[&str])] = &[
+        ("solid.extrude", &["10", "10", "", "", "2", "1"]),
+        ("solid.fillet", &["2", "2"]),
+        ("solid.chamfer", &["1", "1"]),
+        ("solid.shell", &["2"]),
+        ("solid.hole", &["5", "10", "9", "3", "10"]),
+        ("solid.rib", &["2", ""]),
+        ("solid.web", &["2", ""]),
+        ("solid.emboss", &["1"]),
+        ("solid.offset_face", &["2"]),
+        ("solid.pattern.rectangular", &["20", "20"]),
+        ("solid.pattern.path", &["20"]),
+        ("solid.pipe", &["5", ""]),
+        ("solid.bounding_solid", &["2"]),
+        ("solid.move", &["0", "0", "0"]),
+        ("construct.plane.offset", &["0"]),
+        ("inspect.section", &["0"]),
+        ("surface.extrude", &["10"]),
+        ("surface.offset", &["2"]),
+        ("surface.ruled", &["10"]),
+        ("surface.thicken", &["2"]),
+        ("surface.extend", &["10"]),
+        ("surface.stitch", &[""]),
+        ("sheet.flange", &["10", "", "20", ""]),
+        ("sheet.hem", &["5", ""]),
+        ("sheet.fold", &[""]),
+        ("plastic.boss", &["6", "10", "3", "", "", "1", "3", "1"]),
+        ("plastic.lip", &["1.5", "2", ""]),
+        ("plastic.snap_fit", &["10", "1.5", "5", "1", "2"]),
+        ("plastic.rest", &["10", "15", "2", ""]),
+        ("joint.create", &["0", "0", "0"]),
+        ("joint.gear", &["10", "20"]),
+        ("joint.rack_pinion", &["10", ""]),
+        ("joint.screw", &["1.5", ""]),
+        ("joint.cam", &["5"]),
+        ("sketch.offset", &["2", "2"]),
+        ("sketch.move", &["0", "0"]),
+        ("sketch.pattern.rectangular", &["20", "20"]),
+        ("sketch.fillet", &["2", "2"]),
+        ("sketch.chamfer.two_distance", &["2", "2"]),
+    ];
+    for units in ["mm", "cm", "m", "in", "ft"] {
+        let h = design(units);
+        for &(command, numbers) in CASES {
+            let mut d = crate::dialogs::Dialog::for_command(&h.app, command).unwrap_or_else(|| panic!("no dialog for {command}"));
+            let values: Vec<_> = crate::length_input::fields(&h.app.session.doc, &mut d.kind).into_iter().map(|v| v.clone()).collect();
+            let expected: Vec<_> = numbers.iter().map(|n| if n.is_empty() { String::new() } else { format!("{n} {units}") }).collect();
+            assert_eq!(values, expected, "{command} in {units}");
+        }
+    }
+}
+
+#[test]
+fn length_input_expressions_and_computed_values_round_trip_without_display_rounding() {
+    use solidcraft_engine::doc::expr::Kind as K;
+    for (units, scale) in [("mm", 1.0), ("cm", 10.0), ("m", 1000.0), ("in", 25.4), ("ft", 304.8)] {
+        let mut h = design(units);
+        h.app.run("parameters.add", json!({"name":"span","expression":"12 mm"})).unwrap();
+        for (text, expected) in [
+            ("0.25", 0.25 * scale),
+            ("1 / 4", 0.25 * scale),
+            ("0,25", 0.25 * scale),
+            ("0,25 + max(1,2)", 2.25 * scale),
+            ("2 mm", 2.0),
+            ("span / 2", 6.0),
+            ("span + 2 mm", 14.0),
+        ] {
+            let value = crate::length_input::eval(&h.app.session.doc, text, K::Length).unwrap();
+            assert!((value - expected).abs() < 1e-9, "{units}: {text} -> {value}");
+        }
+        for mm in [0.0, -12.3456789123, 0.0000123456789, 25.4, 123456.789123] {
+            let text = crate::length_input::model(&h.app.session.doc, mm);
+            assert!(text.ends_with(units), "{text}");
+            let value = crate::length_input::eval(&h.app.session.doc, &text, K::Length).unwrap();
+            assert!((value - mm).abs() < 1e-10 * mm.abs().max(1.0), "{text} -> {value}, wanted {mm}");
+        }
+        for text in ["", "NaN", "1e400", "2 deg", "missing_parameter"] {
+            assert!(crate::length_input::eval(&h.app.session.doc, text, K::Length).is_err(), "{text}");
+        }
+        assert_eq!(crate::length_input::expression(&h.app.session.doc, "45", K::Angle), "45");
+        assert_eq!(crate::length_input::expression(&h.app.session.doc, "3", K::Unitless), "3");
+        assert_eq!(crate::length_input::expression(&h.app.session.doc, "span / 2", K::Length), "span / 2");
+    }
+}
+
+#[test]
+fn inch_extrude_secondary_lengths_and_unchanged_edit_keep_their_physical_sizes() {
+    let mut h = design("mm");
+    h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+    h.app.run("sketch.rectangle.two_point", json!({"p0":[0,0],"p1":[40,30]})).unwrap();
+    h.app.run("solid.extrude", json!({"distance":10,"distance2":5})).unwrap();
+    let feature = h.app.session.doc.features.last().unwrap().id;
+    let before = volume(&mut h.app.session);
+    h.app.run("document.units", json!({"units":"in"})).unwrap();
+    h.app.edit_feature(feature);
+    h.frames(3);
+    let Kind::Extrude { distance, distance2, .. } = &h.app.dialog.as_ref().unwrap().kind else { panic!("no extrude") };
+    assert_eq!((distance.as_str(), distance2.as_str()), ("10 mm", "5 mm"));
+    ok(&mut h);
+    assert!((volume(&mut h.app.session) - before).abs() < 1e-6);
+    h.app.edit_feature(feature);
+    if let Kind::Extrude { distance, distance2, start, .. } = &mut h.app.dialog.as_mut().unwrap().kind {
+        *distance = "0.25".into();
+        *distance2 = "2 mm".into();
+        *start = "0.125".into();
+    }
+    let commands = apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
+    let p = &commands[0].1["params"];
+    assert_eq!((&p["distance"], &p["distance2"], &p["start_offset"]), (&json!("0.25 in"), &json!("2 mm"), &json!("0.125 in")));
+    h.frames(3);
+    ok(&mut h);
+    let measurements = h.app.session.execute("inspect.measure", &json!({})).unwrap();
+    let bbox = &measurements["bodies"][0]["bbox"];
+    assert!((bbox["max"][2].as_f64().unwrap() - 9.525).abs() < 1e-6);
+    let reopened = Session::new(solidcraft_engine::doc::Document::from_json(&h.app.session.doc.to_json()).unwrap());
+    assert_eq!(reopened.doc.length_inputs(), h.app.session.doc.length_inputs());
 }

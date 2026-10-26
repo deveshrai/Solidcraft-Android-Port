@@ -242,6 +242,7 @@ fn run(s: &mut Session, id: &str, p: Value) -> Result<Value> {
 fn hex(s: &mut Session, af: f64, z0: f64, z1: f64, op: &str) -> Result<()> {
     run(s, "sketch.create", json!({"plane": "XY", "offset": format!("{z0} mm")}))?;
     run(s, "sketch.polygon.circumscribed", json!({"center": [0, 0], "radius": af / 2.0, "sides": 6}))?;
+    fix_all(s)?;
     run(s, "sketch.finish", json!({}))?;
     let (dist, dir) = if z1 >= z0 { (z1 - z0, "positive") } else { (z0 - z1, "negative") };
     run(s, "solid.extrude", json!({"distance": format!("{dist} mm"), "direction": dir, "operation": op}))?;
@@ -262,8 +263,24 @@ fn revolve(s: &mut Session, pts: &[(f64, f64)], op: &str) -> Result<()> {
     run(s, "sketch.create", json!({"plane": "XZ"}))?;
     let points: Vec<[f64; 2]> = pts.iter().map(|(r, z)| [*r, -*z]).collect();
     run(s, "sketch.line", json!({"points": points, "closed": true}))?;
+    fix_all(s)?;
     run(s, "sketch.finish", json!({}))?;
     run(s, "solid.revolve", json!({"axis": "y", "operation": op}))?;
+    Ok(())
+}
+
+/// Fix every point and curve of the sketch being drawn: a standard part's outline is its size, so
+/// its sketches are fully defined and a check of the design finds nothing left free in them.
+fn fix_all(s: &mut Session) -> Result<()> {
+    let sketch = s.active_sketch.and_then(|id| s.doc.features.iter().find(|f| f.id == id)).and_then(|f| match &f.kind {
+        solidcraft_doc::FeatureKind::Sketch { sketch, .. } => Some(sketch),
+        _ => None,
+    });
+    let entities: Vec<String> =
+        sketch.map(|sk| sk.points.iter().map(|p| p.id.clone()).chain(sk.curves.iter().map(|c| c.id.clone())).collect()).unwrap_or_default();
+    if !entities.is_empty() {
+        run(s, "sketch.constraint.fix", json!({"entities": entities, "fixed": true}))?;
+    }
     Ok(())
 }
 
@@ -629,6 +646,30 @@ mod tests {
         let (lo, hi) = bbox(&s, "SHCS M8x25");
         assert!((hi.z - 18.0).abs() < 1e-6 && (lo.z + 15.0).abs() < 1e-6, "{lo:?} {hi:?}");
         assert!(s.model.state().threads.iter().any(|t| t.designation == "M8" && (t.pitch - 1.25).abs() < 1e-9));
+    }
+
+    #[test]
+    fn every_sketch_of_a_standard_part_is_fully_defined() {
+        for (family, size, resized) in [
+            ("socket_head_cap_screw", "M6", "M8"),
+            ("hex_bolt", "M6", "M8"),
+            ("hex_nut", "M6", "M8"),
+            ("washer", "M6", "M8"),
+            ("set_screw", "M6", "M8"),
+            ("dowel_pin", "6", "8"),
+            ("bearing", "608", "6200"),
+        ] {
+            let mut s = Session::default();
+            let part = run(&mut s, "parts.insert", json!({"family": family, "size": size}));
+            for step in ["inserted", "resized"] {
+                let st = s.model.state();
+                let free: Vec<_> =
+                    st.sketches.iter().filter(|k| k.report.dof != 0 || !k.report.fully_constrained()).map(|k| (&k.name, k.report.dof)).collect();
+                assert!(!st.sketches.is_empty() && free.is_empty(), "{family} {step}: {free:?}");
+                assert!(s.model.results.iter().all(|r| r.error.is_none()), "{family} {step}");
+                run(&mut s, "parts.resize", json!({"component": part["component"], "size": resized}));
+            }
+        }
     }
 
     #[test]

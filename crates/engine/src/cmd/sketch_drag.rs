@@ -155,6 +155,12 @@ pub(super) fn drag_entity(
     let Some((path, hold, n, short)) = prepare(sk, e, with, from, to) else {
         return (Dragged::default(), Left::Unsolved);
     };
+    // A point dragged alone that ends tangent lines: each step first tries with their other ends
+    // held too, and only when that can't be solved lets them move. Unheld, the solver spread its
+    // correction over every free point, so the line's far end moved (towards the dragged one)
+    // where the curve it is tangent to could have taken the change, as holding that end by hand
+    // showed.
+    let keep = keep_line_ends(sk, e, with, &hold);
     #[cfg(test)]
     let (n, short) = (n.min(step_cap::get()), short.min(step_cap::get()));
     let moving: Vec<_> = path.points().filter_map(|q| Some((q, sk.point(q)?))).collect();
@@ -172,10 +178,19 @@ pub(super) fn drag_entity(
         let mut own = Budget::full();
         let budget = frame.as_mut().unwrap_or(&mut own);
         let spent = budget.spent();
-        let ok = counted_solve(sk, &hold, Some(&last.pos), Analysis::StatusOnly, Some(&mut *budget)).ok();
+        let kept = keep.as_ref().is_some_and(|keep| {
+            let ok = counted_solve(sk, keep, Some(&last.pos), Analysis::StatusOnly, Some(&mut *budget)).ok() && !last.sweep_wrapped(sk);
+            if !ok {
+                last.restore(sk);
+                path.apply(sk, t);
+            }
+            ok
+        });
+        let ok = kept || counted_solve(sk, &hold, Some(&last.pos), Analysis::StatusOnly, Some(&mut *budget)).ok();
         solves.count += 1;
         solves.work += budget.spent() - spent;
         solves.cut |= budget.exhausted();
+        solves.numeric |= budget.numeric_exhausted();
         let outcome = if !ok {
             Step::Failed
         } else if last.sweep_wrapped(sk) {
@@ -196,7 +211,15 @@ pub(super) fn drag_entity(
     let (mut base, mut dt, mut k, mut t) = (0.0, 1.0 / n as f64, 0, 0.0);
     let mut shortened = false;
     let mut wrapped = false;
+    let mut out_of_frame = false;
     'walk: while t < 1.0 {
+        // A live frame whose numerical solves have done their share takes no more steps: the
+        // rest of the way waits for the next frame (`retry`), instead of seconds of held solves
+        // in this one, all failing where the geometry can't follow.
+        if solves.numeric {
+            out_of_frame = true;
+            break 'walk;
+        }
         if solves.cut && !shortened {
             shortened = true;
             let rest = 1.0 - t;
@@ -237,7 +260,7 @@ pub(super) fn drag_entity(
             let fine = dt / HALVINGS as f64;
             let mut miss = t;
             let mut first = true;
-            while spare > 0 && miss - good > fine {
+            while spare > 0 && miss - good > fine && !solves.numeric {
                 spare -= 1;
                 let mid = if std::mem::take(&mut first) { good + fine } else { 0.5 * (good + miss) };
                 match step(sk, &last, mid, &mut solves) {
@@ -291,7 +314,8 @@ pub(super) fn drag_entity(
                 let d = to - start;
                 if at.dist(to) < 1e-6 || d.dot(d) == 0.0 { 1.0 } else { ((at - start).dot(d) / d.dot(d)).clamp(0.0, 1.0) }
             });
-            let retry = frame.as_ref().is_some_and(Budget::exhausted) && start.zip(at).is_some_and(|(a, b)| a.dist(b) > 1e-9);
+            let spent = out_of_frame || frame.as_ref().is_some_and(Budget::exhausted);
+            let retry = spent && start.zip(at).is_some_and(|(a, b)| a.dist(b) > 1e-9);
             return (Dragged { reached, moving, line_grab, retry }, Left::Solved);
         }
     }
@@ -306,7 +330,8 @@ pub(super) fn drag_entity(
         None if good > 0.0 => Left::Solved,
         None => Left::Unsolved,
     };
-    (Dragged { reached: good, moving, line_grab, retry: false }, left)
+    // The next frame goes on only from progress: a grab that can't move asks for no more.
+    (Dragged { reached: good, moving, line_grab, retry: out_of_frame && good > 0.0 }, left)
 }
 
 /// The held solves of one drag: how many, their shared work (including cursor correction),
@@ -316,6 +341,8 @@ pub(super) struct Solves {
     pub count: usize,
     pub work: usize,
     pub cut: bool,
+    /// The frame's numerical solves have done their share ([`Budget::numeric_exhausted`]).
+    pub numeric: bool,
 }
 
 /// One live frame's decomposition budget (smaller in tests that set one).
@@ -323,6 +350,10 @@ fn frame_budget() -> Budget {
     #[cfg(test)]
     if let Some(work) = last_drag::frame_work() {
         return Budget::new(work);
+    }
+    #[cfg(test)]
+    if let Some(work) = last_drag::frame_numeric() {
+        return Budget::frame().with_numeric(work);
     }
     Budget::frame()
 }
@@ -335,8 +366,9 @@ pub(super) mod last_drag {
     use super::Solves;
 
     thread_local! {
-        static LAST: Cell<Solves> = const { Cell::new(Solves { count: 0, work: 0, cut: false }) };
+        static LAST: Cell<Solves> = const { Cell::new(Solves { count: 0, work: 0, cut: false, numeric: false }) };
         static FRAME: Cell<Option<usize>> = const { Cell::new(None) };
+        static NUMERIC: Cell<Option<usize>> = const { Cell::new(None) };
     }
 
     pub fn set(s: Solves) {
@@ -364,6 +396,25 @@ pub(super) mod last_drag {
     /// Run `f` with live frames given `work` units of decomposition budget.
     pub fn with_frame_work<R>(work: usize, f: impl FnOnce() -> R) -> R {
         let _restore = Restore(FRAME.with(|c| c.replace(Some(work))));
+        f()
+    }
+
+    pub fn frame_numeric() -> Option<usize> {
+        NUMERIC.with(Cell::get)
+    }
+
+    /// Restores the numerical allowance when dropped, also when the test panics.
+    struct RestoreNumeric(Option<usize>);
+
+    impl Drop for RestoreNumeric {
+        fn drop(&mut self) {
+            NUMERIC.with(|c| c.set(self.0));
+        }
+    }
+
+    /// Run `f` with live frames given `work` units for their numerical solves.
+    pub fn with_frame_numeric<R>(work: usize, f: impl FnOnce() -> R) -> R {
+        let _restore = RestoreNumeric(NUMERIC.with(|c| c.replace(Some(work))));
         f()
     }
 }
@@ -477,6 +528,38 @@ pub(super) fn drag_steps(sk: &Sketch, e: Ent, from: Vec2, to: Vec2) -> usize {
 
 /// A drag's path, what its solves hold and its number of steps (and of short steps, see
 /// `SHORT_STEP_FRACTION`), or `None` if it cannot move.
+/// `hold` plus the far ends of the tangent lines a lone dragged point ends (not locked ones, nor the
+/// point itself), or `None` when there are none.
+fn keep_line_ends(sk: &Sketch, e: Ent, with: &[Ent], hold: &Hold) -> Option<Hold> {
+    let Ent::Point(q) = e else { return None };
+    if !with.is_empty() {
+        return None;
+    }
+    let locked = sk.locked_points();
+    let mut keep = hold.clone();
+    // Only lines tangent to a curve: there the far end is what the solver chose to move, where a
+    // free curve could take the change. Other drags keep their one solve a frame.
+    let tangent = |line: usize| sk.constraints.iter().any(|k| matches!(k.kind, ConstraintKind::Tangent { a, b } if a == line || b == line));
+    for (i, c) in sk.curves.iter().enumerate() {
+        if let CurveKind::Line { a, b } = c.kind {
+            if !tangent(i) {
+                continue;
+            }
+            let far = if a == q {
+                b
+            } else if b == q {
+                a
+            } else {
+                continue;
+            };
+            if far != q && !locked.get(far).copied().unwrap_or(true) && !keep.points.contains(&far) {
+                keep.points.push(far);
+            }
+        }
+    }
+    (keep.points.len() > hold.points.len()).then_some(keep)
+}
+
 fn prepare(sk: &Sketch, e: Ent, with: &[Ent], from: Vec2, to: Vec2) -> Option<(Path, Hold, usize, usize)> {
     if !(from.is_finite() && to.is_finite()) {
         return None;

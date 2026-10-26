@@ -152,12 +152,43 @@ fn right_click_on_a_selected_face_keeps_the_multi_selection() {
     )
     .unwrap();
     app.viewport.hover = Some(Hit::Face { body: b.clone(), index: 0, point: Vec3::new(9.0, 9.0, 9.0) });
-    context_menu::open(&mut app, pos2(400.0, 300.0));
+    context_menu::open(&mut app, pos2(400.0, 300.0), Default::default());
     assert_eq!(app.session.selection.len(), 2, "the right-click keeps the faces it is about: {:?}", app.session.selection);
     // A face outside the selection is still picked, so its menu is about the face under the cursor.
     app.viewport.hover = Some(Hit::Face { body: b, index: 2, point: Vec3::new(9.0, 9.0, 9.0) });
-    context_menu::open(&mut app, pos2(400.0, 300.0));
+    context_menu::open(&mut app, pos2(400.0, 300.0), Default::default());
     assert_eq!(app.session.selection.len(), 1, "a face outside the selection is picked: {:?}", app.session.selection);
+}
+
+/// A right-click on a face of a selected body keeps the whole selection: the body is what is
+/// selected, so the menu is about the bodies and the face under the cursor does not replace them
+/// (#5849).
+#[test]
+fn right_click_on_a_face_of_a_selected_body_keeps_the_bodies() {
+    let mut app = sample_app();
+    let first = body(&app);
+    app.run("solid.box", json!({"length": 5, "width": 5, "height": 5, "corner": [200, 0, 0]})).unwrap();
+    let second = app.session.model.state().bodies.iter().map(|b| b.name.clone()).find(|n| *n != first).expect("a second body");
+    let both = vec![solidcraft_engine::Sel::Body { name: first.clone() }, solidcraft_engine::Sel::Body { name: second.clone() }];
+    app.run("select.set", json!({"items": [{"type": "body", "name": first}, {"type": "body", "name": second}]})).unwrap();
+    // A face of the first body: both bodies stay selected, and the menu stays the bodies' menu.
+    app.viewport.hover = Some(Hit::Face { body: first.clone(), index: 0, point: Vec3::new(9.0, 9.0, 9.0) });
+    context_menu::open(&mut app, pos2(400.0, 300.0), Default::default());
+    assert_eq!(app.session.selection, both, "the right-click keeps the bodies it is about");
+    assert!(!context_menu::items(&app, &Target::Viewport).iter().any(|i| i.label == "Create Sketch"), "the bodies' menu, not the face menu");
+    // An edge and a vertex of a selected body count the same way.
+    app.viewport.hover = Some(Hit::Edge { body: first.clone(), index: 0, mid: Vec3::new(9.0, 9.0, 9.0) });
+    context_menu::open(&mut app, pos2(400.0, 300.0), Default::default());
+    assert_eq!(app.session.selection, both, "an edge of a selected body keeps the bodies");
+    // A face of a body outside the selection is still picked, so the menu is about that face.
+    app.run("select.set", json!({"items": [{"type": "body", "name": first}]})).unwrap();
+    app.viewport.hover = Some(Hit::Face { body: second, index: 0, point: Vec3::new(9.0, 9.0, 9.0) });
+    context_menu::open(&mut app, pos2(400.0, 300.0), Default::default());
+    assert!(
+        matches!(app.session.selection.as_slice(), [solidcraft_engine::Sel::Face { .. }]),
+        "a face of an unselected body is picked: {:?}",
+        app.session.selection
+    );
 }
 
 #[test]
@@ -1117,17 +1148,18 @@ fn contribution_picked_faces_open_their_own_feature_after_later_modifiers() {
         let pick = Sel::Face { body: "Plate".into(), index, point };
         app.session.selection = vec![pick.clone()];
         let items = context_menu::items(&app, &Target::Viewport);
-        for label in ["Edit Feature", "Find in Timeline", "Find in Browser"] {
+        for label in ["Edit Feature", "Find in Timeline"] {
             let item = find(&items, label);
             assert!(item.enabled, "{label}, {expected}: {names:?}");
             assert_eq!(item.params.as_ref().unwrap()["feature"], json!(expected));
         }
         act(&mut app, &Target::Viewport, "Find in Timeline");
         assert_eq!(app.session.selection, vec![Sel::Feature { id: expected }]);
+        // The browser lists bodies: a picked face finds its body there, whichever feature made the face.
         app.session.selection = vec![pick.clone()];
         act(&mut app, &Target::Viewport, "Find in Browser");
-        assert_eq!(app.session.selection, vec![Sel::Feature { id: expected }]);
-        assert_eq!(app.tree.reveal_feature.as_ref().unwrap().id, expected);
+        assert_eq!(app.session.selection, vec![Sel::Body { name: "Plate".into() }]);
+        assert_eq!(app.tree.reveal.as_deref(), Some("Plate"));
         app.session.selection = vec![pick];
         act(&mut app, &Target::Viewport, "Edit Feature");
         assert_eq!(app.dialog.as_ref().unwrap().editing.unwrap().0, expected);
@@ -1143,7 +1175,7 @@ fn contribution_unresolvable_face_does_not_edit_the_body_creator() {
     let items = context_menu::items(&app, &Target::Viewport);
     assert!(!find(&items, "Edit Feature").enabled);
     assert!(!find(&items, "Find in Timeline").enabled);
-    assert!(!find(&items, "Find in Browser").enabled);
+    assert!(find(&items, "Find in Browser").enabled, "the body is still known");
 }
 
 #[test]

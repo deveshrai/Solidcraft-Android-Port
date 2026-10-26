@@ -115,6 +115,40 @@ fn an_upstream_cut_that_splits_a_face_keeps_the_edge_that_bounded_it() {
 }
 
 #[test]
+fn a_blend_follows_its_named_edge_to_a_moved_lid_instead_of_the_body_below() {
+    for (command, size, removed) in [("solid.fillet", "radius", (4.0 - std::f64::consts::PI) * 5.0), ("solid.chamfer", "distance", 2.0 * 5.0)] {
+        let mut s = Session::default();
+        run(&mut s, "parameters.add", json!({"name": "height", "expression": "10 mm"}));
+        run(&mut s, "solid.box", json!({"length": 40, "width": 30, "height": "height", "corner": [0, 0, 0]}));
+        run(&mut s, "sketch.create", json!({"plane": "XY", "name": "LidSketch"}));
+        run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [40, 30]}));
+        run(&mut s, "sketch.finish", json!({}));
+        run(&mut s, "solid.extrude", json!({"distance": 5, "start_offset": "height", "name": "Lid"}));
+        run(&mut s, command, json!({"edges": [[40, 30, 12.5]], size: 2, "name": "Blend"}));
+        let blend = s.doc.find_feature("Blend").unwrap();
+        assert!(blend.edge_names.iter().all(|n| !n.is_empty()));
+        // Exercise the saved reference, including files with no explicit target body.
+        let mut s = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+        s.refresh();
+
+        // The old pick lies on the lower body's edge after this edit. The saved name
+        // still identifies the lid's edge, now at z = 20..25.
+        change(&mut s, "height", "20 mm");
+        assert_eq!(error(&s, "Blend"), None, "{command}");
+        assert_eq!(warning(&s, "Blend"), None, "{command}");
+        let state = s.model.state();
+        let base = state.body("Body1").unwrap();
+        let lid = state.body("Body2").unwrap();
+        let base_volume = solidcraft_kernel::measure(&base.body).unwrap().volume;
+        let lid_volume = solidcraft_kernel::measure(&lid.body).unwrap().volume;
+        assert!((base_volume - 24000.0).abs() < 0.01, "{command}: the base stays sharp: {base_volume}");
+        assert!((lid_volume - (6000.0 - removed)).abs() < 0.01, "{command}: the lid keeps its blend: {lid_volume}");
+        assert!(base.body.contains(Vec3::new(39.9, 29.9, 12.5)));
+        assert!(!lid.body.contains(Vec3::new(39.9, 29.9, 22.5)));
+    }
+}
+
+#[test]
 fn a_piece_keeps_its_identity_when_the_cut_that_made_it_moves_or_shrinks() {
     let mut s = Session::default();
     block(&mut s);
@@ -460,4 +494,132 @@ fn a_design_saved_before_pieces_were_numbered_by_place_keeps_their_numbers() {
     let mut saved_with = Session::new(legacy);
     saved_with.refresh();
     assert_eq!(listed(&mut saved_with, "Block"), kept);
+}
+
+/// The volumes of the design's bodies, by name.
+fn volumes(s: &Session) -> Vec<(String, f64)> {
+    let st = s.model.state();
+    st.bodies.iter().map(|b| (b.name.clone(), solidcraft_kernel::measure(&b.body).unwrap().volume)).collect()
+}
+
+/// Whether the four vertical corners of the box `lo`..`hi` are rounded halfway up `z`.
+fn corners_rounded(s: &Session, lo: [f64; 2], hi: [f64; 2], z: f64) -> bool {
+    let e = 0.2;
+    [[lo[0] + e, lo[1] + e], [hi[0] - e, lo[1] + e], [hi[0] - e, hi[1] - e], [lo[0] + e, hi[1] - e]].iter().all(|[x, y]| !solid_at(s, [*x, *y, z]))
+}
+
+/// A 50 mm square box of parametric `height`, and a 10 mm box sketched on its top: two bodies.
+fn stacked_boxes(s: &mut Session) {
+    run(s, "parameters.add", json!({"name": "height", "expression": "40 mm"}));
+    run(s, "sketch.create", json!({"plane": "XY", "name": "Low"}));
+    run(s, "sketch.rectangle.two_point", json!({"p0": [-25, -25], "p1": [25, 25]}));
+    run(s, "sketch.finish", json!({}));
+    run(s, "solid.extrude", json!({"distance": "height", "name": "Lower"}));
+    run(s, "sketch.create", json!({"plane": {"face": [0, 0, 40]}, "name": "High"}));
+    run(s, "sketch.rectangle.two_point", json!({"p0": [-25, -25], "p1": [25, 25]}));
+    run(s, "sketch.finish", json!({}));
+    run(s, "solid.extrude", json!({"distance": 10, "operation": "new", "name": "Upper"}));
+    assert_eq!(s.model.state().bodies.len(), 2);
+}
+
+/// Every feature evaluated without an error or a warning.
+fn all_clean(s: &Session, when: &str) {
+    for f in &s.doc.features {
+        let r = s.model.result(f.id);
+        assert_eq!(r.and_then(|r| r.error.clone()), None, "{} {when}", f.name);
+        assert_eq!(r.and_then(|r| r.warning.clone()), None, "{} {when}", f.name);
+    }
+}
+
+/// Two stacked boxes, the lower one of parametric height, the vertical edges of each rounded by
+/// its own fillet (or by one fillet for all eight). Raising the lower box puts the upper box's
+/// picks (z = 45) on the lower box's rounded corners: the upper box's rounds stay on the upper
+/// box, found by their names, not moved onto the lower box's already rounded edges.
+#[test]
+fn rounds_on_stacked_boxes_stay_on_their_own_box_when_the_lower_one_grows() {
+    for one_feature in [false, true] {
+        let mut s = Session::default();
+        stacked_boxes(&mut s);
+        let low = json!([[-25, -25, 20], [25, -25, 20], [25, 25, 20], [-25, 25, 20]]);
+        let high = json!([[-25, -25, 45], [25, -25, 45], [-25, 25, 45], [25, 25, 45]]);
+        if one_feature {
+            let all: Vec<Value> = low.as_array().unwrap().iter().chain(high.as_array().unwrap()).cloned().collect();
+            run(&mut s, "solid.fillet", json!({"edges": all, "radius": 2, "name": "Rounds"}));
+        } else {
+            run(&mut s, "solid.fillet", json!({"edges": low, "radius": 2, "name": "RoundLow"}));
+            run(&mut s, "solid.fillet", json!({"edges": high, "radius": 2, "name": "RoundHigh"}));
+        }
+        for height in [40.0, 50.0, 47.0, 45.0, 30.0] {
+            change(&mut s, "height", &format!("{height} mm"));
+            let when = format!("at height {height} ({one_feature})");
+            assert_eq!(s.model.state().bodies.len(), 2, "{when}");
+            assert!(corners_rounded(&s, [-25.0, -25.0], [25.0, 25.0], height / 2.0), "lower box {when}: {:?}", volumes(&s));
+            assert!(corners_rounded(&s, [-25.0, -25.0], [25.0, 25.0], height + 5.0), "upper box {when}: {:?}", volumes(&s));
+            // Nothing else rounded: the edges where the boxes meet stay sharp.
+            assert!(solid_at(&s, [0.0, -24.9, height - 0.1]), "a top edge of the lower box was rounded {when}");
+            assert!(solid_at(&s, [0.0, -24.9, height + 0.1]), "a bottom edge of the upper box was rounded {when}");
+            all_clean(&s, &when);
+        }
+    }
+}
+
+/// Two bodies from one extrude (two profiles), all eight vertical edges rounded in one fillet:
+/// each edge is rounded on its own body, never moved onto the first body.
+#[test]
+fn one_fillet_over_two_bodies_of_one_extrude_rounds_each_body_s_own_edges() {
+    let mut s = Session::default();
+    run(&mut s, "parameters.add", json!({"name": "h", "expression": "20 mm"}));
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "S"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [40, 30]}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [45, 0], "p1": [85, 30]}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.extrude", json!({"distance": "h", "profiles": [0, 1], "operation": "new", "name": "Pair"}));
+    assert_eq!(s.model.state().bodies.len(), 2);
+    let edges = json!([[0, 0, 10], [40, 0, 10], [40, 30, 10], [0, 30, 10], [45, 0, 10], [85, 0, 10], [85, 30, 10], [45, 30, 10]]);
+    run(&mut s, "solid.fillet", json!({"edges": edges, "radius": 2, "name": "Rounds"}));
+    let check = |s: &Session, z: f64, when: &str| {
+        assert!(corners_rounded(s, [0.0, 0.0], [40.0, 30.0], z), "first body {when}: {:?}", volumes(s));
+        assert!(corners_rounded(s, [45.0, 0.0], [85.0, 30.0], z), "second body {when}: {:?}", volumes(s));
+        // Nothing else rounded: the top edges stay sharp.
+        assert!(solid_at(s, [20.0, 0.1, 2.0 * z - 0.1]) && solid_at(s, [65.0, 0.1, 2.0 * z - 0.1]), "a top edge was rounded {when}");
+        assert_eq!(error(s, "Rounds"), None, "{when}");
+        assert_eq!(warning(s, "Rounds"), None, "{when}");
+    };
+    check(&s, 10.0, "when made");
+    change(&mut s, "h", "30 mm");
+    check(&s, 15.0, "after h changed");
+}
+
+/// One fillet over a vertical edge of each of two stacked boxes. A build before blends were split
+/// by body named the upper box's edge after the lower box's nearest edge (its top front edge),
+/// which was rounded instead. The pick (outside the box the name was recorded on) shows that name
+/// is not the upper box's: the edge is found at its point, on the upper box.
+#[test]
+fn one_fillet_over_stacked_boxes_rounds_the_upper_box_s_edge_even_when_saved_named_on_the_lower() {
+    let mut s = Session::default();
+    stacked_boxes(&mut s);
+    run(&mut s, "solid.fillet", json!({"edges": [[25, -25, 20], [-25, -25, 45]], "radius": 2, "name": "Rounds"}));
+    let check = |s: &Session, when: &str| {
+        assert!(!solid_at(s, [24.8, -24.8, 20.0]), "lower box's edge not rounded {when}");
+        assert!(!solid_at(s, [-24.8, -24.8, 45.0]), "upper box's edge not rounded {when}");
+        assert!(solid_at(s, [0.0, -24.9, 39.9]), "the lower box's top front edge was rounded {when}");
+        all_clean(s, when);
+    };
+    check(&s, "when made");
+    let f = id(&s, "Rounds");
+    let names = s.doc.feature(f).unwrap().edge_names.clone();
+    let upper = format!("F{}:", id(&s, "Upper"));
+    assert!(names[1].starts_with(&upper), "the upper box's edge is named on the upper box: {names:?}");
+    // As an older build saved it: both edges named and referenced on the lower box.
+    let before = s.model.state_before(f);
+    let lower = before.bodies.iter().find(|b| b.feature == id(&s, "Lower")).unwrap().clone();
+    let old_names = solidcraft_doc::naming::edge_names_at(&lower, &[Vec3::new(25.0, -25.0, 20.0), Vec3::new(-25.0, -25.0, 45.0)]);
+    assert!(old_names[1].contains("top"), "{old_names:?}");
+    let old_refs =
+        solidcraft_doc::edge_refs(&before, &Some(lower.name.clone().into()), &[Vec3::new(25.0, -25.0, 20.0), Vec3::new(-25.0, -25.0, 45.0)]);
+    let feature = s.doc_mut().feature_mut(f).unwrap();
+    feature.edge_names = old_names;
+    feature.edge_refs = old_refs;
+    s.refresh();
+    check(&s, "saved by an older build");
 }

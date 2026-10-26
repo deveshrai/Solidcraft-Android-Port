@@ -1385,6 +1385,30 @@ fn extrude_auto_operation() {
     assert!(rel(volume(&mut s), 40.0 * 30.0 * 15.0 - 100.0 * 8.0) < 1e-6);
 }
 
+/// #467: the automatic operation is decided where the extrude starts. A profile on a plate's top
+/// going down cuts; started From Object at the plate's bottom (or 15 mm lower by a start offset)
+/// the same distance goes out of it, and joins.
+#[test]
+fn extrude_auto_operation_counts_from_the_start() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 40, "width": 30, "height": 10, "corner": [0, 0, 0]}));
+    run(&mut s, "sketch.create", json!({"plane": {"origin": [0, 0, 10], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [5, 5], "p1": [15, 15]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let down = json!({"profiles": [{"point": [10, 10]}], "distance": -5});
+    assert_eq!(auto_operation(&s, &down), Some("cut"));
+    let mut from = down.clone();
+    from["from"] = json!([20, 15, 0]);
+    assert_eq!(auto_operation(&s, &from), Some("join"));
+    let mut offset = down.clone();
+    offset["start_offset"] = json!("-15 mm");
+    assert_eq!(auto_operation(&s, &offset), Some("join"));
+    // Up from the bottom face into the plate it cuts again.
+    let mut up = from.clone();
+    up["distance"] = json!(5);
+    assert_eq!(auto_operation(&s, &up), Some("cut"));
+}
+
 /// #1666: a loft between two 18-point polylines has twisted (bilinear) side faces. Each was
 /// meshed as two flat triangles, which cross the surface; the mesh volume was 16 800.6 mm³
 /// against the B-rep's 17 884. Divided to the chord tolerance, the mesh matches the B-rep.
@@ -2699,6 +2723,18 @@ fn press_pull_on_curved_faces() {
     run(&mut s, "solid.press_pull", json!({"face": [25, 15, 10], "distance": 1}));
     let v1 = volume(&mut s);
     assert!(rel(v1 - v0, PI * (25.0 - 16.0) * 20.0) < 1e-3, "{v0} {v1}");
+    // A shell's inner wall behind a fillet (`F3:inner:F2:blend:…`) only names the fillet: it is
+    // offset like any curved face, not taken for the shell's fillet. (The offset itself is
+    // refused: the wall is tangent to its neighbours.)
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 40, "width": 40, "height": 20}));
+    run(&mut s, "solid.fillet", json!({"edges": [[40, 40, 10]], "radius": 5}));
+    run(&mut s, "solid.shell", json!({"faces": [[20, 20, 20]], "thickness": 2}));
+    let on = Vec3::new(35.0, 35.0, 10.0) + Vec3::new(1.0, 1.0, 0.0).normalized().unwrap() * 3.0;
+    let err =
+        s.execute("solid.press_pull", &json!({"face": [on.x, on.y, on.z], "distance": 0.5})).map(|v| v.to_string()).unwrap_or_else(|e| e.to_string());
+    assert!(!err.contains("not a fillet's or a chamfer's"), "{err}");
+    assert!(err.contains("offset"), "{err}");
 }
 
 /// A cut in one component leaves other components' bodies alone unless they are named as
@@ -3482,6 +3518,77 @@ fn default_extrude_profiles_keep_even_depth_islands_and_separate_outlines() {
     assert!(rel(actual, expected) < 1e-6, "{actual} vs {expected}");
 }
 
+/// The face of `body` whose normal points along +x, as a plane pick.
+fn side_face_pick(s: &Session, body: &str) -> Value {
+    let world = s.world_state();
+    let b = world.body(body).unwrap();
+    let face = b
+        .body
+        .faces(0.01)
+        .unwrap()
+        .into_iter()
+        .filter(|f| f.plane_normal.is_some_and(|n| n.dot(solidcraft_geom::Vec3::X) > 0.999))
+        .max_by(|a, b| a.centroid.x.total_cmp(&b.centroid.x))
+        .unwrap();
+    json!({"body": b.name, "index": face.index, "face": [face.centroid.x, face.centroid.y, face.centroid.z]})
+}
+
+#[test]
+fn extruding_a_sketch_on_a_side_face_takes_the_whole_drawn_profile() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 40, "width": 30, "height": 20, "body_name": "Base"}));
+    let pick = side_face_pick(&s, "Base");
+    let id = run(&mut s, "sketch.create", json!({"plane": pick, "name": "Side"}))["sketch"].as_u64().unwrap();
+    // The rectangle straddles the top edge of the face, so the projected outline cuts it in two.
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [10, 15], "p1": [20, 25]}));
+    run(&mut s, "sketch.finish", json!({}));
+    for selection in [json!([1]), json!([2]), json!([{"point": [15, 17]}]), json!([{"point": [15, 22]}])] {
+        let mut s2 = Session::new((*s.doc).clone());
+        run(&mut s2, "solid.extrude", json!({"sketch": id, "distance": 5, "operation": "new", "body_name": "Rib", "profiles": selection.clone()}));
+        let state = s2.model.state();
+        let rib = state.bodies.iter().find(|b| b.name == "Rib").unwrap();
+        let v = rib.body.tessellate(1e-2).unwrap().measure().volume;
+        assert!(rel(v, 500.0) < 1e-6, "{selection}: {v}");
+    }
+}
+
+/// A pick on a region of a drawn profile that reference geometry bounds from inside (the rim of
+/// a hole in the face) takes only that region: the rim is a real boundary of the material, and
+/// the drawn outline around it is not cut by it (#5302).
+#[test]
+fn a_pick_bounded_by_a_projected_rim_takes_only_that_region() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 40, "width": 30, "height": 20, "body_name": "Base"}));
+    run(&mut s, "solid.hole", json!({"position": [20, 15, 20], "diameter": 10}));
+    let id = run(&mut s, "sketch.create", json!({"plane": {"face": [20, 5, 20]}}))["sketch"].as_u64().unwrap();
+    // The square around the hole: the hole's rim is projected into the sketch and bounds an
+    // inner region of it, but does not cut the square.
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [10, 5], "p1": [30, 25]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let mut s2 = Session::new((*s.doc).clone());
+    run(&mut s2, "solid.extrude", json!({"sketch": id, "distance": 5, "operation": "new", "body_name": "Pad", "profiles": [{"point": [12, 7]}]}));
+    let state = s2.model.state();
+    let pad = state.bodies.iter().find(|b| b.name == "Pad").unwrap();
+    let v = pad.body.tessellate(1e-2).unwrap().measure().volume;
+    // The square with the hole's rim cut out of it, not the whole square. The mesh measures the
+    // round rim as a polygon, so the volume is a little under the analytic one.
+    let want = (400.0 - PI * 25.0) * 5.0;
+    assert!(rel(v, want) < 5e-3, "{v} vs {want}");
+}
+
+/// An explicit pick of a drawn hole still fills only that hole (#5176).
+#[test]
+fn an_explicit_pick_of_a_drawn_hole_fills_only_that_hole() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [60, 40]}));
+    run(&mut s, "sketch.circle.center", json!({"center": [30, 20], "radius": 5, "id": "ring"}));
+    run(&mut s, "sketch.finish", json!({}));
+    let ring = s.model.state().sketches[0].profiles.iter().position(|p| p.outer_curves == ["ring"]).unwrap();
+    run(&mut s, "solid.extrude", json!({"distance": 5, "profiles": [ring]}));
+    assert!(rel(volume(&mut s), 25.0 * PI * 5.0) < 1e-4, "the hole alone: {}", volume(&mut s));
+}
+
 /// Every body a multi-profile `new` extrude creates carries its `body_name`, not a generic BodyN (#266).
 #[test]
 fn multi_profile_extrude_names_every_body_after_body_name() {
@@ -3888,6 +3995,32 @@ fn a_pattern_of_a_reduced_fillet_rounds_each_copy_alike() {
     run(&mut s, "solid.pattern.rectangular", json!({"features": ["Post", "Round"], "dir1": [1, 0, 0], "count1": 3, "spacing1": 20}));
     let expect = 60.0 * 20.0 * 2.0 + 3.0 * (840.0 - (4.0 - PI) * 9.0 * 10.0);
     assert!(rel(volume(&mut s), expect) < 2e-4, "{} vs {expect}", volume(&mut s));
+}
+
+#[test]
+fn extrude_taper_help_explains_both_signs() {
+    let mut s = Session::default();
+    let help = run(&mut s, "engine.describe", json!({"command": "solid.extrude"}));
+    for text in [help["params"].as_str().unwrap(), help["input"]["properties"]["taper"]["description"].as_str().unwrap()] {
+        assert!(text.contains("positive: outward") && text.contains("negative: inward"), "{text}");
+    }
+}
+
+#[test]
+fn extrude_taper_sign_sets_far_face_size() {
+    for angle in [5.0_f64, -5.0] {
+        let mut s = Session::default();
+        run(&mut s, "sketch.create", json!({"plane": "XY"}));
+        run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [10, 10]}));
+        run(&mut s, "sketch.finish", json!({}));
+        run(&mut s, "solid.extrude", json!({"distance": 10, "taper": format!("{angle} deg"), "body_name": "Tapered"}));
+        let faces = run(&mut s, "model.faces", json!({"body": "Tapered"}));
+        let far = faces["faces"].as_array().unwrap().iter().find(|f| (f["centroid"][2].as_f64().unwrap() - 10.0).abs() < 1e-6).unwrap();
+        let width = 10.0 + 20.0 * angle.to_radians().tan();
+        let area = far["area"].as_f64().unwrap();
+        assert!((area - width * width).abs() < 1e-6, "{angle} deg: {far}");
+        assert_eq!(area > 100.0, angle > 0.0);
+    }
 }
 
 /// A taper on a profile of lines and an arc (#546). The D profile (back 9.2, sides 7.4, a

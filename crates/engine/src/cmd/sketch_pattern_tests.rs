@@ -656,3 +656,25 @@ fn circular_quantity_changes_keep_partial_full_centered_and_reversed_placements(
         }
     }
 }
+
+/// #5280: a pattern joins its copies into one group of unknowns, and a group larger than the
+/// solver takes is refused saying so, not as an over-constraint with no constraint named.
+#[test]
+fn a_pattern_too_large_to_solve_says_why() {
+    let hexagon = |s: &mut Session| {
+        let r = run(s, "sketch.polygon.inscribed", json!({"center": [0, 0], "radius": 2.5, "sides": 6}));
+        ids(&r["curves"])
+    };
+    // 15 × 22 hexagons: inside the limit.
+    let mut s = new_sketch();
+    let lines = hexagon(&mut s);
+    run(&mut s, "sketch.pattern.rectangular", json!({"entities": lines, "count": 15, "spacing": 6.5, "count2": 22, "spacing2": 6.5}));
+    // 17 × 20: past it.
+    let mut s = new_sketch();
+    let lines = hexagon(&mut s);
+    let e = s
+        .execute("sketch.pattern.rectangular", &json!({"entities": lines, "count": 17, "spacing": 6.5, "count2": 20, "spacing2": 6.5}))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("unknowns") && e.contains(&solidcraft_sketch::MAX_COMPONENT_VARS.to_string()) && !e.contains("conflicts with"), "{e}");
+}

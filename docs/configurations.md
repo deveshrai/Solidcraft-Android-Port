@@ -119,8 +119,12 @@ multiplier. Bare saved feature length cells and rule thresholds gain the previou
 unit; explicit units and nonliteral source expressions retain their text. A matching active
 row rederives its driven values when units change. User parameters retain their own units.
 
-Rules recompute on configured edits, **Apply**, and **Preview Row**. Ordinary parameter
-edits can leave the configuration unmatched and do not continuously enforce restrictions.
+Rules recompute on configured edits, **Apply**, and **Preview Row**. An ordinary parameter edit
+runs only the rules that switch a feature's suppression and whose condition reads a parameter whose
+value changed (or a feature such a rule just switched), in their order, so a switch parameter alone
+turns its features on and off; `parameters.change` lists them as `switched`. It does not drive
+parameters or enforce restrictions: those, and a matching configuration, wait for an edit of the
+configuration or an activation.
 Cross-unit drives store effective numeric lengths; their saved source expressions reevaluate
 on the next Apply or Preview rather than following later ordinary parameter edits live.
 Saved source cells are preserved: disabling a drive restores the row's original choice.
@@ -136,12 +140,14 @@ Configure the `depth` column before adding this example drive. Conditions may re
 existing design parameter; effect targets must be configured columns. `config.rules` lists
 rules. `config.rule` replaces a rule with the same ID, deletes with `id` and `delete: true`,
 or moves it to a zero-based `index`. Editing a rule validates every saved row before committing;
-editing a row validates that row. Invalid geometry, dependency cycles, incompatible units,
+`rules: [...]` adds or replaces several rules in one step and validates the rows once, with all
+of them in place (rules that only hold together, such as suppressing a body and the cut on it).
+Editing a row validates that row. Invalid geometry, dependency cycles, incompatible units,
 or restrictions leave the previous document intact and explain the failure. Delete rules
 before removing the last row. Parameter renames update rule targets and expressions; rule
 references prevent parameter deletion until removed.
 
-Tables support at most 128 rules; conditions allow eight levels and 64 nodes, and allowed
+Tables support at most 2048 rules; conditions allow eight levels and 64 nodes, and allowed
 value lists support up to 128 expressions. These bounds are checked before saved rules are
 decoded. Driven appearance/material rules and repeated fixed-point evaluation are outside
 the current rule scope.

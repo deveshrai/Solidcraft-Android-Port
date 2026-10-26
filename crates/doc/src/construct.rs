@@ -99,6 +99,18 @@ pub enum ConstructGeom {
     Point(Vec3),
 }
 
+impl ConstructGeom {
+    /// The geometry moved by `m` (where its component is placed).
+    pub fn placed(&self, m: &crate::Mat) -> ConstructGeom {
+        let (point, vector) = (|p: Vec3| crate::apply_point(m, p), |v: Vec3| crate::apply_vector(m, v));
+        match self {
+            ConstructGeom::Plane(p) => Plane::new(point(p.origin), vector(p.x), vector(p.y)).map_or_else(|| self.clone(), ConstructGeom::Plane),
+            ConstructGeom::Axis { origin, dir } => ConstructGeom::Axis { origin: point(*origin), dir: vector(*dir) },
+            ConstructGeom::Point(p) => ConstructGeom::Point(point(*p)),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Construct {
     pub feature: u64,
@@ -580,6 +592,11 @@ pub(crate) fn resolve_geo_plane(ctx: &Ctx, p: &PlaneRef) -> Result<Plane> {
             let (p, tan) = along(&path_points(ctx, path)?, t).ok_or_else(|| bad("the path has no length"))?;
             Plane::from_normal(p, tan).ok_or_else(degenerate)
         }
+        PlaneRef::ThroughPoint { base, point: at } => {
+            let b = ctx.doc.resolve_plane_in(ctx.vals, base, ctx.depth + 1, Some(ctx.st))?;
+            let n = b.normal().normalized().ok_or_else(degenerate)?;
+            Ok(Plane { origin: b.origin + n * (point(ctx, at)? - b.origin).dot(n), ..b })
+        }
         _ => ctx.doc.resolve_plane_in(ctx.vals, p, ctx.depth + 1, Some(ctx.st)),
     }
 }
@@ -688,6 +705,11 @@ impl PlaneRef {
             PlaneRef::ThreePoints { a, b, c } => vec![a.as_mut(), b.as_mut(), c.as_mut()],
             PlaneRef::Tangent { face, .. } => vec![face.as_mut()],
             PlaneRef::AlongPath { path, .. } => vec![path.as_mut()],
+            PlaneRef::ThroughPoint { base, point } => {
+                let mut refs = base.refs_mut();
+                refs.push(point.as_mut());
+                refs
+            }
             PlaneRef::Offset { base, .. } | PlaneRef::AtAngle { base, .. } | PlaneRef::Flipped { base, .. } => base.refs_mut(),
             _ => Vec::new(),
         }

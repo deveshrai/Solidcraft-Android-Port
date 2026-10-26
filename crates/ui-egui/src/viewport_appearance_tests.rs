@@ -4,6 +4,73 @@ use serde_json::json;
 use solidcraft_engine::{Session, doc, geom::Vec3, kernel};
 
 #[test]
+fn a_finished_sketch_on_a_face_draws_a_halo_under_its_own_curves_only() {
+    use crate::theme::{self, ColorVision, Tokens};
+
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("solid.box", json!({"length":40,"width":30,"height":20})).unwrap();
+    app.run("sketch.create", json!({"plane":{"face":[20,15,20]},"project_edges":true})).unwrap();
+    app.run("sketch.rectangle.two_point", json!({"p0":[-5,-5],"p1":[5,5]})).unwrap();
+    app.run("sketch.circle.center", json!({"center":[0,0],"radius":3})).unwrap();
+    app.run("sketch.line", json!({"points":[[-4,0],[4,0]]})).unwrap();
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    let original_dark = theme::is_dark();
+    let original_vision = theme::vision();
+    for finished in [false, true] {
+        if finished {
+            app.run("sketch.finish", json!({})).unwrap();
+        }
+        for dark in [false, true] {
+            for vision in ColorVision::ALL {
+                theme::set_dark(dark);
+                theme::set_vision(vision);
+                let tokens = Tokens::get();
+                crate::prefs::set(&mut app, &json!({"sketch_halo": true})).unwrap();
+                let projection = super::projection(&app, rect);
+                let enabled_key = super::sketch_scene_key(&app, &projection);
+                let scene = super::build_sketch_scene(&app, &projection);
+                // The sketch being edited draws on top; a finished one is depth-tested.
+                let bytes = if finished { &scene.lines } else { &scene.overlay };
+                let (lines, remainder) = bytes.as_chunks::<{ crate::gpu::LINE_SIZE }>();
+                assert!(remainder.is_empty());
+                let halo = super::c4(tokens.sketch_halo);
+                let halo_count = lines.iter().filter(|line| line[24..28] == halo).count();
+                crate::prefs::set(&mut app, &json!({"sketch_halo": false})).unwrap();
+                assert_ne!(super::sketch_scene_key(&app, &projection), enabled_key, "changing the preference rebuilds the sketch scene");
+                let disabled = super::build_sketch_scene(&app, &projection);
+                let without_halos: Vec<u8> = lines.iter().filter(|line| line[24..28] != halo).flat_map(|line| line.iter().copied()).collect();
+                assert_eq!(if finished { &disabled.lines } else { &disabled.overlay }, &without_halos, "off draws only the original curves");
+                if !finished {
+                    assert_eq!(halo_count, 0, "a sketch being edited has no halo");
+                    continue;
+                }
+                assert!(halo_count > 5, "rectangle, circle and line emit halos");
+                let width = |line: &[u8]| f32::from_le_bytes(line[28..32].try_into().unwrap());
+                let projected = super::c4(tokens.sketch_projected);
+                let mut cores = 0;
+                let mut references = 0;
+                for (index, core) in lines.iter().enumerate().filter(|(_, line)| line[24..28] != halo) {
+                    let rim = lines[..index].iter().find(|line| line[..24] == core[..24] && line[24..28] == halo);
+                    if core[24..28] == projected {
+                        assert!(rim.is_none(), "the face's projected outline has no halo");
+                        references += 1;
+                    } else {
+                        assert_eq!(core[24..28], super::c4(tokens.sketch_fixed));
+                        let rim = rim.unwrap();
+                        assert_eq!(width(rim), width(core) + super::SKETCH_HALO_WIDTH, "halo precedes the narrower core");
+                        cores += 1;
+                    }
+                }
+                assert!(references > 0, "the projected face outline is drawn");
+                assert_eq!(cores, halo_count, "one halo per curve segment");
+            }
+        }
+    }
+    theme::set_dark(original_dark);
+    theme::set_vision(original_vision);
+}
+
+#[test]
 fn placed_step_body_uses_imported_opacity_until_a_design_look_overrides_it() {
     let body = kernel::box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0))
         .unwrap()

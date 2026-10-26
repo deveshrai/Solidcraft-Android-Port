@@ -149,6 +149,37 @@ enum Drag {
     Feature(u64),
 }
 
+/// The component whose features the bottom timeline shows (#2880): the active component, else
+/// the one component picked in the browser. `None`: the whole design (nothing active or picked,
+/// or Show All turned on). A design with many parts lists every part's features otherwise.
+pub(crate) fn timeline_component(app: &SolveApp, show_all: bool) -> Option<u64> {
+    if show_all {
+        return None;
+    }
+    if app.session.active_component != 0 {
+        return Some(app.session.active_component);
+    }
+    match app.tree.picked_components.as_slice() {
+        [one] if *one != 0 => Some(*one),
+        _ => None,
+    }
+}
+
+/// Indices into the design's features that the timeline shows for `component` (all of them for
+/// `None`): the features of that component and of the components inside it.
+pub(crate) fn shown_feature_indices(doc: &solidcraft_engine::doc::Document, component: Option<u64>) -> Vec<usize> {
+    doc.features.iter().enumerate().filter(|(_, f)| component.is_none_or(|c| doc.component_within(f.component, c))).map(|(i, _)| i).collect()
+}
+
+/// The design's feature position for a slot among the shown features: before the shown feature
+/// in that slot, or just after the last shown one (the end of the design when all are shown).
+fn design_position(shown: &[usize], slot: usize, n: usize) -> usize {
+    match shown.get(slot) {
+        Some(i) => *i,
+        None => shown.last().map_or(n, |i| (i + 1).min(n)),
+    }
+}
+
 /// Slot index (0..=n) nearest to screen x, given the left edges of the feature buttons.
 fn slot_at(xs: &[f32], end: f32, x: f32) -> usize {
     let mut best = (0usize, f32::INFINITY);
@@ -265,7 +296,7 @@ pub(crate) fn clipboard_buttons(app: &mut SolveApp, ui: &mut egui::Ui, id: u64) 
 pub(crate) fn status_text(name: &str, ty: &str, error: Option<&str>, warning: Option<&str>) -> String {
     let mut text = format!("{name}  ({ty})");
     if let Some(error) = error {
-        text.push_str(&format!("\nError: {error}"));
+        text.push_str(&format!("\nError: {}", crate::i18n::tr_diagnostic(error)));
     }
     if let Some(warning) = warning {
         text.push_str(&format!("\nWarning: {warning}"));
@@ -411,14 +442,45 @@ fn timeline_contents(app: &mut SolveApp, ui: &mut egui::Ui, floating: bool) {
             let p = ui.painter().clone();
             let mut x = ui.max_rect().left();
             let origin = x;
-            let feats: Vec<_> = app
-                .session
-                .doc
-                .features
+            // In an assembly, only the active (or picked) component's features (#2880).
+            let show_all_id = ui.id().with("tl_show_all");
+            let show_all = ui.data(|d| d.get_temp::<bool>(show_all_id)).unwrap_or(false);
+            let only = timeline_component(app, show_all);
+            let filtering = only.is_some() || show_all;
+            let shown = shown_feature_indices(&app.session.doc, only);
+            if filtering || app.session.doc.features.iter().any(|f| f.component != 0) {
+                // A toggle ahead of the features: this part only, or the whole design.
+                let label = match only {
+                    Some(c) => app.session.doc.components.iter().find(|k| k.id == c).map_or_else(|| "Component".to_string(), |k| k.name.clone()),
+                    None => "All components".to_string(),
+                };
+                let galley = ui.painter().layout_no_wrap(label.clone(), egui::FontId::proportional(t.font_label), t.text);
+                let br = Rect::from_min_size(pos2(x, r.top() + 9.0), vec2(galley.size().x + 12.0, 22.0));
+                crate::scenario::publish_handle("timeline:components", br.center());
+                let resp = ui.interact(br, ui.id().with("tl_components"), Sense::click());
+                p.rect(br, 3.0, if resp.hovered() { t.hover } else { t.timeline_item }, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+                p.galley(br.left_center() + vec2(6.0, -galley.size().y * 0.5), galley, t.text);
+                let tip = if show_all {
+                    "Showing every component's features. Click to show only the active or picked component's"
+                } else if only.is_some() {
+                    "Showing this component's features only. Click to show the whole design's"
+                } else {
+                    "Activate or pick a component in the browser to show only its features"
+                };
+                if resp.on_hover_text(tip).clicked() && (only.is_some() || show_all) {
+                    ui.data_mut(|d| d.insert_temp(show_all_id, !show_all));
+                }
+                x = br.right() + 8.0;
+            }
+            let marker = shown.iter().position(|i| *i >= marker).unwrap_or(shown.len());
+            let feats: Vec<_> = shown
                 .iter()
+                .filter_map(|i| app.session.doc.features.get(*i))
                 .map(|f| (f.id, f.name.clone(), icon_of(&f.kind), f.suppressed, f.kind.type_name(), TimelineKind::of(&f.kind)))
                 .collect();
             let order: Vec<u64> = feats.iter().map(|f| f.0).collect();
+            // Find in Timeline: scroll the found feature into the strip on this frame (#5850).
+            let reveal = app.tree.timeline_reveal.take();
             // The feature whose body is under the cursor in the viewport.
             let st = app.session.world_state();
             let from_view = match &app.viewport.hover {
@@ -441,6 +503,9 @@ fn timeline_contents(app: &mut SolveApp, ui: &mut egui::Ui, floating: bool) {
                 }
                 xs.push(x);
                 let br = Rect::from_min_size(pos2(x, r.top() + 6.0), vec2(28.0, 28.0));
+                if reveal == Some(*id) {
+                    ui.scroll_to_rect(br, Some(egui::Align::Center));
+                }
                 crate::scenario::publish_handle(&format!("timeline:{name}"), br.center());
                 let resp = ui.interact(br, ui.id().with(("feat", *id)), Sense::click_and_drag());
                 let res = app.session.model.result(*id);
@@ -456,7 +521,7 @@ fn timeline_contents(app: &mut SolveApp, ui: &mut egui::Ui, floating: bool) {
                     icon,
                     name,
                     kind: ty,
-                    selected: sel || (floating && marker > 0 && i == marker - 1),
+                    selected: sel,
                     hovered: resp.hovered() || from_view == Some(*id),
                     dim: rolled,
                     suppressed: *suppressed,
@@ -466,11 +531,15 @@ fn timeline_contents(app: &mut SolveApp, ui: &mut egui::Ui, floating: bool) {
                     accent: if drag == Some(Drag::Feature(*id)) { crate::theme::TabAccent::for_tab(&t, "SKETCH") } else { accent },
                 }
                 .paint(&p, br, crate::ui_kit::HistoryStyle::Bottom);
+                if floating && marker > 0 && i == marker - 1 {
+                    p.circle_filled(pos2(br.center().x, br.bottom() + t.space_3), t.space_2, accent.color);
+                }
                 let mut tip = status_text(name, ty, err.as_deref(), warn.as_deref());
                 if let Some(r) = res {
                     tip += &format!("\n{:.1} ms", r.ms);
                 }
-                tip += "\nDouble-click to edit · drag to reorder · right-click for more";
+                tip.push('\n');
+                tip.push_str(crate::i18n::tr("timeline.feature_hint"));
                 if resp.drag_started() {
                     drag = Some(Drag::Feature(*id));
                 }
@@ -479,8 +548,14 @@ fn timeline_contents(app: &mut SolveApp, ui: &mut egui::Ui, floating: bool) {
                     // A dialog input that takes features (pattern objects) gets the click.
                     let takes = app.dialog.as_ref().and_then(|d| d.active_input()).is_some_and(|i| i.accept & crate::selection::FEATURES != 0);
                     if takes {
+                        // A click adds the feature and keeps one already picked (it shows as
+                        // selected); Ctrl+click takes it out, as Ctrl+click toggles outside a dialog.
+                        let toggle = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                         if let Some(mut d) = app.dialog.take() {
-                            d.pick(&app.session, solidcraft_engine::Sel::Feature { id: *id });
+                            let feature = solidcraft_engine::Sel::Feature { id: *id };
+                            if toggle || !d.active_input().is_some_and(|i| i.items.contains(&feature)) {
+                                d.pick(&app.session, feature);
+                            }
                             app.dialog = Some(d);
                         }
                     } else {
@@ -601,7 +676,7 @@ fn timeline_contents(app: &mut SolveApp, ui: &mut egui::Ui, floating: bool) {
                 && let Some(dg) = drag.take()
                 && let Some(pp) = pointer
             {
-                let slot = slot_at(&xs, end, pp.x);
+                let slot = design_position(&shown, slot_at(&xs, end, pp.x), n);
                 match dg {
                     Drag::Marker => {
                         let _ = app.run_heavy("timeline.roll_to", if slot >= n { json!({}) } else { json!({ "position": slot }) });
@@ -768,6 +843,38 @@ mod tests {
         assert_eq!(moved.y, first.y);
     }
 
+    /// Find in Timeline on the last body of a history longer than the timeline scrolls its
+    /// feature into view, in the bottom strip and in the history on the left (#5850).
+    #[test]
+    fn find_in_timeline_scrolls_both_timelines_to_the_found_feature() {
+        for left in [false, true] {
+            let mut h = Harness::new();
+            h.app.preferences.timeline_left = left;
+            for i in 0..80 {
+                h.app.run("sketch.create", json!({"plane": "XY", "name": format!("S{i}")})).unwrap();
+                h.app.run("sketch.finish", json!({})).unwrap();
+            }
+            h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10, "name": "Last", "body_name": "Plate"})).unwrap();
+            h.app.run("select.clear", json!({})).unwrap();
+            h.frames(4);
+            let shown = |h: &Harness| {
+                let history = h.app.shell.history.unwrap();
+                let found = crate::scenario::handle_at("timeline:Last").unwrap();
+                history.contains(found)
+            };
+            assert!(!shown(&h), "left={left}: the last feature starts outside the timeline");
+
+            let target = crate::context_menu::Target::Body { name: "Plate".into() };
+            let item = crate::context_menu::items(&h.app, &target).into_iter().find(|item| item.id == "ui.findTimeline").unwrap();
+            crate::context_menu::run_item(&mut h.app, &item, egui::pos2(0.0, 0.0));
+            h.frames(30);
+            let last = h.app.session.doc.find_feature("Last").unwrap().id;
+            assert_eq!(h.app.session.selection, [solidcraft_engine::Sel::Feature { id: last }], "left={left}");
+            assert!(shown(&h), "left={left}: Find in Timeline scrolled the found feature into the timeline");
+            assert!(h.app.tree.timeline_reveal.is_none(), "left={left}: the request is done once drawn");
+        }
+    }
+
     #[test]
     fn the_feature_menu_edits_its_profile_sketch_in_both_timelines() {
         for left in [false, true] {
@@ -787,6 +894,45 @@ mod tests {
             h.step(&json!({"widget": "Edit Profile Sketch"})).unwrap();
             assert_eq!(h.app.session.active_sketch, Some(sketch), "left: {left}");
         }
+    }
+
+    fn shown(h: &mut Harness) -> Vec<String> {
+        h.frames(4);
+        crate::scenario::handles("timeline:").into_iter().map(|(n, _)| n).filter(|n| n != "timeline:components").collect()
+    }
+
+    /// Two components with a box each: while one is active, the timeline shows only its
+    /// feature; the toggle ahead of the features shows the whole design again, and so does the
+    /// root (#2880).
+    #[test]
+    fn the_timeline_shows_only_the_active_components_features() {
+        let mut h = Harness::new();
+        h.app.run("component.create", json!({"name": "Left"})).unwrap();
+        h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10, "name": "LeftBox"})).unwrap();
+        h.app.run("component.activate", json!({"component": 0})).unwrap();
+        h.app.run("component.create", json!({"name": "Right"})).unwrap();
+        h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [20, 0, 0], "name": "RightBox"})).unwrap();
+        let names = shown(&mut h);
+        assert!(names.contains(&"timeline:RightBox".to_string()) && !names.contains(&"timeline:LeftBox".to_string()), "{names:?}");
+        h.step(&json!({"click": {"handle": "timeline:components"}})).unwrap();
+        let names = shown(&mut h);
+        assert!(names.contains(&"timeline:LeftBox".to_string()) && names.contains(&"timeline:RightBox".to_string()), "show all: {names:?}");
+        h.step(&json!({"click": {"handle": "timeline:components"}})).unwrap();
+        let names = shown(&mut h);
+        assert!(!names.contains(&"timeline:LeftBox".to_string()), "this part again: {names:?}");
+        h.app.run("component.activate", json!({"component": 0})).unwrap();
+        let names = shown(&mut h);
+        assert!(names.contains(&"timeline:LeftBox".to_string()) && names.contains(&"timeline:RightBox".to_string()), "root: {names:?}");
+    }
+
+    /// The marker and a drop map from the shown features back to the design's positions.
+    #[test]
+    fn a_slot_among_the_shown_features_is_a_design_position() {
+        let shown = [1, 4, 5];
+        assert_eq!(super::design_position(&shown, 0, 7), 1);
+        assert_eq!(super::design_position(&shown, 2, 7), 5);
+        assert_eq!(super::design_position(&shown, 3, 7), 6);
+        assert_eq!(super::design_position(&[], 0, 7), 7);
     }
 
     fn copied(h: &Harness) -> Vec<String> {
@@ -1051,31 +1197,49 @@ mod tests {
         h.app.ui.tab = "SURFACE".into();
         let t = crate::theme::Tokens::get();
         let accent = crate::theme::TabAccent::for_tab(&t, "SURFACE");
-        let ctx = crate::fonts::test_context();
-        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| super::timeline(&mut h.app, ui));
-        out.textures_delta.clear();
-        let texts: Vec<_> = out
-            .shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Text(text) => Some(text.galley.text()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(texts, ["History"]);
-        let chips: Vec<_> = out
-            .shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r) if r.rect.size() == egui::vec2(28.0, 28.0) => Some(r),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(chips.len(), 2);
-        assert_eq!(chips.last().unwrap().fill, accent.soft);
-        assert_eq!(chips.last().unwrap().stroke.color, accent.color);
-        let marker = crate::scenario::rect_of("history:marker").unwrap();
-        assert!(out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Circle(c)
-            if marker.contains(c.center) && c.fill == t.timeline && c.stroke == egui::Stroke::new(t.space_2, accent.color))));
+        for marker_position in [None, Some(1), Some(0)] {
+            h.app.session.doc_mut().marker = marker_position;
+            let marker_index = marker_position.unwrap_or(2);
+            for selected in [None, Some(0), Some(1)] {
+                h.app.session.selection =
+                    selected.map(|i| solidcraft_engine::Sel::Feature { id: h.app.session.doc.features[i].id }).into_iter().collect();
+                let ctx = crate::fonts::test_context();
+                let mut out = ctx.run_ui(egui::RawInput::default(), |ui| super::timeline(&mut h.app, ui));
+                out.textures_delta.clear();
+                let texts: Vec<_> = out
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(texts, ["History"]);
+                let chips: Vec<_> = out
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(r) if r.rect.size() == egui::vec2(28.0, 28.0) => Some(r),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(chips.len(), 2);
+                for (i, chip) in chips.iter().enumerate() {
+                    let opacity = if i >= marker_index { 0.42 } else { 1.0 };
+                    let (fill, edge) = if selected == Some(i) { (accent.soft, accent.color) } else { (t.timeline_item, t.border) };
+                    assert_eq!(chip.fill, fill.gamma_multiply(opacity), "marker={marker_position:?}, selected={selected:?}, chip={i}");
+                    assert_eq!(chip.stroke.color, edge.gamma_multiply(opacity));
+                    let dot_center = egui::pos2(chip.rect.center().x, chip.rect.bottom() + t.space_3);
+                    let has_dot = out.shapes.iter().any(|s| {
+                        matches!(&s.shape, egui::Shape::Circle(c)
+                        if c.center == dot_center && c.radius == t.space_2 && c.fill == accent.color && c.stroke == egui::Stroke::NONE)
+                    });
+                    assert_eq!(has_dot, marker_index > 0 && i == marker_index - 1);
+                }
+                let marker = crate::scenario::rect_of("history:marker").unwrap();
+                assert!(out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Circle(c)
+                    if marker.contains(c.center) && c.fill == t.timeline && c.stroke == egui::Stroke::new(t.space_2, accent.color))));
+            }
+        }
     }
 }

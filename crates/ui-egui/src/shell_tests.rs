@@ -662,3 +662,21 @@ fn ribbon_labels_are_saved_independently_and_icon_only_commands_remain_reachable
     }
     assert!(crate::prefs::lenient(&json!({})).ribbon_labels);
 }
+
+#[test]
+fn embed_keeps_model_panels_without_application_chrome() {
+    let mut h = Harness::new();
+    h.app.embedded = true;
+    h.app.home.show(h.app.session.revision);
+    h.app.ui.show_browser = false;
+    h.app.ui.show_timeline = false;
+    h.app.run("solid.box", json!({"length":40,"width":30,"height":20})).unwrap();
+    h.settle();
+    assert!(!h.app.home.open);
+    assert_eq!(h.app.ui.layout, LayoutMode::Docked);
+    assert!(h.app.ui.show_browser && h.app.ui.show_timeline);
+    assert!(rect_of("toolbar").is_none());
+    assert!(rect_of("ribbon:workspace").is_none());
+    assert!(rect_of("browser:card").is_some());
+    assert!(h.app.viewport.rect.is_some());
+}

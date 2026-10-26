@@ -37,7 +37,9 @@ pub fn run(root: &Path, fix: bool) -> Result<(), String> {
             stale.join(", ")
         ));
     }
-    println!("lists: message catalogs are sorted");
+    crate::pending::check_locales(root)?;
+    crate::pending::check_attribution(root)?;
+    println!("lists: message catalogs are sorted; pending locale and attribution files fold cleanly");
     Ok(())
 }
 

@@ -29,6 +29,7 @@ mod shortcuts;
 mod status;
 mod table;
 mod text;
+mod value_focus;
 
 pub(crate) use actions::*;
 pub use actions::{Button, button};
@@ -61,6 +62,7 @@ pub(crate) use search::{CommandSearch, SearchBadge, SearchFieldGeometry};
 pub(crate) use shortcuts::*;
 pub(crate) use status::*;
 pub(crate) use table::*;
+pub(crate) use value_focus::*;
 
 #[cfg(test)]
 mod gallery;

@@ -169,12 +169,13 @@ fn inputs(s: &Session, t: &MotionTrace) -> Result<Value> {
     let (occurrences, ids) = graph(s, t);
     let st = s.model.state();
     let seeds: BTreeMap<u64, &Vec<f64>> = t.seeds.iter().map(|(id, q)| (*id, q)).collect();
+    let params = joints::Params::new(&s.doc);
     let mut joints = Vec::new();
     for j in s.doc.assembly.joints.iter().filter(|j| ids.contains(&j.id)) {
         let mut definition = j.clone();
         definition.name.clear();
         definition.values = seeds.get(&j.id).map(|q| (*q).clone()).unwrap_or_default();
-        let (offset, angle, q) = joints::expressed(&s.doc, &definition)?;
+        let (offset, angle, q) = joints::expressed(&params, &definition)?;
         definition.offset = offset;
         definition.angle = angle;
         definition.values = q;

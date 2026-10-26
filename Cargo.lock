@@ -4234,7 +4234,7 @@ dependencies = [
 
 [[package]]
 name = "solidcraft"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "block2 0.6.2",
  "eframe",
@@ -4266,11 +4266,11 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-3dx-client"
-version = "0.22.0"
+version = "0.23.0"
 
 [[package]]
 name = "solidcraft-android"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "android_logger",
  "eframe",
@@ -4285,7 +4285,7 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-cli"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "image",
  "log",
@@ -4297,7 +4297,7 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-derive"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4306,7 +4306,7 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-doc"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "log",
  "serde",
@@ -4323,7 +4323,7 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-engine"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "log",
  "schemars",
@@ -4337,12 +4337,13 @@ dependencies = [
  "solidcraft-render",
  "solidcraft-sketch",
  "thiserror 2.0.21",
+ "toml_edit",
  "web-time",
 ]
 
 [[package]]
 name = "solidcraft-geom"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4351,7 +4352,7 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-gpu"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "image",
  "log",
@@ -4371,13 +4372,14 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-io"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "cadmpeg-core",
  "cadmpeg-ir",
  "cadmpeg-registry",
  "chardetng",
  "encoding_rs",
+ "gethostname",
  "gltf",
  "log",
  "quick-xml",
@@ -4394,7 +4396,7 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-kernel"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "log",
  "proptest",
@@ -4414,7 +4416,7 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-mcp"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "serde_json",
  "solidcraft-engine",
@@ -4423,7 +4425,7 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-render"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "image",
  "moxcms",
@@ -4437,7 +4439,7 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-sketch"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4448,14 +4450,14 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-space-mouse"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "solidcraft-ui-egui"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "arboard",
  "egui",
@@ -4484,7 +4486,7 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-web"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "eframe",
  "egui",
@@ -4493,6 +4495,7 @@ dependencies = [
  "serde_json",
  "solidcraft-engine",
  "solidcraft-ui-egui",
+ "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -4739,6 +4742,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 
@@ -6018,7 +6022,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "proc-macro2",
  "serde_json",

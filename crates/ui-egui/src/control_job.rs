@@ -260,13 +260,22 @@ fn ahead_commands(method: &str, p: &Value) -> Vec<(String, Value)> {
                 return Vec::new();
             }
             let Some(steps) = p.get("commands").and_then(Value::as_array) else { return Vec::new() };
-            steps
-                .iter()
-                .map_while(|step| {
-                    let command = step.get("command").or_else(|| step.get("id")).and_then(Value::as_str)?;
-                    let params = step.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
-                    computes_ahead(command, &params).then(|| (command.to_string(), params))
+            // As the batch will run them: with `coalesce_parameters`, a run of parameter edits
+            // as one edit (#5822).
+            let coalesce = p.get("coalesce_parameters").and_then(Value::as_bool).unwrap_or(false);
+            solidcraft_engine::batch_params::plan(steps, coalesce)
+                .into_iter()
+                .map(|run| match run {
+                    solidcraft_engine::batch_params::BatchRun::Step(i) => {
+                        let step = steps.get(i)?;
+                        let command = step.get("command").or_else(|| step.get("id")).and_then(Value::as_str)?;
+                        Some((command.to_string(), step.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}))))
+                    }
+                    solidcraft_engine::batch_params::BatchRun::Params { changes, .. } => {
+                        Some(("parameters.change".to_string(), solidcraft_engine::batch_params::combined_params(&changes)))
+                    }
                 })
+                .map_while(|c| c.filter(|(command, params)| computes_ahead(command, params)))
                 .collect()
         }
         _ => Vec::new(),
@@ -373,6 +382,9 @@ impl SolveApp {
     /// An export's or a reading's reply, from its copy, with the echo an export leaves when it
     /// runs here.
     fn answered(&mut self, job: ControlJob, reply: Option<Value>) {
+        if job.req.refuse_cancelled_chat() {
+            return;
+        }
         let reply = reply.unwrap_or_else(|| json!({"ok": false, "error": format!("`{}` ended without a reply", job.label)}));
         let export = executed(&job.req.params).and_then(|(command, _)| spec_id(command)).is_some_and(|id| ANSWERED_ON_A_COPY.contains(&id));
         if reply["ok"] == true && export {
@@ -387,6 +399,10 @@ impl SolveApp {
         if !self.control_answering.is_empty() {
             let mut i = 0;
             while i < self.control_answering.len() {
+                if self.control_answering.get(i).is_some_and(|job| job.req.refuse_cancelled_chat()) {
+                    self.control_answering.remove(i);
+                    continue;
+                }
                 match self.control_answering.get(i).and_then(ControlJob::poll) {
                     Some(reply) => {
                         let job = self.control_answering.remove(i);
@@ -398,6 +414,10 @@ impl SolveApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         let Some(job) = &self.control_job else { return };
+        if job.req.refuse_cancelled_chat() {
+            self.control_job = None;
+            return;
+        }
         if job.poll().is_none() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
             return;

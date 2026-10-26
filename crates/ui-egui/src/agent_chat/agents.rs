@@ -95,7 +95,7 @@ impl Protocol {
 }
 
 /// An agent the user added.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentConfig {
     pub id: String,
@@ -108,6 +108,41 @@ pub struct AgentConfig {
     pub model: String,
     /// API: a key is stored for it in the system keychain.
     pub key: bool,
+    /// API: how long one model request may take, in seconds (clamped to
+    /// [`MIN_REQUEST_TIMEOUT_S`]..=[`MAX_REQUEST_TIMEOUT_S`] where it is used).
+    pub request_timeout_s: u64,
+}
+
+impl Default for AgentConfig {
+    fn default() -> AgentConfig {
+        AgentConfig {
+            id: String::new(),
+            name: String::new(),
+            kind: Kind::default(),
+            command: String::new(),
+            base_url: String::new(),
+            model: String::new(),
+            key: false,
+            request_timeout_s: DEFAULT_REQUEST_TIMEOUT_S,
+        }
+    }
+}
+
+/// How long one model request to an endpoint may take by default, in seconds.
+pub const DEFAULT_REQUEST_TIMEOUT_S: u64 = 300;
+/// The shortest request timeout an endpoint can have.
+pub const MIN_REQUEST_TIMEOUT_S: u64 = 30;
+/// The longest request timeout an endpoint can have (an hour).
+pub const MAX_REQUEST_TIMEOUT_S: u64 = 3600;
+
+/// A request timeout in range: seconds from a preferences file, the dialog or the control
+/// channel, rounded and clamped; anything not a finite number is the default.
+pub fn request_timeout_s(secs: f64) -> u64 {
+    if !secs.is_finite() {
+        return DEFAULT_REQUEST_TIMEOUT_S;
+    }
+    // Clamped first, so the cast is exact.
+    secs.round().clamp(MIN_REQUEST_TIMEOUT_S as f64, MAX_REQUEST_TIMEOUT_S as f64) as u64
 }
 
 /// An agent as the picker and the switcher show it.
@@ -126,6 +161,8 @@ pub struct Entry {
     pub base_url: String,
     pub model: String,
     pub key: bool,
+    /// API: seconds one model request may take (in range).
+    pub request_timeout_s: u64,
 }
 
 impl Entry {
@@ -141,6 +178,7 @@ impl Entry {
             base_url: c.base_url.clone(),
             model: c.model.clone(),
             key: c.key,
+            request_timeout_s: c.request_timeout_s.clamp(MIN_REQUEST_TIMEOUT_S, MAX_REQUEST_TIMEOUT_S),
         }
     }
     /// A short line under the name: the version, the model, or the command.
@@ -171,6 +209,7 @@ pub fn entries(app: &crate::SolveApp) -> Vec<Entry> {
             base_url: String::new(),
             model: String::new(),
             key: false,
+            request_timeout_s: DEFAULT_REQUEST_TIMEOUT_S,
         }));
     }
     out.extend(app.preferences.agents.iter().map(Entry::from_config));
@@ -218,6 +257,7 @@ pub const OPENAI_PRESETS: &[ApiPreset] = &[
     ApiPreset { name: "Ollama", base_url: "http://localhost:11434/v1" },
     ApiPreset { name: "LM Studio", base_url: "http://localhost:1234/v1" },
     ApiPreset { name: "OpenAI", base_url: "https://api.openai.com/v1" },
+    ApiPreset { name: "Mammouth AI", base_url: "https://api.mammouth.ai/v1" },
 ];
 
 /// Anthropic-compatible endpoints people use. The base URL is the one their documentation calls
@@ -266,6 +306,7 @@ mod tests {
     #[test]
     fn keys_go_only_over_https_or_to_this_computer() {
         assert!(key_safe_for("https://api.openai.com/v1"));
+        assert!(key_safe_for("https://api.mammouth.ai/v1"));
         assert!(key_safe_for("http://localhost:11434/v1"));
         assert!(key_safe_for("http://127.0.0.1:1234/v1"));
         assert!(key_safe_for("http://[::1]:8080/v1"));
@@ -307,6 +348,26 @@ mod tests {
         assert_eq!(Kind::Api.id(), "api");
         assert_eq!(Kind::Anthropic.id(), "anthropic");
         assert!(presets(Protocol::OpenAi).iter().all(|p| !p.name.is_empty() && p.base_url.starts_with("http")));
+        assert!(presets(Protocol::OpenAi).iter().any(|p| p.name == "Mammouth AI" && key_safe_for(p.base_url)));
         assert!(presets(Protocol::Anthropic).iter().any(|p| p.base_url == "https://api.anthropic.com/v1"));
+    }
+
+    #[test]
+    fn request_timeouts_default_to_300_s_and_stay_between_30_s_and_an_hour() {
+        assert_eq!(AgentConfig::default().request_timeout_s, 300);
+        assert_eq!(request_timeout_s(600.4), 600);
+        assert_eq!(request_timeout_s(1.0), 30);
+        assert_eq!(request_timeout_s(-5.0), 30);
+        assert_eq!(request_timeout_s(1e300), 3600);
+        assert_eq!(request_timeout_s(f64::NAN), 300);
+        assert_eq!(request_timeout_s(f64::INFINITY), 300);
+        // An older preferences file has no timeout: the default; a hand-edited one is clamped where used.
+        let old: AgentConfig = serde_json::from_str(r#"{"id":"api-1","kind":"api","base_url":"http://localhost:11434/v1","model":"m"}"#).unwrap();
+        assert_eq!(old.request_timeout_s, 300);
+        let wild: AgentConfig = serde_json::from_str(r#"{"id":"api-2","kind":"api","request_timeout_s":99999}"#).unwrap();
+        assert_eq!(Entry::from_config(&wild).request_timeout_s, 3600);
+        let saved = AgentConfig { id: "api-3".into(), kind: Kind::Api, request_timeout_s: 1200, ..Default::default() };
+        let back: AgentConfig = serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
+        assert_eq!(back, saved);
     }
 }

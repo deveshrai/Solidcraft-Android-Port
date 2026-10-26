@@ -116,6 +116,27 @@ cd apps/solidcraft-web && trunk serve --release --no-autoreload
 Offline use needs `--no-autoreload`: Trunk's live reload changes the page as it serves it, so it
 no longer matches the build the browser would keep. Debug builds (`trunk serve`) never keep a copy.
 
+### Design links and embeds
+
+Use `?open=<encoded HTTPS URL>` to open a hosted `.solidcraft` design as an unsaved
+copy, including its history, constraints, and joints. Encode the URL with
+`encodeURIComponent` when it contains query parameters. The host must allow CORS
+requests from the app's origin. Downloads, including redirected URLs, must use HTTPS
+and fit within the File > Open design size limit. Failed downloads and invalid designs
+show an error and leave the empty design.
+
+Add `embed` to show the viewport, timeline, browser tree, and joint controls without
+the ribbon, file menus, or start page:
+
+```html
+<iframe src="https://docs.solidcraft.io/app/?embed&open=https://example.org/arm.solidcraft"
+        width="960" height="540" title="Arm design"></iframe>
+```
+
+Embedded designs do not save designs, preferences, or recovery copies to browser
+storage and do not ask before unloading. **Open in SolidCraft** opens the same link
+in the full app in a new tab. `?embed` without `open` keeps the normal app layout.
+
 ### Self-hosting with Docker
 
 The web app is also a container image, `ghcr.io/tangency-labs/solidcraft-web`, for Linux on x86_64

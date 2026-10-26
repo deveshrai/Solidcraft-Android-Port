@@ -105,6 +105,7 @@ impl NativeMenu {
             ("messages", "Messages\u{2026}"),
             ("report", "Report an Issue\u{2026}"),
             ("crashes", "Crash Reports\u{2026}"),
+            ("install_cli", "Install solidcraft-cli command"),
         ] {
             let item = MenuItem::new(app.tr_label(label), true, None);
             help.append(&item)?;

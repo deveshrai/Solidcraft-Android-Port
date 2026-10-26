@@ -31,12 +31,14 @@ pub struct Colors {
     pub new_body: [u8; 4],
     pub removed: [u8; 4],
     pub edge: [u8; 4],
+    /// Whether a moved component's old place is drawn as a ghost (Drive Joints' Show ghost).
+    pub ghost: bool,
 }
 
 impl Colors {
     pub fn from_tokens(t: &Tokens) -> Colors {
         let c = |c: egui::Color32| c.to_srgba_unmultiplied();
-        Colors { body: c(t.body), added: c(t.preview_add), new_body: c(t.preview_new), removed: c(t.preview_cut), edge: c(t.body_edge) }
+        Colors { body: c(t.body), added: c(t.preview_add), new_body: c(t.preview_new), removed: c(t.preview_cut), edge: c(t.body_edge), ghost: true }
     }
 
     fn for_tool(t: &Tokens, tab: &str, active: bool) -> Colors {
@@ -320,7 +322,10 @@ pub fn update(app: &mut SolveApp, ctx: &egui::Context) {
             return;
         }
     };
-    let colors = Colors::for_tool(&Tokens::get(), &app.ui.tab, app.tool.is_some() || app.dialog.is_some());
+    let mut colors = Colors::for_tool(&Tokens::get(), &app.ui.tab, app.tool.is_some() || app.dialog.is_some());
+    if app.dialog.as_ref().is_some_and(|d| matches!(d.kind, crate::dialogs::Kind::Assembly(crate::dialogs_assembly::Asm::Drive { .. }))) {
+        colors.ghost = app.preferences.drive_joints_ghost;
+    }
     let key = job_key(&cmds, app.session.revision, colors);
     let stream_key = stream_key(&cmds, app.session.revision, colors);
     let tool = as_new_body(&cmds).is_some();
@@ -662,15 +667,20 @@ pub fn build(before: &ModelState, after: &ModelState, c: Colors) -> Built {
         .iter()
         .filter_map(|sketch| {
             let old = before.sketch(sketch.feature);
-            let old_curves = old.into_iter().flat_map(|s| s.sketch.curves.iter().map(|c| c.id.as_str())).collect::<std::collections::HashSet<_>>();
-            let old_points = old.into_iter().flat_map(|s| s.sketch.points.iter().map(|p| p.id.as_str())).collect::<std::collections::HashSet<_>>();
+            let old_curves =
+                old.into_iter().flat_map(|s| s.sketch.curves.iter().map(|c| (c.id.as_str(), c))).collect::<std::collections::HashMap<_, _>>();
+            let old_points =
+                old.into_iter().flat_map(|s| s.sketch.points.iter().map(|p| (p.id.as_str(), p.pos))).collect::<std::collections::HashMap<_, _>>();
             let indices = sketch
                 .sketch
                 .curves
                 .iter()
                 .enumerate()
                 .filter_map(|(index, curve)| {
-                    let unchanged = old_curves.contains(curve.id.as_str());
+                    let unchanged = old_curves.get(curve.id.as_str()).is_some_and(|previous| {
+                        previous.kind == curve.kind
+                            && curve.kind.point_ids().iter().all(|i| old.and_then(|s| s.sketch.point(*i)) == sketch.sketch.point(*i))
+                    });
                     if unchanged { None } else { Some(index) }
                 })
                 .collect::<Vec<_>>();
@@ -679,7 +689,7 @@ pub fn build(before: &ModelState, after: &ModelState, c: Colors) -> Built {
                 .points
                 .iter()
                 .enumerate()
-                .filter_map(|(i, p)| if old_points.contains(p.id.as_str()) { None } else { Some(i) })
+                .filter_map(|(i, p)| if old_points.get(p.id.as_str()) == Some(&p.pos) { None } else { Some(i) })
                 .collect::<Vec<_>>();
             if indices.is_empty() && points.is_empty() { None } else { Some(SketchPreview { sketch: sketch.clone(), curves: indices, points }) }
         })
@@ -861,7 +871,7 @@ mod tests {
     }
 
     fn colors() -> Colors {
-        Colors { body: [1, 1, 1, 255], added: [2, 2, 2, 255], new_body: [4, 4, 4, 255], removed: [3, 3, 3, 100], edge: [0, 0, 0, 255] }
+        Colors { body: [1, 1, 1, 255], added: [2, 2, 2, 255], new_body: [4, 4, 4, 255], removed: [3, 3, 3, 100], edge: [0, 0, 0, 255], ghost: true }
     }
 
     #[test]
@@ -1012,6 +1022,68 @@ mod tests {
         };
         assert!(motion_key(&cam("0 deg"), 7, colors()).is_some());
         assert_eq!(motion_key(&cam("0 deg"), 7, colors()), motion_key(&cam("90 deg"), 7, colors()));
+    }
+
+    #[test]
+    fn edited_pattern_preview_includes_moved_instances_only() -> Result<(), Box<dyn std::error::Error>> {
+        for (command, initial, edits) in [
+            (
+                "sketch.pattern.rectangular",
+                json!({"entities":["seed"],"count":3,"spacing":10,"count2":2,"spacing2":15}),
+                vec![(json!({"spacing":14}), 4), (json!({"spacing2":19}), 3)],
+            ),
+            (
+                "sketch.pattern.circular",
+                json!({"entities":["seed"],"center":"origin","count":5}),
+                vec![(json!({"count":20}), 19), (json!({"count":2}), 1)],
+            ),
+        ] {
+            let mut s = Session::default();
+            s.execute("sketch.create", &json!({"plane":"XY"}))?;
+            s.execute("sketch.circle.center", &json!({"center":[-50,0],"radius":2,"id":"seed"}))?;
+            let pattern = s.execute(command, &initial)?;
+            // An identical result must not draw the seed or any existing copies.
+            let unchanged = compute(&s, &[(command.into(), json!({"pattern":pattern["pattern"]}))], colors())?;
+            assert!(unchanged.sketches.is_empty());
+            for (mut edit, expected) in edits {
+                edit["pattern"] = pattern["pattern"].clone();
+                let built = compute(&s, &[(command.into(), edit)], colors())?;
+                assert_eq!(built.sketches.len(), 1, "{command}");
+                for preview in &built.sketches {
+                    assert_eq!(preview.curves.len(), expected, "{command}");
+                    assert_eq!(preview.points.len(), expected, "{command}");
+                    assert!(preview.curves.iter().all(|i| preview.sketch.sketch.curves.get(*i).is_some_and(|c| c.id != "seed")));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sketch_preview_includes_changed_curve_shapes() -> Result<(), Box<dyn std::error::Error>> {
+        let mut s = Session::default();
+        s.execute("sketch.create", &json!({"plane":"XY"}))?;
+        s.execute("sketch.circle.center", &json!({"center":[0,0],"radius":2,"id":"circle"}))?;
+        s.execute("sketch.line", &json!({"points":[[10,0],[20,0]],"ids":["line"]}))?;
+        let before = s.model.state();
+        let mut after = before.as_ref().clone();
+        for sketch in &mut after.sketches {
+            let sketch = &mut std::sync::Arc::make_mut(sketch).sketch;
+            for curve in &mut sketch.curves {
+                match &mut curve.kind {
+                    solidcraft_engine::sketch::CurveKind::Circle { r, .. } => *r = 3.0,
+                    solidcraft_engine::sketch::CurveKind::Line { a, b } => std::mem::swap(a, b),
+                    _ => {}
+                }
+            }
+        }
+        let built = build(&before, &after, colors());
+        assert_eq!(built.sketches.len(), 1);
+        for preview in &built.sketches {
+            assert_eq!(preview.curves, vec![0, 1]);
+            assert!(preview.points.is_empty());
+        }
+        Ok(())
     }
 
     /// Combine previews its result (cut, join or intersect between existing bodies) without an

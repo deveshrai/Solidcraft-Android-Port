@@ -13,6 +13,10 @@
 //! around them tells apart are numbered (`#1`, `#2`): in the order of what they came from when
 //! that differs (exact), else in the kernel's order (unverified). A face made of several (a
 //! coplanar join) takes one name and answers to the others (aliases).
+//!
+//! A piece that is split again keeps the face's stem and the bounds that told the piece it
+//! came from apart: its name lists the faces around it, not the qualifiers of the pieces
+//! before it, so a name does not grow with every split.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
@@ -244,7 +248,7 @@ fn merged(names: Vec<Named>) -> Option<Named> {
         }
         common = crate::naming::parent_piece(c);
     }
-    let name = common.map(str::to_string).unwrap_or(first);
+    let name = common_piece(&names).or_else(|| common.map(str::to_string)).unwrap_or(first);
     let mut aliases: Vec<String> = Vec::new();
     for n in names {
         for alias in std::iter::once(n.name).chain(n.aliases) {
@@ -254,6 +258,38 @@ fn merged(names: Vec<Named>) -> Option<Named> {
         }
     }
     Some(Named { name, aliases, verified, origins: None })
+}
+
+/// The name the faces have in common: their stem, the faces their qualifiers share and the
+/// number that told their pieces apart, when all of them have it. A face made of pieces that
+/// were split again keeps the name of the piece they came from (#5860).
+fn common_piece(names: &[Named]) -> Option<String> {
+    let first = names.first()?.name.as_str();
+    let (stem, around, tie) = split_piece(first);
+    let mut shared: BTreeSet<String> = around.into_iter().collect();
+    let mut same_tie = tie;
+    for n in names.iter().skip(1) {
+        let (other_stem, around, other_tie) = split_piece(&n.name);
+        if other_stem != stem {
+            return None;
+        }
+        let around: BTreeSet<String> = around.into_iter().collect();
+        shared = shared.intersection(&around).cloned().collect();
+        if same_tie != other_tie {
+            same_tie = None;
+        }
+    }
+    let mut name = stem;
+    if !shared.is_empty() {
+        name.push_str("#[");
+        name.push_str(&shared.into_iter().collect::<Vec<_>>().join(","));
+        name.push(']');
+    }
+    if let Some(tie) = same_tie {
+        name.push('#');
+        name.push_str(&tie);
+    }
+    Some(name)
 }
 
 /// Whether `name` is `stem` or a piece of it (at any depth).
@@ -330,11 +366,26 @@ fn qualify_at(named: Vec<Named>, adjacent: &[(usize, usize)], centres: Option<&d
             })
             .unwrap_or_default();
         let own = |i: usize| -> Vec<&String> { bounds.get(i).unwrap_or(&empty).iter().filter(|x| !common.contains(x)).collect() };
+        // The face's stem, the faces the parent's qualifier lists (the bounds that told the
+        // parent apart from its siblings) and the number that told apart the pieces nothing
+        // else told apart.
+        let (stem, inherited, tie) = split_piece(base);
         let mut by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for &i in members {
-            let key: Vec<&str> = own(i).into_iter().map(String::as_str).collect();
-            // Nothing around it of its own: the piece is only numbered (below).
-            let name = if key.is_empty() { base.to_string() } else { format!("{base}#[{}]", key.join(",")) };
+            let own = own(i);
+            // Nothing around it of its own: the piece keeps the name it had.
+            let name = if own.is_empty() {
+                base.to_string()
+            } else {
+                // The bounds that told the parent apart and the bounds that tell this piece
+                // apart: the name says which piece of the face it is without repeating the
+                // qualifiers of the pieces before it (the name grew with every split
+                // otherwise, #5860).
+                let mut key: BTreeSet<&str> = inherited.iter().map(String::as_str).collect();
+                key.extend(own.iter().map(|s| s.as_str()));
+                let key: Vec<&str> = key.into_iter().collect();
+                piece_name(&stem, &key, tie.as_deref())
+            };
             by_key.entry(name).or_default().push(i);
         }
         for (key, tied) in by_key {
@@ -394,6 +445,56 @@ fn qualify_at(named: Vec<Named>, adjacent: &[(usize, usize)], centres: Option<&d
     Names { faces: Arc::new(names), info }
 }
 
+/// The most bytes a face name may take: a command takes a face name of at most this many
+/// bytes, so a longer name could not be used to find the face again.
+const MAX_NAME_BYTES: usize = 512;
+
+/// A piece's name: the face's stem, the faces around the piece that tell it apart, as many
+/// of them as the name can hold (`MAX_NAME_BYTES`), and the number that told the pieces of
+/// the same face apart.
+fn piece_name(stem: &str, faces: &[&str], tie: Option<&str>) -> String {
+    let mut kept: Vec<&str> = Vec::with_capacity(faces.len());
+    // The stem, the `#[` and the `]` the qualifier is written in.
+    let mut len = stem.len() + 3;
+    for face in faces {
+        let more = face.len() + if kept.is_empty() { 0 } else { 1 };
+        if len + more > MAX_NAME_BYTES {
+            break;
+        }
+        len += more;
+        kept.push(face);
+    }
+    let mut name = if kept.is_empty() { stem.to_string() } else { format!("{stem}#[{}]", kept.join(",")) };
+    if let Some(tie) = tie {
+        name.push('#');
+        name.push_str(tie);
+    }
+    name
+}
+
+/// A piece name's parts: the face's stem, the faces its qualifier lists and the number that
+/// tells apart the pieces of the same face that nothing else tells apart
+/// (`F2:top#[F3:side]#2`). A name that cannot be read is taken as it is: a hostile name never
+/// panics.
+fn split_piece(name: &str) -> (String, Vec<String>, Option<String>) {
+    let (stem, around) = match crate::piece_names::piece_parts(name) {
+        Some((stem, around)) => (stem.to_string(), around.iter().map(|face| face.to_string()).collect()),
+        None => (name.to_string(), Vec::new()),
+    };
+    (stem, around, tie_number(name))
+}
+
+/// The number at the end of a piece name (`#2` of `F2:top#[F3:side]#2`), when it has one: it
+/// tells apart the pieces of a face that nothing else tells apart.
+fn tie_number(name: &str) -> Option<String> {
+    let i = name.rfind('#')?;
+    let digits = name.get(i + 1..)?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(digits.to_string())
+}
+
 /// `origin` with the face or edge it names left out (its kind and operand kept).
 fn without_index(origin: FaceOrigin) -> FaceOrigin {
     match origin {
@@ -428,6 +529,12 @@ pub(crate) fn matches(names: &Names, index: usize, name: &str) -> Option<Match> 
     if info.is_some_and(|i| i.aliases.iter().any(|a| a == name)) {
         return Some(Match::Alias);
     }
+    // A pattern copy's faces carry their instance after the name (`…@F9.1`, after any
+    // qualifier): the names compare as the original's do, within the same copy only.
+    let ((name, at), (current, here)) = (instance_suffix(name), instance_suffix(current));
+    if at != here {
+        return None;
+    }
     // The named face (or piece) was split further: this is one of its pieces.
     if descends(current, name) {
         return Some(Match::Piece);
@@ -441,6 +548,21 @@ pub(crate) fn matches(names: &Names, index: usize, name: &str) -> Option<Match> 
     }
     let root = crate::naming::strip_piece(name);
     (crate::naming::strip_piece(current) == root).then_some(Match::Stem)
+}
+
+/// A name and the pattern instances after it (`F3:top#[F4:side]@F9.1` is `F3:top#[F4:side]` and
+/// `@F9.1`; a copy of a copy carries one instance after another).
+fn instance_suffix(n: &str) -> (&str, &str) {
+    let mut core = n;
+    while let Some(at) = core.rfind('@') {
+        let instance = core.get(at + 1..).and_then(|t| t.strip_prefix('F')).and_then(|t| t.split_once('.'));
+        let digits = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
+        if !instance.is_some_and(|(feature, k)| digits(feature) && digits(k)) {
+            break;
+        }
+        core = core.get(..at).unwrap_or_default();
+    }
+    (core, n.get(core.len()..).unwrap_or_default())
 }
 
 #[cfg(test)]

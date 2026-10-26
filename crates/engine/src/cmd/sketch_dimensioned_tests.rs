@@ -45,8 +45,23 @@ fn typed_line_angle_survives_quadrants_move_reopen_and_one_undo() {
     let mut reopened = Session { doc: std::sync::Arc::new(doc), active_sketch: s.active_sketch, ..Session::default() };
     reopened.refresh();
     close(measure(&reopened, |k| matches!(k, ConstraintKind::LineAngle { .. })), 90f64.to_radians());
-    run(&mut reopened, "sketch.move", json!({"entities":out["curves"],"translate":[4,3],"angle":20}));
-    close(measure(&reopened, |k| matches!(k, ConstraintKind::LineAngle { .. })), 90f64.to_radians());
+    let before_move = reopened.doc.clone();
+    for rotate_constraints in [false, true] {
+        reopened.doc = before_move.clone();
+        reopened.refresh();
+        let result =
+            run(&mut reopened, "sketch.move", json!({"entities":out["curves"],"translate":[4,3],"angle":20,"rotate_constraints":rotate_constraints}));
+        assert_eq!(result["sketch"]["solved"], true);
+        let expected = if rotate_constraints { 110.0_f64 } else { 90.0 };
+        close(measure(&reopened, |k| matches!(k, ConstraintKind::LineAngle { .. })), expected.to_radians());
+        close(measure(&reopened, |k| matches!(k, ConstraintKind::Length { .. })), 10.0);
+        assert_eq!(reopened.doc.param("heading").unwrap().expr, "90 deg");
+        let sk = sketch(&reopened);
+        let c = sk.constraints.iter().find(|c| matches!(c.kind, ConstraintKind::LineAngle { .. })).unwrap();
+        assert_eq!(reopened.doc.param(c.param.as_deref().unwrap()).unwrap().expr, if rotate_constraints { "(heading) + 20 deg" } else { "heading" });
+        run(&mut reopened, "edit.undo", json!({}));
+        close(measure(&reopened, |k| matches!(k, ConstraintKind::LineAngle { .. })), 90f64.to_radians());
+    }
     let mut atomic = session();
     draw(&mut atomic, "sketch.line", json!({"points":[[0,0],[5,5]]}), json!({"length":10,"angle":45}));
     run(&mut atomic, "edit.undo", json!({}));

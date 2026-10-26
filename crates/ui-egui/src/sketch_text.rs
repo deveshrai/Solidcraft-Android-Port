@@ -83,7 +83,7 @@ pub(crate) fn entity_for_selection(app: &SolveApp, selection: &Sel) -> Option<St
     let state = app.session.world_state();
     let ss = state.sketch(sid)?;
     let ids = match selection {
-        Sel::SketchCurve { id } => vec![id.clone()],
+        Sel::SketchCurve { id, .. } => vec![id.clone()],
         Sel::Profile { sketch, index } if *sketch == sid => ss.profiles.get(*index)?.curve_ids(),
         // A point of a letter's outline stands for its text (a double-click often lands on one).
         Sel::SketchPoint { id } => {
@@ -197,7 +197,11 @@ pub(crate) fn selected_link(app: &SolveApp) -> Option<String> {
 pub(crate) fn highlighted(app: &SolveApp) -> Vec<Sel> {
     let Some(Kind::Text(tx)) = app.dialog.as_ref().map(|dialog| &dialog.kind) else { return Vec::new() };
     let Ok(sk) = app.session.doc.sketch(tx.sketch) else { return Vec::new() };
-    sk.curves.iter().filter(|curve| curve.link.as_deref() == Some(tx.link.as_str())).map(|curve| Sel::SketchCurve { id: curve.id.clone() }).collect()
+    sk.curves
+        .iter()
+        .filter(|curve| curve.link.as_deref() == Some(tx.link.as_str()))
+        .map(|curve| Sel::SketchCurve { id: curve.id.clone(), sketch: None })
+        .collect()
 }
 
 /// A value shown in a field: rounded so binary noise does not show, with its unit.
@@ -248,7 +252,7 @@ fn dialog(tx: Box<Tx>) -> Dialog {
 
 fn inputs_for(tx: &Tx) -> Vec<SelInput> {
     let mut path = SelInput::new("Path", crate::selection::CURVES, false);
-    path.items.extend(tx.style.path.iter().map(|id| Sel::SketchCurve { id: id.clone() }));
+    path.items.extend(tx.style.path.iter().map(|id| Sel::SketchCurve { id: id.clone(), sketch: None }));
     vec![path]
 }
 
@@ -256,7 +260,7 @@ fn inputs_for(tx: &Tx) -> Vec<SelInput> {
 pub(crate) fn sync_path(d: &mut Dialog) {
     let Kind::Text(k) = &mut d.kind else { return };
     let picked = d.inputs.first().and_then(|i| i.items.first()).and_then(|sel| match sel {
-        Sel::SketchCurve { id } => Some(id.clone()),
+        Sel::SketchCurve { id, .. } => Some(id.clone()),
         _ => None,
     });
     if picked != k.style.path {
@@ -362,21 +366,32 @@ fn folded<T>(app: &mut SolveApp, k: &mut Tx, run: impl FnOnce(&mut SolveApp) -> 
 
 /// Each frame: show the fields on the canvas (a live edit) when they changed. Fields that make
 /// no text (an empty one, a half-typed value) leave the last good preview.
-pub(crate) fn preview(app: &mut SolveApp, k: &mut Tx) {
-    let Ok(params) = edit_params(app, k) else { return };
+/// A changed preview returns its result for the dialog's error row; unchanged fields keep it.
+pub(crate) fn preview(app: &mut SolveApp, k: &mut Tx) -> Option<Result<(), String>> {
+    let Ok(params) = edit_params(app, k) else { return None };
     if k.tried.as_ref() == Some(&params) {
-        return;
+        return None;
     }
     k.tried = Some(params.clone());
     if k.start.is_none() {
-        let Some(checkpoint) = app.session.execute("edit.checkpoint", &json!({})).ok().and_then(|r| r["checkpoint"].as_u64()) else { return };
+        let checkpoint = match app.session.execute("edit.checkpoint", &json!({})) {
+            Ok(result) => match result.get("checkpoint").and_then(Value::as_u64) {
+                Some(checkpoint) => checkpoint,
+                None => return Some(Err("the text preview could not create a checkpoint".into())),
+            },
+            Err(error) => return Some(Err(error.to_string())),
+        };
         k.start = Some(checkpoint);
     }
     let mut live = params;
     live["live"] = json!(true);
-    if folded(app, k, |app| app.session.execute("sketch.edit_text", &live)).is_ok() {
-        k.shown = source(app, k.sketch, &k.link);
-    }
+    Some(
+        folded(app, k, |app| app.session.execute("sketch.edit_text", &live))
+            .map(|_| {
+                k.shown = source(app, k.sketch, &k.link);
+            })
+            .map_err(|error| error.to_string()),
+    )
 }
 
 /// OK: the fields' final edit (which also brings the features after the sketch up to date), in
@@ -621,7 +636,7 @@ fn edit_params(app: &SolveApp, k: &Tx) -> Result<Value, String> {
         *slot = if value == initial {
             *original
         } else {
-            let typed = doc.with_design_unit(value.trim(), *kind);
+            let typed = crate::length_input::expression(doc, value, *kind);
             let v = doc.eval(&typed, *kind).map_err(|e| format!("{label}: {e}"))?;
             if !v.is_finite() {
                 return Err(format!("{label}: not a finite number"));
@@ -700,7 +715,7 @@ mod tests {
         assert_eq!(tx(&h.app).link, link);
         let sk = h.app.session.doc.sketch(sid).unwrap();
         for curve in sk.curves.iter().filter(|curve| curve.link.as_deref() == Some(&link)) {
-            assert!(h.app.highlighted().contains(&Sel::SketchCurve { id: curve.id.clone() }));
+            assert!(h.app.highlighted().contains(&Sel::SketchCurve { id: curve.id.clone(), sketch: None }));
         }
         h.step(&json!({"widget":"Cancel"})).unwrap();
         assert!(highlighted(&h.app).is_empty());
@@ -722,7 +737,7 @@ mod tests {
         let before = outline(&h);
         assert!(before.len() > 4 && before.iter().all(|(_, l)| l.as_deref() == Some(link.as_str())));
         let profiles = h.app.session.world_state().sketch(sid).unwrap().profiles.len();
-        h.app.session.selection = vec![Sel::SketchCurve { id: before[0].0.clone() }];
+        h.app.session.selection = vec![Sel::SketchCurve { id: before[0].0.clone(), sketch: None }];
         let undo = h.app.session.undo.len();
         let item = crate::context_menu::items(&h.app, &crate::context_menu::Target::Viewport)
             .into_iter()
@@ -860,7 +875,7 @@ mod tests {
             h.app.session.doc.sketch(sid).unwrap().link(&link).unwrap().source,
             LinkSource::Text { text: "O".into(), at, height, angle, font: None, style: TextStyle::default(), exprs: Default::default() }
         );
-        h.app.session.selection = vec![Sel::SketchCurve { id: h.app.session.doc.sketch(sid).unwrap().curves[0].id.clone() }];
+        h.app.session.selection = vec![Sel::SketchCurve { id: h.app.session.doc.sketch(sid).unwrap().curves[0].id.clone(), sketch: None }];
         h.app.start("sketch.edit_text");
         h.frames(3);
         let undo = h.app.session.undo.len();
@@ -888,7 +903,7 @@ mod tests {
         let reopen = |h: &mut Harness| {
             let sid = h.app.session.active_sketch.unwrap();
             let id = h.app.session.doc.sketch(sid).unwrap().curves[0].id.clone();
-            h.app.session.selection = vec![Sel::SketchCurve { id }];
+            h.app.session.selection = vec![Sel::SketchCurve { id, sketch: None }];
             h.app.start("sketch.edit_text");
             h.frames(3);
         };
@@ -910,12 +925,13 @@ mod tests {
             h.step(&json!({"click":{"handle":"dialog:Font file"}})).unwrap();
             h.frames(3);
         };
-        // A font that is not there shows nothing new, keeps the dialog open with the reason at OK, and the design
+        // A font that is not there shows nothing new, reports the reason before OK, and keeps the design
         // as it was.
         let before = (h.app.session.doc.to_json(), h.app.session.undo.len());
         let missing = concat!(env!("CARGO_MANIFEST_DIR"), "/no-such-font-12345.ttf");
         choose_file(&mut h, missing);
         assert_eq!(tx(&h.app).font, missing);
+        assert!(h.app.dialog.as_ref().unwrap().error.as_ref().is_some_and(|error| error.contains("font file")));
         assert_eq!((h.app.session.doc.to_json(), h.app.session.undo.len()), before);
         ok(&mut h);
         assert!(editing(&h.app));
@@ -924,6 +940,7 @@ mod tests {
         // A font file: other outlines on the canvas at once, one undo step, and the dialog shows the font when it is
         // opened again.
         choose_file(&mut h, font);
+        assert!(h.app.dialog.as_ref().unwrap().error.is_none(), "a valid font clears the preview error");
         assert!((area(&h) - 17.6385).abs() < 2e-3, "the canvas follows the font");
         ok(&mut h);
         assert!(!editing(&h.app));
@@ -975,10 +992,10 @@ mod tests {
     fn text_editor_rejects_mixed_sources_and_leaves_with_document_or_command() {
         let (mut h, _, curve) = setup();
         let other = h.app.run("sketch.text", json!({"text":"O","at":[30,0],"height":10})).unwrap();
-        h.app.session.selection.push(Sel::SketchCurve { id: other["curves"][0].as_str().unwrap().into() });
+        h.app.session.selection.push(Sel::SketchCurve { id: other["curves"][0].as_str().unwrap().into(), sketch: None });
         assert!(selected_entity(&h.app).is_none());
         assert!(!crate::context_menu::items(&h.app, &crate::context_menu::Target::Viewport).iter().any(|item| item.id == "sketch.edit_text"));
-        h.app.session.selection = vec![Sel::SketchCurve { id: curve }];
+        h.app.session.selection = vec![Sel::SketchCurve { id: curve, sketch: None }];
         h.app.start("sketch.edit_text");
         assert!(editing(&h.app));
         h.app.start("sketch.line");
@@ -1044,7 +1061,7 @@ mod tests {
         let sid = h.app.session.active_sketch.unwrap();
         let sk = h.app.session.doc.sketch(sid).unwrap();
         let id = sk.curves[sk.link_curves(link)[0]].id.clone();
-        h.app.session.selection = vec![Sel::SketchCurve { id }];
+        h.app.session.selection = vec![Sel::SketchCurve { id, sketch: None }];
         h.frames(3);
     }
 
@@ -1407,7 +1424,7 @@ mod tests {
         assert_eq!(h.app.session.undo.len(), undo + 1);
         // Reopened, the dialog shows them.
         let sid = h.app.session.active_sketch.unwrap();
-        h.app.session.selection = vec![Sel::SketchCurve { id: h.app.session.doc.sketch(sid).unwrap().curves[0].id.clone() }];
+        h.app.session.selection = vec![Sel::SketchCurve { id: h.app.session.doc.sketch(sid).unwrap().curves[0].id.clone(), sketch: None }];
         h.app.start("sketch.edit_text");
         h.frames(3);
         assert_eq!(tx(&h.app).style, live);
@@ -1424,6 +1441,15 @@ mod tests {
         h.step(&json!({"click":{"handle":"dialog:Bold"}})).unwrap();
         h.frames(2);
         assert!(!style_of(&h, &link).bold, "the canvas keeps the last text it could make");
+        let error = h.app.dialog.as_ref().unwrap().error.clone().unwrap_or_default();
+        assert!(error.contains("no bold face"), "the preview must explain the unchanged text before OK: {error}");
+        h.frames(2);
+        assert_eq!(h.app.dialog.as_ref().unwrap().error.as_deref(), Some(error.as_str()), "the reason stays visible on unchanged frames");
+        h.step(&json!({"click":{"handle":"dialog:Bold"}})).unwrap();
+        h.frames(2);
+        assert!(h.app.dialog.as_ref().unwrap().error.is_none(), "a valid preview clears the refusal");
+        h.step(&json!({"click":{"handle":"dialog:Bold"}})).unwrap();
+        h.frames(2);
         ok(&mut h);
         assert!(editing(&h.app));
         let error = h.app.dialog.as_ref().unwrap().error.clone().unwrap_or_default();
@@ -1440,7 +1466,7 @@ mod tests {
         h.app.cam.distance = 120.0;
         h.frames(3);
         let sid = h.app.session.active_sketch.unwrap();
-        h.app.session.selection = vec![Sel::SketchCurve { id: curve }];
+        h.app.session.selection = vec![Sel::SketchCurve { id: curve, sketch: None }];
         h.app.start("sketch.edit_text");
         h.frames(3);
         assert_eq!(style_of(&h, &link).path, None, "the selected text is not its own path");

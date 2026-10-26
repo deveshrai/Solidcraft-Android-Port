@@ -533,7 +533,11 @@ fn run_shape(app: &mut SolveApp, t: &Tool) -> Result<Vec<String>, String> {
 }
 
 /// Only consume a complete, unambiguous selection; command validation owns geometry.
-pub(crate) fn constraint_preselection(command: &str, selection: &[solidcraft_engine::Sel]) -> Option<Value> {
+pub(crate) fn constraint_preselection(
+    command: &str,
+    selection: &[solidcraft_engine::Sel],
+    sketch: Option<&solidcraft_engine::sketch::Sketch>,
+) -> Option<Value> {
     use solidcraft_engine::Sel::{SketchCurve, SketchPoint};
     let selected_ids = |curves_only: bool, minimum: usize| -> Option<Vec<&str>> {
         if !(minimum..=200).contains(&selection.len()) {
@@ -542,7 +546,7 @@ pub(crate) fn constraint_preselection(command: &str, selection: &[solidcraft_eng
         let ids: Vec<&str> = selection
             .iter()
             .map(|s| match s {
-                SketchCurve { id } => Some(id.as_str()),
+                SketchCurve { id, .. } => Some(id.as_str()),
                 SketchPoint { id } if !curves_only => Some(id.as_str()),
                 _ => None,
             })
@@ -555,12 +559,12 @@ pub(crate) fn constraint_preselection(command: &str, selection: &[solidcraft_eng
         ("sketch.constraint.polygon", _) => selected_ids(true, 3).map(|ids| json!({"lines":ids})),
         // Three or more curves: all of them equal, in pick order (#4985). Two keep the `a, b` form.
         ("sketch.constraint.equal", _) if selection.len() >= 3 => selected_ids(true, 3).map(|ids| json!({"curves":ids})),
-        ("sketch.constraint.curvature", [SketchCurve { id: a }, SketchCurve { id: b }]) if a != b => Some(json!({"a":a,"b":b})),
-        ("sketch.constraint.horizontal_vertical", [SketchCurve { id }]) => Some(json!({"line":id})),
+        ("sketch.constraint.curvature", [SketchCurve { id: a, .. }, SketchCurve { id: b, .. }]) if a != b => Some(json!({"a":a,"b":b})),
+        ("sketch.constraint.horizontal_vertical", [SketchCurve { id, .. }]) => Some(json!({"line":id})),
         ("sketch.constraint.horizontal_vertical", _) => crate::selection::alignment_points(selection).map(|points| json!({"points": points})),
         ("sketch.constraint.coincident", [a, b]) => {
             let entity = |s: &solidcraft_engine::Sel| match s {
-                SketchPoint { id } | SketchCurve { id } => Some(id.clone()),
+                SketchPoint { id } | SketchCurve { id, .. } => Some(id.clone()),
                 _ => None,
             };
             let (a, b) = (entity(a)?, entity(b)?);
@@ -568,23 +572,18 @@ pub(crate) fn constraint_preselection(command: &str, selection: &[solidcraft_eng
         }
         (
             "sketch.constraint.midpoint",
-            [SketchPoint { id: point }, SketchCurve { id: line }] | [SketchCurve { id: line }, SketchPoint { id: point }],
+            [SketchPoint { id: point }, SketchCurve { id: line, .. }] | [SketchCurve { id: line, .. }, SketchPoint { id: point }],
         ) => Some(json!({"point":point,"line":line})),
-        ("sketch.constraint.midpoint", [SketchCurve { id: a }, SketchCurve { id: b }]) if a != b => Some(json!({"a":a,"b":b})),
+        ("sketch.constraint.midpoint", [SketchCurve { id: a, .. }, SketchCurve { id: b, .. }]) if a != b => Some(json!({"a":a,"b":b})),
         ("sketch.constraint.symmetry", [a, b, c]) => {
-            let mut points = Vec::new();
-            let mut lines = Vec::new();
-            for entity in [a, b, c] {
-                match entity {
-                    SketchPoint { id } => points.push(id),
-                    SketchCurve { id } => lines.push(id),
-                    _ => return None,
-                }
-            }
-            match (points.as_slice(), lines.as_slice()) {
-                ([a, b], [line]) if a != b => Some(json!({"a":a,"b":b,"line":line})),
-                _ => None,
-            }
+            let picks = [a, b, c]
+                .into_iter()
+                .map(|entity| match entity {
+                    SketchPoint { id } | SketchCurve { id, .. } => Some(json!(id)),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            symmetry_args(&picks, sketch)
         }
         _ => None,
     }
@@ -639,6 +638,29 @@ fn sketch_axis_of(app: &SolveApp, name: &str) -> Option<&'static str> {
     }
 }
 
+/// Symmetry's arguments from three picked sketch ids in any order (#1796): with two points and
+/// a line, the line; with three lines, the only construction line or centerline among them (the
+/// line drawn between the two it mirrors); otherwise the last pick, as before.
+fn symmetry_args(picks: &[Value], sketch: Option<&solidcraft_engine::sketch::Sketch>) -> Option<Value> {
+    let curve = |v: &Value| match v.as_str() {
+        Some(id) => sketch.and_then(|sk| sk.curve_index(id).and_then(|i| sk.curves.get(i))),
+        None => None,
+    };
+    let is_line = |v: &Value| matches!(v.as_str(), Some("x" | "y")) || curve(v).is_some();
+    let is_axis = |v: &Value| matches!(v.as_str(), Some("x" | "y")) || curve(v).is_some_and(|c| c.construction || c.centerline);
+    let only = |f: &dyn Fn(&Value) -> bool| {
+        let hits: Vec<usize> = (0..picks.len()).filter(|i| picks.get(*i).is_some_and(f)).collect();
+        hits.first().copied().filter(|_| hits.len() == 1)
+    };
+    if picks.len() != 3 {
+        return None;
+    }
+    let line = only(&is_line).or_else(|| only(&is_axis)).unwrap_or(2);
+    let mut rest = (0..3).filter(|i| *i != line).filter_map(|i| picks.get(i));
+    let (a, b, line) = (rest.next()?, rest.next()?, picks.get(line)?);
+    (a != b).then(|| json!({"a": a, "b": b, "line": line}))
+}
+
 fn run_pick(app: &mut SolveApp, t: &Tool) {
     let k = &t.picks;
     let params = match t.cmd {
@@ -646,10 +668,32 @@ fn run_pick(app: &mut SolveApp, t: &Tool) {
         "sketch.constraint.coincident" => json!({"a": k[0], "b": k[1]}),
         // In pick order: a point and a line either way round, or two lines to centre.
         "sketch.constraint.midpoint" => json!({"a": k[0], "b": k[1]}),
-        "sketch.constraint.symmetry" => json!({"a": k[0], "b": k[1], "line": k[2]}),
+        "sketch.constraint.symmetry" => {
+            let picks: Vec<Value> = k.iter().map(|pick| json!(pick)).collect();
+            let params = {
+                let state = app.session.world_state();
+                symmetry_args(&picks, app.session.active_sketch.and_then(|id| state.sketch(id)).map(|ss| &ss.sketch))
+            };
+            let Some(params) = params else {
+                app.set_status("Symmetry: pick two points or two curves and the line between them", true);
+                return;
+            };
+            params
+        }
         _ => json!({"a": k[0], "b": k[1]}),
     };
     let _ = app.run(t.cmd, params);
+}
+
+/// Take back a pending spline point before undo or Backspace reaches the sketch.
+pub fn undo_spline_point(app: &mut SolveApp) -> bool {
+    let Some(t) = app.tool.as_mut() else { return false };
+    if !matches!(t.cmd, "sketch.spline.fit_point" | "sketch.spline.control_point" | "sketch.spline.control_point_5") || t.pts.is_empty() {
+        return false;
+    }
+    t.pts.pop();
+    crate::sketch_dims::reset(t);
+    true
 }
 
 /// Right click / Esc: end the current chain (line) or cancel the tool.

@@ -335,17 +335,23 @@ impl RenderState {
                         request_adapter(instance, power_preference, compatible_surface, &[]).await
                     }
                     #[cfg(not(target_arch = "wasm32"))]
-                    if let Some(native_adapter_selector) = _native_adapter_selector {
-                        native_adapter_selector(&available_adapters, compatible_surface)
-                            .map_err(WgpuError::CustomNativeAdapterSelectionError)
-                    } else {
-                        request_adapter(
-                            instance,
-                            power_preference,
-                            compatible_surface,
-                            &available_adapters,
-                        )
-                        .await
+                    {
+                        let selected = _native_adapter_selector
+                            .map(|select| select(&available_adapters, compatible_surface))
+                            .transpose()
+                            .map_err(WgpuError::CustomNativeAdapterSelectionError)?
+                            .flatten();
+                        if let Some(adapter) = selected {
+                            Ok(adapter)
+                        } else {
+                            request_adapter(
+                                instance,
+                                power_preference,
+                                compatible_surface,
+                                &available_adapters,
+                            )
+                            .await
+                        }
                     }
                 }?;
 

@@ -810,9 +810,9 @@ fn line_and_profile_then_revolve_routes_each() {
         {"command": "sketch.line", "params": {"points": [[0, 0], [0, 30]], "ids": ["axis"]}},
     ]));
     let sk = app.session.active_sketch.unwrap();
-    let d = start(&mut app, vec![Sel::SketchCurve { id: "axis".into() }, Sel::Profile { sketch: sk, index: 0 }], "solid.revolve");
+    let d = start(&mut app, vec![Sel::SketchCurve { id: "axis".into(), sketch: None }, Sel::Profile { sketch: sk, index: 0 }], "solid.revolve");
     assert_eq!(d.inputs[0].items, vec![Sel::Profile { sketch: sk, index: 0 }]);
-    assert_eq!(d.inputs[1].items, vec![Sel::SketchCurve { id: "axis".into() }]);
+    assert_eq!(d.inputs[1].items, vec![Sel::SketchCurve { id: "axis".into(), sketch: None }]);
 }
 
 #[test]
@@ -1646,7 +1646,7 @@ fn surface_extrude_dialog_takes_profiles_and_curves() {
     ]));
     let sk = app.session.doc.features.last().unwrap().id;
     let mut d = start(&mut app, vec![], "surface.extrude");
-    d.inputs[0].items = vec![Sel::Profile { sketch: sk, index: 0 }, Sel::SketchCurve { id: "free".into() }];
+    d.inputs[0].items = vec![Sel::Profile { sketch: sk, index: 0 }, Sel::SketchCurve { id: "free".into(), sketch: None }];
     let (id, p) = apply_commands(&app, &d).unwrap().remove(0);
     assert_eq!(id, "surface.extrude");
     assert_eq!(p["curves"], json!(["free"]), "{p}");
@@ -1698,7 +1698,7 @@ fn surface_revolve_dialog_takes_curves_and_an_axis() {
         {"command": "sketch.finish", "params": {}}
     ]));
     let mut d = start(&mut app, vec![], "surface.revolve");
-    d.inputs[0].items = vec![Sel::SketchCurve { id: "side".into() }];
+    d.inputs[0].items = vec![Sel::SketchCurve { id: "side".into(), sketch: None }];
     assert!(apply_commands(&app, &d).is_err(), "no axis yet");
     d.inputs[1].items = vec![Sel::Axis { name: "y".into() }];
     if let Kind::Surface(crate::dialogs_surface::Surf::Revolve { angle, .. }) = &mut d.kind {
@@ -1712,7 +1712,8 @@ fn surface_revolve_dialog_takes_curves_and_an_axis() {
     assert!((area - want).abs() < want * 2e-3, "{area} vs {want}");
     let fid = app.session.doc.features.last().unwrap().id;
     let back = crate::dialogs::for_feature(&app, fid, None).unwrap();
-    assert_eq!(back.inputs[0].items, vec![Sel::SketchCurve { id: "side".into() }]);
+    // Editing brings the curves back from the sketch the feature is built on.
+    assert_eq!(back.inputs[0].items, vec![Sel::SketchCurve { id: "side".into(), sketch: Some(1) }]);
     assert_eq!(back.inputs[1].items, vec![Sel::Axis { name: "y".into() }]);
 }
 
@@ -1729,9 +1730,9 @@ fn surface_sweep_dialog_takes_curves_and_a_path() {
         {"command": "sketch.finish", "params": {}}
     ]));
     let mut d = start(&mut app, vec![], "surface.sweep");
-    d.inputs[0].items = vec![Sel::SketchCurve { id: "l".into() }];
+    d.inputs[0].items = vec![Sel::SketchCurve { id: "l".into(), sketch: None }];
     assert!(apply_commands(&app, &d).is_err(), "no path yet");
-    d.inputs[1].items = vec![Sel::SketchCurve { id: "up".into() }];
+    d.inputs[1].items = vec![Sel::SketchCurve { id: "up".into(), sketch: None }];
     let (id, p) = apply_commands(&app, &d).unwrap().remove(0);
     assert_eq!((id.as_str(), &p["path"], &p["curves"]), ("surface.sweep", &json!(["up"]), &json!(["l"])), "{p}");
     assert_ne!(p["path_sketch"], p["sketch"], "{p}");
@@ -1740,8 +1741,8 @@ fn surface_sweep_dialog_takes_curves_and_a_path() {
     assert!((area - 50.0).abs() < 1e-6, "{area}");
     let fid = app.session.doc.features.last().unwrap().id;
     let back = crate::dialogs::for_feature(&app, fid, None).unwrap();
-    assert_eq!(back.inputs[0].items, vec![Sel::SketchCurve { id: "l".into() }]);
-    assert_eq!(back.inputs[1].items, vec![Sel::SketchCurve { id: "up".into() }]);
+    assert_eq!(back.inputs[0].items, vec![Sel::SketchCurve { id: "l".into(), sketch: Some(1) }]);
+    assert_eq!(back.inputs[1].items, vec![Sel::SketchCurve { id: "up".into(), sketch: Some(2) }]);
 }
 
 #[test]
@@ -1758,9 +1759,9 @@ fn surface_loft_dialog_makes_a_section_per_sketch() {
         {"command": "sketch.finish", "params": {}}
     ]));
     let mut d = start(&mut app, vec![], "surface.loft");
-    d.inputs[0].items = vec![Sel::SketchCurve { id: "a".into() }];
+    d.inputs[0].items = vec![Sel::SketchCurve { id: "a".into(), sketch: None }];
     assert!(apply_commands(&app, &d).is_err(), "one section");
-    d.inputs[0].items.push(Sel::SketchCurve { id: "b".into() });
+    d.inputs[0].items.push(Sel::SketchCurve { id: "b".into(), sketch: None });
     let (id, p) = apply_commands(&app, &d).unwrap().remove(0);
     assert_eq!(id, "surface.loft");
     assert_eq!(p["sections"].as_array().map(Vec::len), Some(2), "{p}");
@@ -1770,7 +1771,10 @@ fn surface_loft_dialog_makes_a_section_per_sketch() {
     assert!((area - 50.0).abs() < 1e-6, "{area}");
     let fid = app.session.doc.features.last().unwrap().id;
     let back = crate::dialogs::for_feature(&app, fid, None).unwrap();
-    assert_eq!(back.inputs[0].items, vec![Sel::SketchCurve { id: "a".into() }, Sel::SketchCurve { id: "b".into() }]);
+    assert_eq!(
+        back.inputs[0].items,
+        vec![Sel::SketchCurve { id: "a".into(), sketch: Some(2) }, Sel::SketchCurve { id: "b".into(), sketch: Some(3) }]
+    );
 }
 
 #[test]
@@ -1833,7 +1837,7 @@ fn trim_dialog_takes_curves_several_keep_points_and_another_surface() {
     let mut d = start(&mut app, vec![], "surface.trim");
     assert_eq!(d.inputs.len(), 5);
     d.inputs[0].items = vec![Sel::Body { name: "Floor".into() }];
-    d.inputs[1].items = vec![Sel::SketchCurve { id: "c1".into() }];
+    d.inputs[1].items = vec![Sel::SketchCurve { id: "c1".into(), sketch: None }];
     // Two places on the one face both count (a face pick would toggle the face off).
     d.inputs[2].toggle(vec![face("Floor", [1.0, 5.0, 0.0])]);
     d.inputs[2].toggle(vec![face("Floor", [-5.0, 5.0, 0.0])]);
@@ -2131,6 +2135,51 @@ fn midplane_asks_for_two_planes_then_builds_the_one_between_them() {
     assert!((pl.origin.z - 10.0).abs() < 1e-6, "{pl:?}");
 }
 
+/// Offset Plane through a point: a vertex picked as well as the plane puts the plane through
+/// it, the distance row goes away, and editing the plane shows both picks again.
+#[test]
+fn offset_plane_through_a_picked_vertex() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("solid.box", json!({"length":40,"width":30,"height":20,"body_name":"Box"})).unwrap();
+    h.app.start("construct.plane.offset");
+    h.frames(1);
+    let d = h.app.dialog.as_mut().unwrap();
+    assert_eq!(d.inputs.len(), 2);
+    d.inputs[0].items = vec![Sel::Plane { name: "XY".into() }];
+    d.inputs[1].items = vec![Sel::Vertex { body: "Box".into(), point: Vec3::new(40.0, 30.0, 20.0) }];
+    assert!(d.primary().is_none(), "no distance to type or drag");
+    let commands = apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
+    assert_eq!(commands.first().map(|c| c.1.clone()), Some(json!({"base":"XY","through":{"vertex":[40.0,30.0,20.0]},"offset":null})));
+    h.step(&json!({"key":"Enter"})).unwrap();
+    assert!(h.app.dialog.is_none(), "{:?}", h.app.dialog.as_ref().and_then(|d| d.error.clone()));
+    let (id, _, pl) = solidcraft_engine::view::construction_planes(&h.app.session).into_iter().next().expect("the plane");
+    assert!(pl.normal().cross(Vec3::Z).len() < 1e-6 && (pl.origin.z - 20.0).abs() < 1e-6, "{pl:?}");
+    let reopened = crate::dialogs::for_feature(&h.app, id, None).unwrap();
+    assert_eq!(reopened.inputs[0].items, vec![Sel::Plane { name: "XY".into() }]);
+    assert!(matches!(reopened.inputs[1].items.as_slice(), [Sel::Vertex { body, .. }] if body == "Box"), "{:?}", reopened.inputs[1].items);
+}
+
+/// Plane at Angle draws the tilted plane while its dialog is open, when created and when edited,
+/// and redraws it when the angle changes (it used to show only the picked plane and the label).
+#[test]
+fn plane_at_angle_previews_the_tilted_plane_when_edited() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.home.open = false;
+    let id = h.app.run("construct.plane.at_angle", json!({"base":"XY","axis":"Y","angle":"45 deg"})).unwrap()["feature"].as_u64().unwrap();
+    h.app.edit_feature(id);
+    h.frames(2);
+    let d = h.app.dialog.as_ref().unwrap();
+    assert!(matches!(d.kind, Kind::AnglePlane { .. }) && d.editing.is_some(), "{d:?}");
+    assert!(d.previews(), "the edited plane is previewed");
+    wait_feature_preview(&mut h);
+    let first = h.app.preview.key;
+    if let Kind::AnglePlane { angle } = &mut h.app.dialog.as_mut().unwrap().kind {
+        *angle = "30 deg".into();
+    }
+    wait_feature_preview(&mut h);
+    assert_ne!(h.app.preview.key, first, "a new angle redraws the preview");
+}
+
 /// #2474, #2494: every construct tool asks for what it needs. Started from the toolbar with
 /// nothing selected, none of them runs its command and reports that `a` (or `face`, `edge`…)
 /// is required; a construct command added later without a dialog fails here too.
@@ -2366,4 +2415,52 @@ fn combine_takes_bodies_clicked_in_the_browser_in(layout: &str, control: bool) {
     let d = h.app.dialog.as_ref().expect("Combine stays open");
     assert_eq!(d.inputs[0].items, vec![Sel::Body { name: "Block".into() }], "{layout} control={control} target: {:?}", d.inputs);
     assert_eq!(d.inputs[1].items, vec![Sel::Body { name: "Cutter".into() }], "{layout} control={control} tools: {:?}", d.inputs);
+}
+
+/// The model's box (what every `projection` reads for the scene's depth) is kept per world state,
+/// so a design with hundreds of sketches no longer samples them all again each frame, and it still
+/// follows the model: a sketch added far away grows it.
+#[test]
+fn model_bounds_are_kept_until_the_model_changes() {
+    let mut app = app_with(json!([
+        {"command": "sketch.create", "params": {"plane": "XY", "name": "Near"}},
+        {"command": "sketch.circle.center", "params": {"center": [0, 0], "radius": 10}},
+        {"command": "sketch.finish", "params": {}},
+    ]));
+    let near = crate::viewport::model_bounds(&app);
+    assert!((near.max.x - 10.0).abs() < 1e-6, "{near:?}");
+    assert_eq!(crate::viewport::model_bounds(&app), near, "the same state gives the same box");
+    for (cmd, p) in [
+        ("sketch.create", json!({"plane": "XY", "name": "Far"})),
+        ("sketch.circle.center", json!({"center": [500, 0], "radius": 5})),
+        ("sketch.finish", json!({})),
+    ] {
+        app.run(cmd, p).unwrap();
+    }
+    let far = crate::viewport::model_bounds(&app);
+    assert!((far.max.x - 505.0).abs() < 1e-6, "a new sketch grows the box: {far:?}");
+}
+
+/// #2747: the Revolve window takes a planar body face as its profile, as the engine already
+/// does: the box's front face (on Y = 0, from the Z axis to X = 40) turned about Z is a
+/// Ø80 × 20 cylinder.
+#[test]
+fn face_then_revolve_turns_the_face() {
+    let mut app = boxed();
+    let front = face(&app, Vec3::new(20.0, 0.0, 10.0));
+    let mut d = start(&mut app, vec![front], "solid.revolve");
+    assert_eq!(d.inputs[0].items.len(), 1, "the face is the profile");
+    d.inputs[1].items = vec![Sel::Axis { name: "Z".into() }];
+    let cmds = apply_commands(&app, &d).unwrap();
+    assert_eq!(cmds[0].1["face"], json!([20.0, 0.0, 10.0]), "{:?}", cmds[0].1);
+    assert_eq!(cmds[0].1["face_body"], "Body1");
+    assert!(cmds[0].1.get("sketch").is_none(), "{:?}", cmds[0].1);
+    for (cmd, p) in cmds {
+        app.run(&cmd, p).unwrap();
+    }
+    let st = app.session.world_state();
+    let made = st.bodies.iter().find(|b| b.name != "Body1").expect("the revolve makes a new body");
+    let v = solidcraft_engine::doc::kernel::measure(&made.body).unwrap().volume;
+    let want = std::f64::consts::PI * 40.0 * 40.0 * 20.0;
+    assert!((v - want).abs() < want * 1e-3, "{v} vs {want}");
 }

@@ -151,3 +151,115 @@ fn mcp_without_arguments_finds_the_running_app() {
     assert!(!String::from_utf8_lossy(&out.stderr).contains("bridged to the running app"), "{}", String::from_utf8_lossy(&out.stderr));
     std::fs::remove_dir_all(&control_dir).ok();
 }
+
+/// `mcp setup` against a temporary home: the client folders it finds are the only ones it writes.
+mod setup {
+    use serde_json::{Value, json};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    fn home(name: &str) -> PathBuf {
+        let h = std::env::temp_dir().join(format!("solidcraft-mcp-setup-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&h);
+        std::fs::create_dir_all(&h).unwrap();
+        h
+    }
+
+    fn run(home: &Path, args: &[&str]) -> std::process::Output {
+        Command::new(env!("CARGO_BIN_EXE_solidcraft-cli"))
+            .args(["mcp", "setup"])
+            .args(args)
+            .env_clear()
+            .env("HOME", home)
+            .env("USERPROFILE", home)
+            .env("APPDATA", home.join("AppData/Roaming"))
+            .env("LOCALAPPDATA", home.join("AppData/Local"))
+            .env("XDG_CONFIG_HOME", home.join(".config"))
+            .env("PATH", "")
+            .output()
+            .unwrap()
+    }
+
+    fn json_of(p: &Path) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+    }
+
+    fn exe() -> String {
+        let p = Path::new(env!("CARGO_BIN_EXE_solidcraft-cli")).canonicalize().unwrap();
+        p.to_string_lossy().trim_start_matches(r"\\?\").to_owned()
+    }
+
+    #[test]
+    fn merges_into_opencode_and_cursor_keeping_other_servers() {
+        let h = home("merge");
+        let oc = h.join(".config/opencode");
+        std::fs::create_dir_all(&oc).unwrap();
+        let old = json!({"$schema": "https://opencode.ai/config.json", "theme": "x", "mcp": {"other": {"type": "local", "command": ["o"]}}});
+        std::fs::write(oc.join("opencode.json"), old.to_string()).unwrap();
+        std::fs::create_dir_all(h.join(".cursor")).unwrap();
+        std::fs::write(h.join(".cursor/mcp.json"), r#"{"mcpServers": {"other": {"command": "o"}}}"#).unwrap();
+
+        let out = run(&h, &["--live"]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let v = json_of(&oc.join("opencode.json"));
+        assert_eq!(v["theme"], "x");
+        assert_eq!(v["mcp"]["other"], old["mcp"]["other"]);
+        assert_eq!(v["mcp"]["solidcraft"], json!({"type": "local", "command": [exe(), "mcp"], "enabled": true}));
+        assert_eq!(v["mcp"]["solidcraft-live"]["command"], json!([exe(), "mcp", "--connect", "127.0.0.1:7878"]));
+        assert_eq!(json_of(&oc.join("opencode.json.bak")), old);
+        let c = json_of(&h.join(".cursor/mcp.json"));
+        assert_eq!(c["mcpServers"]["other"], json!({"command": "o"}));
+        assert_eq!(c["mcpServers"]["solidcraft"], json!({"command": exe(), "args": ["mcp"]}));
+
+        // Codex (TOML) and Claude Code (a big file the CLI owns) are edited in place too.
+        std::fs::create_dir_all(h.join(".codex")).unwrap();
+        std::fs::write(h.join(".codex/config.toml"), "# mine\nmodel = \"x\"\n").unwrap();
+        let cc = "{\n  \"numStartups\": 3,\n  \"projects\": {}\n}\n";
+        std::fs::write(h.join(".claude.json"), cc).unwrap();
+        assert!(run(&h, &[]).status.success());
+        let toml = std::fs::read_to_string(h.join(".codex/config.toml")).unwrap();
+        assert!(toml.starts_with("# mine\nmodel = \"x\"\n") && toml.contains("[mcp_servers.solidcraft]"), "{toml}");
+        let c = json_of(&h.join(".claude.json"));
+        assert_eq!(c["numStartups"], 3);
+        assert_eq!(c["mcpServers"]["solidcraft"], json!({"type": "stdio", "command": exe(), "args": ["mcp"]}));
+        assert_eq!(std::fs::read_to_string(h.join(".claude.json.bak")).unwrap(), cc);
+
+        // Running again updates the same entries and leaves one of each.
+        assert!(run(&h, &[]).status.success());
+        assert_eq!(json_of(&h.join(".cursor/mcp.json"))["mcpServers"].as_object().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn dry_run_writes_nothing_and_missing_clients_are_skipped() {
+        let h = home("dry");
+        std::fs::create_dir_all(h.join(".cursor")).unwrap();
+        let out = run(&h, &["--dry-run"]);
+        assert!(out.status.success());
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("would write") && text.contains("solidcraft"), "{text}");
+        assert!(!h.join(".cursor/mcp.json").exists());
+        assert!(!h.join(".config/opencode").exists(), "OpenCode was not installed, so nothing is created for it");
+        let out = run(&h, &["--client", "claude-desktop"]);
+        assert!(String::from_utf8_lossy(&out.stdout).contains("not found"));
+    }
+
+    #[test]
+    fn a_file_that_is_not_json_is_left_alone() {
+        let h = home("bad");
+        std::fs::create_dir_all(h.join(".cursor")).unwrap();
+        std::fs::write(h.join(".cursor/mcp.json"), "{ // comment").unwrap();
+        let out = run(&h, &[]);
+        assert!(!out.status.success());
+        assert_eq!(std::fs::read_to_string(h.join(".cursor/mcp.json")).unwrap(), "{ // comment");
+    }
+
+    #[test]
+    fn claude_desktop_msix_folder_is_found() {
+        let h = home("msix");
+        let pkg = h.join("AppData/Local/Packages/Claude_abc/LocalCache/Roaming/Claude");
+        std::fs::create_dir_all(&pkg).unwrap();
+        // The MSIX folder is only read through LOCALAPPDATA, set for every platform here.
+        assert!(run(&h, &["--client", "claude-desktop"]).status.success());
+        assert!(json_of(&pkg.join("claude_desktop_config.json"))["mcpServers"]["solidcraft"].is_object());
+    }
+}

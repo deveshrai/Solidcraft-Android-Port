@@ -151,3 +151,22 @@ fn shown_expr_adds_units_to_bare_numbers() {
     assert_eq!(shown_expr("w * 2", ValueKind::Length), "w * 2");
     assert_eq!(shown_expr("", ValueKind::Length), "");
 }
+
+#[test]
+fn inch_plastic_rule_edit_preserves_material_angles_and_stored_lengths() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("plastic.manage_rules", json!({"name":"Test","thickness":"2","draft":"3","active":true})).unwrap();
+    h.app.run("document.units", json!({"units":"in"})).unwrap();
+    h.app.start("plastic.manage_rules");
+    h.frames(3);
+    let mut d = h.app.dialog.clone().unwrap();
+    let unchanged = apply_commands(&h.app, &d).unwrap().remove(0).1;
+    assert_eq!(unchanged["thickness"], json!("2 mm"));
+    assert_eq!(unchanged["draft"], json!("3 deg"));
+    let Kind::Plastic(Pl::Rules { values, .. }) = &mut d.kind else { panic!("no rules") };
+    values[1] = "0.25".into();
+    let changed = apply_commands(&h.app, &d).unwrap().remove(0).1;
+    assert_eq!(changed["thickness"], json!("0.25 in"));
+    assert_eq!(changed["draft"], unchanged["draft"]);
+    assert_eq!(changed["material"], unchanged["material"]);
+}

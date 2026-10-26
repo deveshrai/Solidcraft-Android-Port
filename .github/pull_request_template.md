@@ -2,6 +2,12 @@
 
 Describe the problem and resulting behavior. Link the issue when applicable.
 
+Changes a default: no
+
+<!-- Required line, replace "no" if this changes what a user gets out of the box (a default value, key binding, setting, tool behaviour):
+Changes a default: yes — <what>, old behaviour kept behind preference <name>
+Docs-only and bot PRs are exempt. -->
+
 ## Validation
 
 What did you run, and what were the results? Include expected and measured values for geometry changes.

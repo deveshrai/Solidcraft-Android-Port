@@ -20,7 +20,7 @@
   row gives that item's menu. Right-click the design or a component and choose **Expand All** or
   **Collapse All** to open or close every folder under that row (the design row stays visible
   when the whole tree is collapsed). Rows drag into groups and other components.
-- **Viewport.** Click to select, Shift or Ctrl to add (Preferences › Selection), drag for a window or crossing box. While sketching, Ctrl/Cmd or Alt/Option suppress auto-snap by default; Shift prefers a midpoint. To
+- **Viewport.** Click to select, Shift or Ctrl to add (Preferences › Selection), drag for a window or crossing box. While sketching, Ctrl/Cmd or Alt/Option suppress auto-snap by default; Shift prefers a midpoint; the pointer also snaps to where two curves cross. To
   reach something under something else (two lines drawn on top of each other, coincident points,
   an edge in front of a face, overlapping bodies), hold the left button still for half a second
   (long-press on a touch screen) or right-click › **Select Other…**: a list of everything under
@@ -117,9 +117,12 @@ and command menus remain available.
 
 ### Colour themes
 
-General › **Theme** lists Dark, Light and System (follows the operating system), the built-in
-Gruvbox themes (dark and light, each in hard, normal and soft contrast) and any themes you have
-imported. A choice applies at once.
+Interface › **Theme** lists Dark, Light and System (follows the operating system), the built-in
+themes and any themes you have imported. A choice applies at once. The built-in themes are Gruvbox
+(dark and light, each in hard, normal and soft contrast), SolidCraft 95, Platinum 9, Cupertino,
+Green Phosphor, Amber Phosphor, Blueprint, One Dark, Tokyo Night, Solarized Light, Nord, High
+Contrast, Graphite, Nosferatu, Catppuccin Mocha, and Okibi and Akari (dark and light, from the
+[Okibi design system](https://kaievns.github.io/okibi-akiri-design-system-spec/)).
 
 A theme is a small JSON file that starts from the Dark or Light palette and changes any of its
 colours and corner radii by name:
@@ -135,7 +138,9 @@ colours and corner radii by name:
     "accent": "#83a598",
     "viewport_top": "#32302f",
     "viewport_bottom": "#32302f",
-    "triad": ["#fb4934", "#b8bb26", "#83a598"]
+    "axis_x": "#fb4934",
+    "axis_y": "#b8bb26",
+    "axis_z": "#83a598"
   },
   "radii": {
     "radius_sm": 2,
@@ -148,8 +153,11 @@ colours and corner radii by name:
 }
 ```
 
-Colours are `#rrggbb`, or `#rrggbbaa` for translucent ones. A few colours, such as the view
-triad's X, Y and Z, take a list. Any colour the file leaves out keeps the base palette's value.
+Colours are `#rrggbb`, or `#rrggbbaa` for translucent ones. A few colours, such as the four
+Continuity Analysis seams (`continuity`), take a list. Any colour the file leaves out keeps the
+base palette's value. `axis_x`, `axis_y` and `axis_z` colour every X, Y and Z axis: the origin,
+the view triad, the navigation cube and the Move gizmo. A file from an earlier version may set
+`triad` or `gizmo` instead; it still reads, and those colours now go to every axis.
 
 `radii` is optional. Its six keys above accept integers from 0 to 32 in logical UI points;
 zero makes square corners. Omitted keys keep today's base values: 4, 6, 8, 10, 6 and 7,
@@ -183,6 +191,21 @@ Command icons use the shared SVG palette.
 
 Imported themes are kept with your preferences, so they work in the browser app too. Colour
 vision modes still apply on top of any theme.
+
+Graphics › **Frame rate** shows frames per second in the view's bottom-right corner. Click it,
+or turn on **Frame rate details**, for the performance overlay:
+
+- a graph of the last few seconds of frames, one bar per frame, with lines at 60 and 30 frames
+  per second. The triangles drawn are a line over it, and a tick at the top marks each frame that
+  rebuilt the scene, so you can see how geometry changes the frame time;
+- a histogram of frame times, the 1% low (the mean of the slowest 1% of frames) and the worst
+  frame, which show stutters that an average hides;
+- what the GPU drew last frame (triangles, line segments, draw calls), the viewport's size in
+  pixels with its MSAA and supersampling, the time the interface took, the last scene build and
+  the graphics backend and adapter.
+
+While the readout is on, the view redraws every frame. With vertical sync the frame rate tops
+out at the display's refresh rate; the interface time and the GPU counts still show the work.
 
 Navigation › **Smooth wheel zoom** is on by default. Turn it off to apply each wheel or
 trackpad event immediately, with no smoothing tail. It is independent of **Animate view

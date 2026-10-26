@@ -3,7 +3,7 @@
 //! not beside a line that has already moved past them.
 
 use super::*;
-use crate::{ConstraintKind, solve, solve_after_edit};
+use crate::{Analysis, ConstraintKind, flips_from_stored, solve, solve_after_edit, solve_after_link_move};
 
 fn source() -> LinkSource {
     LinkSource::SketchCurve { sketch: 1, curve: "rail".into() }
@@ -119,4 +119,56 @@ fn stored_positions_are_matched_by_point_id() {
     for i in sk.link_points(&link) {
         assert_eq!(was[i], sk.points[i].pos);
     }
+}
+
+/// A 40 mm horizontal line tangent to a linked circle (r 3) above it, its left end 20 mm left
+/// of the centre; the stored sketch with the circle where it was (`y`).
+fn tangent_on_circle(y: f64) -> (Sketch, String, usize) {
+    let circle = |y: f64| vec![LinkGeom::Circle(Vec2::new(0.0, y), 3.0)];
+    let mut sk = Sketch::new();
+    let link = sk.add_link(LinkKind::Project, LinkSource::SketchCurve { sketch: 1, curve: "bend".into() }, &circle(y)).unwrap();
+    let c = sk.link_curves(&link)[0];
+    let centre = sk.link_points(&link)[0];
+    let l = sk.add_line(Vec2::new(-20.0, y + 3.0), Vec2::new(20.0, y + 3.0), None, None, None).unwrap();
+    let (a, _) = sk.curves[l].kind.ends().unwrap();
+    sk.add_constraint(ConstraintKind::Horizontal { l }, None).unwrap();
+    sk.add_constraint(ConstraintKind::Tangent { a: l, b: c }, None).unwrap();
+    sk.add_constraint(ConstraintKind::DistanceX { p: a, q: centre, value: 20.0 }, None).unwrap();
+    sk.add_constraint(ConstraintKind::Length { l, value: 40.0 }, None).unwrap();
+    assert!(solve(&mut sk).ok());
+    (sk, link, l)
+}
+
+#[test]
+fn a_line_tangent_to_a_linked_circle_keeps_its_side_when_the_circle_moves_far() {
+    let (stored, link, l) = tangent_on_circle(0.0);
+    let height = |sk: &Sketch| match sk.curves[l].kind {
+        CurveKind::Line { a, .. } => sk.points[a].pos.y,
+        _ => f64::NAN,
+    };
+    assert!((height(&stored) - 3.0).abs() < 1e-9);
+    let circle = |y: f64| vec![LinkGeom::Circle(Vec2::new(0.0, y), 3.0)];
+    // Moved 100 mm up, the circle passes the line. Its other tangent (y 97, a diameter below)
+    // solves every constraint too: only the side it left tells it from the right one.
+    let mut mirrored = stored.clone();
+    mirrored.update_link(&link, &circle(100.0)).unwrap();
+    for p in &mut mirrored.points {
+        if p.link.is_none() && p.id != "origin" {
+            p.pos.y += 94.0;
+        }
+    }
+    assert!((height(&mirrored) - 97.0).abs() < 1e-9);
+    assert!(solve(&mut mirrored).ok() && (height(&mirrored) - 97.0).abs() < 1e-9);
+    assert!(!flips_from_stored(&mirrored, &stored).is_empty());
+    // Walked there, the line stays above the circle, in either direction and far.
+    for y in [100.0, -100.0, 2000.0] {
+        let mut sk = stored.clone();
+        sk.update_link(&link, &circle(y)).unwrap();
+        let report = solve_after_link_move(&mut sk, &stored, &stored.driving_values(), Analysis::Full);
+        assert!(report.is_some_and(|r| r.keeps_orientation()), "{y}");
+        assert!((height(&sk) - (y + 3.0)).abs() < 1e-9 && flips_from_stored(&sk, &stored).is_empty(), "{y}: {}", height(&sk));
+    }
+    // Nothing moved: nothing to walk.
+    let mut sk = stored.clone();
+    assert!(solve_after_link_move(&mut sk, &stored, &stored.driving_values(), Analysis::Full).is_none());
 }

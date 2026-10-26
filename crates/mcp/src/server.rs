@@ -25,7 +25,9 @@ const RESOURCE_NOT_FOUND: i64 = -32002;
 /// Most messages in one JSON-RPC batch.
 const MAX_BATCH: usize = 1000;
 
-const INSTRUCTIONS: &str = "SolidCraft is an independent parametric 3D CAD app. Units are millimetres \
+const INSTRUCTIONS: &str = "SolidCraft is an independent parametric 3D CAD app, and these tools drive it: when its window is \
+open the user watches the model appear, otherwise a headless session builds it. When asked to design or build a part \
+(a bracket, an enclosure, a gear) do it with these tools straight away; nothing needs explaining first. Units are millimetres \
 and degrees in expressions (internally radians), Z is up. Model like this: `sketch.create {plane: XY}`, draw \
 (`sketch.rectangle.two_point {p0, p1}`, `sketch.circle.center {center, radius}`, `sketch.line {points, closed}`), constrain \
 and dimension (`sketch.dimension {entities, value}`; values may name parameters), `sketch.finish`, then features \
@@ -186,7 +188,13 @@ impl Server {
                 // The open design's folder counts as it is now (a save-as or open moves it).
                 let scope = self.scope.clone().map(|s| s.with_design(self.backend.design_path().as_deref()));
                 let backend = self.backend.as_mut();
-                Ok(vfs::scoped(scope, || call_tool(backend, name, &args)))
+                let mut result = vfs::scoped(scope, || call_tool(backend, name, &args));
+                if let Some(note) = backend.notice()
+                    && let Some(content) = result.get_mut("content").and_then(Value::as_array_mut)
+                {
+                    content.push(json!({"type": "text", "text": note}));
+                }
+                Ok(result)
             }
             "resources/list" => Ok(json!({"resources": [
                 {"uri": "solidcraft://design", "name": "Active design", "description": "document.inspect with measurements", "mimeType": "application/json"},

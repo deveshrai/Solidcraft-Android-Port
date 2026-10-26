@@ -5,11 +5,13 @@ desktop SolidCraft; this covers what is different on a phone or tablet. Building
 works: [android.md](android.md).
 
 Screenshots are from a Galaxy Z Fold (inner screen, landscape, unless noted) running
-SolidCraft 0.21.0a; the Threads and Render screenshots are from 0.22.0a.
+SolidCraft 0.21.0a; the Threads and Render screenshots are from 0.22.0a, the Gears ones from a
+Galaxy Tab running 0.22.0 with the gears.
 
 - [Touch](#touch)
 - [Modelling by touch](#modelling-by-touch)
 - [Threads](#threads)
+- [Gears](#gears)
 - [Rendering](#rendering)
 - [Mouse and keyboard](#mouse-and-keyboard)
 - [Typing values](#typing-values)
@@ -97,6 +99,26 @@ Everything about threads (each field, the groove's shape, the readouts, refusals
 A design with a helical thread is saved in a newer file format than upstream SolidCraft's
 release reads; desktop SolidCraft asks to be updated instead of opening it. Export STEP to take
 such a part to other software.
+
+## Gears
+
+**Create ▾ › Gear** (or search *gear*) makes an involute gear as its own component: spur,
+helical, herringbone, internal, rack, bevel, miter, worm, worm wheel or crossed helical (this
+port). Pick a **Type**, a **Module** and **Teeth**; the view previews every change, and the
+readouts show the diameters, the mate's centre distance and any undercut. **Bore and hub** adds a
+bore, a DIN 6885 keyway and a hub. **OK** inserts it at the origin, axis up Z.
+
+| The Gear dialog | Bore, hub and keyway |
+|---|---|
+| ![The Gear dialog and its readouts](screenshots/android/gears-tab-02-dialog.jpg) | ![A helical gear's bore, hub and keyway previewed](screenshots/android/gears-tab-03-bore-hub-keyway.jpg) |
+
+To change a gear, double-tap it in the browser, or long-press it and choose **Edit Gear**; OK
+rebuilds it in place, in one undo step. The values are saved with the design.
+
+![The ten gear types](screenshots/android/gears-tab-08-all-types.jpg)
+
+Everything about gears (each type, making pairs that mesh, the readouts and warnings, the
+`gear.create` parameters and how it is built): [android-gears.md](android-gears.md).
 
 ## Rendering
 

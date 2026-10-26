@@ -230,7 +230,8 @@ these docs). Upstream files changed, and why:
 | `apps/solidcraft-android/android/app/src/main/java/io/solidcraft/android/SolidCraftActivity.java` | `hideSystemBars`: the navigation bar and a tablet's taskbar hidden immersively (a swipe shows them), so they don't cover the History bar or a tall dialog's OK |
 | `apps/solidcraft-android/src/lib.rs` | OK evaluates off the window thread (`apply_off_thread`, as the desktop app does), so a long feature doesn't trip Android's not-responding dialog |
 | `crates/ui-egui/src/dialogs_gears.rs` (new), `dialogs.rs`, `dialogs_dense.rs`, `browser.rs`, `context_menu.rs`, `workspace.rs`, `lib.rs` | The Gear / Edit Gear dialog and where it opens from |
-| `assets/icons/ui/design/svg/model/spur_gear.svg` (new), `ATTRIBUTION.md`, `assets/locales/*.json` | The Gear icon and labels |
+| `assets/icons/ui/design/svg/model/spur_gear.svg` (new), `assets/locales/pending/android-port.json` (new) | The Gear icon, and the port's labels (gears and threads) in upstream's folder for unfolded strings |
+| `attribution/pending/android-port.md` (new) | Attribution rows for the port's screenshots and icon, kept out of `ATTRIBUTION.md`'s table so it merges cleanly |
 | `xtask/src/layers.rs` | `solidcraft-android` registered as an app (exempt from layering, like the web app) |
 | `xtask/src/assets.rs` | The asset check skips Gradle's `build/` output |
 | `AGENTS.md` | The Android crate's two `unsafe` exceptions added to the list |
@@ -242,11 +243,11 @@ The Android changes keep the desktop and browser builds as they were: the Androi
 behind `cfg(target_os = "android")`, and the touch changes act only on touch input. The thread
 changes are a feature in the shared crates, so they are in every build made from this repository;
 the faceted and cosmetic threads behave as upstream's. So are the gears; they keep their
-parameters in component metadata, so they need no design-format change and open upstream as plain
-components.
+parameters in component metadata, so they need no design-format change of their own (but see
+Design files below).
 
 **Design files.** The helical thread fields are a pending design-format change, so the port
-writes one format number past upstream's release (36 while upstream's is 35) with
+writes one format number past upstream's release (38 while upstream's 0.23.0 is 37) with
 `"format_pending": ["helical-threads"]`. The port opens every upstream design. Upstream's
 releases refuse a design saved by the port ("saved by a newer SolidCraft") rather than opening
 it and quietly rebuilding its helical threads as faceted ones; designs to share with desktop

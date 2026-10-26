@@ -372,7 +372,7 @@ mod tests {
             "moisture_unit",
         ];
         for catalog in crate::i18n::LOCALES.iter().filter(|c| c.id != "en-GB") {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/locales").join(format!("{}.json", catalog.id));
+            let path = std::path::Path::new(env!("OUT_DIR")).join("locales").join(format!("{}.json", catalog.id));
             let messages: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
             for key in keys.into_iter().chain(KINDS) {
                 let key = format!("ui.material_review.{key}");

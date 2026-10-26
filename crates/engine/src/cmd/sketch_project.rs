@@ -6,8 +6,8 @@
 use serde_json::{Value, json};
 use solidcraft_doc::project::resolve;
 use solidcraft_doc::{Document, FeatureKind};
-use solidcraft_geom::{Plane, Vec3};
-use solidcraft_sketch::{ConstraintKind, LinkKind, LinkSource, Sketch};
+use solidcraft_geom::{Plane, Vec2, Vec3};
+use solidcraft_sketch::{ConstraintKind, LinkKind, LinkSource, Sketch, nearest_crossing};
 
 use super::{CommandSpec, in_sketch};
 use crate::params::{bad, bool_, str_, vec3};
@@ -178,6 +178,8 @@ pub(super) fn refresh(s: &Session, doc: &Document, id: u64, sk: &mut Sketch) -> 
     if sk.links.is_empty() {
         return Vec::new();
     }
+    #[cfg(test)]
+    refresh_count::record();
     let doc = placed_candidate(s, doc);
     let (vals, _) = doc.param_values();
     // A text's outlines are rebuilt from its numbers: the ones its expressions give come first
@@ -209,8 +211,41 @@ pub(super) fn refresh(s: &Session, doc: &Document, id: u64, sk: &mut Sketch) -> 
     warnings
 }
 
+/// Refreshes of a sketch's links run on this thread by [`refresh`].
+#[cfg(test)]
+pub(super) mod refresh_count {
+    use std::cell::Cell;
+
+    thread_local! {
+        static COUNT: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub fn record() {
+        COUNT.with(|c| c.set(c.get() + 1));
+    }
+
+    /// The count since the last call.
+    pub fn take() -> usize {
+        COUNT.with(|c| c.replace(0))
+    }
+}
+
 /// Add a link for `src` to sketch `id` in `doc` (not stored in the session). Returns the link id.
 pub(super) fn add_link(s: &Session, doc: &Document, id: u64, sk: &mut Sketch, kind: LinkKind, src: LinkSource) -> Result<String> {
+    add_link_unless_present(s, doc, id, sk, kind, src, false).map(|l| l.unwrap_or_default())
+}
+
+/// [`add_link`], or `None` (nothing added) when `skip_present` and everything `src` resolves to
+/// is linked into the sketch already.
+fn add_link_unless_present(
+    s: &Session,
+    doc: &Document,
+    id: u64,
+    sk: &mut Sketch,
+    kind: LinkKind,
+    src: LinkSource,
+    skip_present: bool,
+) -> Result<Option<String>> {
     let doc = placed_candidate(s, doc);
     let (vals, _) = doc.param_values();
     let st = s.model.state_before(id);
@@ -218,6 +253,9 @@ pub(super) fn add_link(s: &Session, doc: &Document, id: u64, sk: &mut Sketch, ki
     let st = state_for_sketch(s, &doc, id, &st)?;
     let plane = sketch_plane(&doc, id, &st)?;
     let r = resolve(&doc, &vals, &st, &plane, kind, &src)?;
+    if skip_present && r.wires.is_empty() && sk.link_geometry_present(&r.geom) {
+        return Ok(None);
+    }
     let name = if let LinkSource::Face { body, at } = &r.source {
         st.body(body).and_then(|body| {
             if let Some(index) = r.face_index {
@@ -236,7 +274,7 @@ pub(super) fn add_link(s: &Session, doc: &Document, id: u64, sk: &mut Sketch, ki
         l.face_name = name;
         l.edge_name = edge_name;
     }
-    Ok(link)
+    Ok(Some(link))
 }
 
 fn link_json(sk: &Sketch, link: &str) -> Value {
@@ -260,14 +298,27 @@ fn run_links(s: &mut Session, p: &Value, cmd: &str, kind: LinkKind) -> Result<Va
     let mut sk = doc.sketch(id)?.clone();
     refresh(s, &doc, id, &mut sk);
     let mut out = Vec::new();
+    // Projecting what the sketch already shows (the border of the face it is on, an edge
+    // projected before) would lay a second copy over the first: those references are skipped.
+    let mut present = Vec::new();
     for src in sources {
         let what = src.describe();
-        let l = add_link(s, &doc, id, &mut sk, kind, src).map_err(|e| bad(cmd, format!("{what}: {e}")))?;
-        out.push(link_json(&sk, &l));
+        match add_link_unless_present(s, &doc, id, &mut sk, kind, src, kind == LinkKind::Project) {
+            Ok(Some(l)) => out.push(link_json(&sk, &l)),
+            Ok(None) => present.push(what),
+            Err(e) => return Err(bad(cmd, format!("{what}: {e}"))),
+        }
+    }
+    if out.is_empty() {
+        return Err(bad(cmd, format!("already projected into this sketch: {}", present.join(", "))));
     }
     *doc.sketch_mut(id)? = sk;
     *s.doc_mut() = doc;
-    Ok(json!({"links": out}))
+    let mut r = json!({"links": out});
+    if !present.is_empty() {
+        r["already_projected"] = json!(present);
+    }
+    Ok(r)
 }
 
 fn project_cmd(s: &mut Session, p: &Value) -> Result<Value> {
@@ -421,11 +472,38 @@ fn auto_project(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"auto_project": s.auto_project}))
 }
 
+/// `"x:<a>+<b>:x,y"` from interactive snapping: two distinct curve ids and a hint point.
+fn curve_intersection_arg(v: &Value, cmd: &str) -> Result<Option<(String, String, Vec2)>> {
+    let Some(raw) = v.as_str() else { return Ok(None) };
+    let Some(t) = raw.strip_prefix("x:") else { return Ok(None) };
+    if t.len() > 256 {
+        return Err(bad(cmd, "`x:` snap is too long"));
+    }
+    let Some((ids, xy)) = t.rsplit_once(':') else {
+        return Err(bad(cmd, "`x:` needs two curve ids and a point"));
+    };
+    if ids.bytes().filter(|b| *b == b'+').count() != 1 {
+        return Err(bad(cmd, "`x:` needs two distinct curve ids"));
+    }
+    let Some((a, b)) = ids.split_once('+') else {
+        return Err(bad(cmd, "`x:` needs two distinct curve ids"));
+    };
+    if a.is_empty() || b.is_empty() || a == b || a.len() > 128 || b.len() > 128 {
+        return Err(bad(cmd, "`x:` needs two distinct curve ids"));
+    }
+    let n: Vec<f64> = xy.split(',').map(str::trim).filter(|s| !s.is_empty()).filter_map(|x| x.parse().ok()).collect();
+    match n.as_slice() {
+        [x, y] if x.is_finite() && y.is_finite() => Ok(Some((a.to_string(), b.to_string(), Vec2::new(*x, *y)))),
+        _ => Err(bad(cmd, "`x:` point must be two finite numbers")),
+    }
+}
+
 /// Point arguments that snap to model geometry while drawing, rewritten to sketch point ids:
 /// `{"vertex": [x,y,z]}` projects the vertex (a linked point); `{"on_edge": [x,y,z]}` projects
 /// the edge and makes a free point on it (coincident with the projection); `"mid:<line>"`
-/// makes a point held at the line's midpoint (and `"vertex:x,y,z"` is the vertex form). Everything
-/// else is left as it is. The links are added to the active sketch in the session's document.
+/// makes a point held at the line's midpoint; `"x:<a>+<b>:x,y"` makes a point at the crossing of
+/// two lines, circles or arcs (and `"vertex:x,y,z"` is the vertex form). Everything else is left
+/// as it is. The links are added to the active sketch in the session's document.
 pub(super) fn snap_points(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let Some(id) = s.active_sketch else { return Ok(p.clone()) };
     let mut out = p.clone();
@@ -447,11 +525,12 @@ pub(super) fn snap_points(s: &mut Session, p: &Value, cmd: &str) -> Result<Value
             let (c, xy) = t.rsplit_once(':')?;
             let n: Vec<f64> = xy.split(',').filter_map(|x| x.trim().parse().ok()).collect();
             match n[..] {
-                [x, y] if x.is_finite() && y.is_finite() => Some((c.to_string(), solidcraft_geom::Vec2::new(x, y))),
+                [x, y] if x.is_finite() && y.is_finite() => Some((c.to_string(), Vec2::new(x, y))),
                 _ => None,
             }
         });
-        if vertex.is_none() && edge.is_none() && mid.is_none() && on.is_none() {
+        let crossing = curve_intersection_arg(v, cmd)?;
+        if vertex.is_none() && edge.is_none() && mid.is_none() && on.is_none() && crossing.is_none() {
             return Ok(());
         }
         if doc.is_none() {
@@ -470,6 +549,19 @@ pub(super) fn snap_points(s: &mut Session, p: &Value, cmd: &str) -> Result<Value
             };
             let pi = sk.add_point(at, None)?;
             sk.add_constraint(ConstraintKind::PointOnCurve { p: pi, c }, None)?;
+            sk.points.get(pi).map(|q| q.id.clone()).unwrap_or_default()
+        } else if let Some((a, b, near)) = crossing {
+            let ci = sk.curve_index(&a).ok_or_else(|| bad(cmd, format!("unknown curve `{a}`")))?;
+            let cj = sk.curve_index(&b).ok_or_else(|| bad(cmd, format!("unknown curve `{b}`")))?;
+            if ci == cj {
+                return Err(bad(cmd, "`x:` needs two distinct curves"));
+            }
+            let sha = sk.shape(ci).ok_or_else(|| bad(cmd, format!("`{a}` is not a line, circle or arc")))?;
+            let shb = sk.shape(cj).ok_or_else(|| bad(cmd, format!("`{b}` is not a line, circle or arc")))?;
+            let at = nearest_crossing(&sha, &shb, near).ok_or_else(|| bad(cmd, "those curves do not meet"))?;
+            let pi = sk.add_point(at, None)?;
+            sk.add_constraint(ConstraintKind::PointOnCurve { p: pi, c: ci }, None)?;
+            sk.add_constraint(ConstraintKind::PointOnCurve { p: pi, c: cj }, None)?;
             sk.points.get(pi).map(|q| q.id.clone()).unwrap_or_default()
         } else if let Some(line) = mid {
             // "mid:<line>": a new point at the line's midpoint, kept there.

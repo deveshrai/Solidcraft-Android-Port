@@ -56,7 +56,16 @@ pub fn start(app: &SolveApp) -> (Asm, Vec<SelInput>) {
     let a = cams.first().map(|j| j.0).unwrap_or(0);
     // A slider first, else another revolute than the cam's.
     let b = followers.iter().find(|j| j.0 != a).map(|j| j.0).unwrap_or(0);
-    let f = CamForm { a, b, follower: 0, radius: "5 mm".into(), flip: false, picked: None, animate: false, phase: 0.0 };
+    let f = CamForm {
+        a,
+        b,
+        follower: 0,
+        radius: crate::dialogs::length_default(&app.session, "5"),
+        flip: false,
+        picked: None,
+        animate: false,
+        phase: 0.0,
+    };
     let inputs = vec![
         SelInput::new("Profile", PROFILES | EDGES, true),
         SelInput::new("Roller (optional)", ROUND, false),

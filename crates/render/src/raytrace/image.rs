@@ -749,7 +749,7 @@ impl ImageTask {
         for _ in 0..repeats {
             self.pixel_radiance += radiance;
             if !self.pixel_radiance.is_finite()
-                || [self.pixel_radiance.x, self.pixel_radiance.y, self.pixel_radiance.z].into_iter().any(|v| v < 0.0 || v > 1e12)
+                || [self.pixel_radiance.x, self.pixel_radiance.y, self.pixel_radiance.z].into_iter().any(|v| !(0.0..=1e12).contains(&v))
             {
                 return Err(invalid("reflection radiance exceeds finite transport bound"));
             }

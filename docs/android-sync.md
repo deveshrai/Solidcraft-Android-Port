@@ -48,7 +48,7 @@ git push origin HEAD
 ```
 
 To follow an upstream **release** rather than `main`, merge its tag: upstream cuts releases on
-their own line (v0.22.0 is not on `main`), so `scripts/android-sync.sh --to v0.22.0` merges
+their own line (v0.23.0 is not on `main`), so `scripts/android-sync.sh --to v0.23.0` merges
 exactly that release and the APK gets its version. Merging `main` later is fine; both are merges.
 
 Options: `--to <tag>` (merge that upstream tag), `--no-build` (no APK), `--check-only` (no fetch or merge: check the tree as it is),
@@ -94,11 +94,19 @@ code"](android.md#changes-to-upstream-code)), so conflicts are rare and usually 
   `git checkout --theirs Cargo.lock && cargo update -p winit --offline || cargo update -p winit`.
 - `Cargo.toml`, `.gitignore`, `AGENTS.md`, `ATTRIBUTION.md`, `vendor/README.md`, `docs/building.md`:
   keep both sides (upstream's change and our added lines).
+- `assets/locales/*.json`, `ATTRIBUTION.md`'s files table: since 0.23 the port's UI strings live in
+  `assets/locales/pending/android-port.json` and its attribution rows in
+  `attribution/pending/android-port.md`, upstream's folders for additions that haven't been folded
+  yet. Upstream folds pending files only on its own `main`, so ours stay put and the catalogs merge
+  without conflicts. Take upstream's catalogs as they are, add new port strings and rows to those
+  two files, and never run `cargo xtask fold-pending` here. If upstream later adds a string with
+  the same id, `cargo xtask lists` says so: delete ours from the pending file.
 - The thread feature's files (`crates/doc/src/eval.rs`, `document.rs`, `crates/engine/src/cmd/features.rs`,
   `crates/ui-egui/src/dialogs_thread.rs`, `dialogs.rs`, `dialogs_all_tests.rs`): upstream works on
   threads and holes too. Keep upstream's change and the port's helical parts (`thread_face`,
   `thread_span`, `helical_thread_on`, the `helical` branch of `FeatureKind::Thread`'s evaluation,
-  the dialog's Type/Geometry rows). Merging v0.22.0, upstream's tapped-hole catalogues turned
+  the dialog's Type/Geometry rows). Merging v0.23.0, upstream's refusal for sizes past the coarse table (`beyond_coarse_range`)
+  applies to ISO threads only; a custom pitch threads any diameter. Merging v0.22.0, upstream's tapped-hole catalogues turned
   `thread_on` into `thread_on_impl`; the port's version keeps that and calls `thread_face` and
   `thread_span`. Then `cargo test -p solidcraft-kernel helical`, `-p solidcraft-engine thread`.
 - `crates/ui-egui/src/navigation.rs` / `viewport.rs`: upstream changed the camera input or the

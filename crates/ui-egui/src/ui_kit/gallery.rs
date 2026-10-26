@@ -300,6 +300,7 @@ const ELEMENTS: &[Element] = &[
                         when: "Open now",
                         workspace: "Design",
                         thumbnail: None,
+                        thumbnail_failed: false,
                     },
                 );
             }
@@ -309,7 +310,14 @@ const ELEMENTS: &[Element] = &[
         FileView::recent_row(
             ui,
             "gallery:file:recent",
-            RecentRow { title: "Sample Plate", path: "Designs/sample-plate.solidcraft", when: "Open now", workspace: "Design", thumbnail: None },
+            RecentRow {
+                title: "Sample Plate",
+                path: "Designs/sample-plate.solidcraft",
+                when: "Open now",
+                workspace: "Design",
+                thumbnail: None,
+                thumbnail_failed: false,
+            },
         );
     }),
     element!("file_sample", |ui, _| {
@@ -705,6 +713,9 @@ const ELEMENTS: &[Element] = &[
     }),
     element!("length_field", |ui, _| {
         length_field(ui, &mut 12.7, "in", 2);
+    }),
+    element!("bounded_length_field", |ui, _| {
+        bounded_length_field(ui, &mut 12.7, "in", 2, 0.0..=25.4, 0.254);
     }),
     element!("angle_field", |ui, _| {
         angle_field(ui, &mut 45.0);

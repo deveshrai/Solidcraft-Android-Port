@@ -160,7 +160,7 @@ pub(crate) fn sync(s: &Session, d: &mut Dialog) {
                     if let Some(slot) = refs.distance.get_mut(*k)
                         && (moved || new_edge || slot.trim().is_empty())
                     {
-                        *slot = crate::canvas::format_len(v.max(0.0));
+                        *slot = crate::canvas::format_len(&s.doc, v.max(0.0));
                     }
                     if new_edge && edges.get(*k).is_some_and(Option::is_some) {
                         refs.focus = Some(*k);

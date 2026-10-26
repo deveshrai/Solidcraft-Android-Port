@@ -92,6 +92,8 @@ pub trait ChatBackend {
     fn set_model(&mut self, _model: &str) {}
     /// Switch to one of the modes it reported in [`Event::Modes`].
     fn set_mode(&mut self, _mode: &str) {}
+    /// An endpoint's new request timeout, in seconds, from the next request on.
+    fn set_request_timeout(&mut self, _secs: u64) {}
     /// Its process, for status and tests.
     fn pid(&self) -> Option<u32> {
         None

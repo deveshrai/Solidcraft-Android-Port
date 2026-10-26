@@ -954,7 +954,7 @@ mod tests {
         solidcraft_doc::SavedModel {
             records: json!({
                 "features": [{"id": 1, "fingerprint": "0000000000000000", "ms": 0.0, "skipped": false, "state": 0}],
-                "states": [state], "model_bodies": records, "names": [{"faces": [], "info": []}], "sketches": [],
+                "states": [state], "model_bodies": records, "names": [{"faces": [], "info": []}], "sketches": [], "sheets": [],
             }),
             bodies,
         }
@@ -962,6 +962,13 @@ mod tests {
 
     fn native_geometry() -> solidcraft_doc::SavedModel {
         saved_model(vec![solidcraft_kernel::box_solid(solidcraft_geom::Vec3::ZERO, solidcraft_geom::Vec3::new(10., 20., 30.)).unwrap()])
+    }
+
+    #[test]
+    fn a_build_of_unknown_source_never_trusts_a_cache_outside_tests() {
+        assert!(!native_cache::source_trusted("unknown", false));
+        assert!(native_cache::source_trusted("unknown", true));
+        assert!(native_cache::source_trusted("0123abc", false));
     }
 
     #[test]
@@ -1053,7 +1060,7 @@ mod tests {
             .map(|(i, ms)| json!({"id": i + 1, "fingerprint": "0000000000000000", "ms": ms, "skipped": false, "state": i}))
             .collect();
         solidcraft_doc::SavedModel {
-            records: json!({"features": features, "states": states, "model_bodies": records, "names": [{"faces": [], "info": []}], "sketches": []}),
+            records: json!({"features": features, "states": states, "model_bodies": records, "names": [{"faces": [], "info": []}], "sketches": [], "sheets": []}),
             bodies,
         }
     }

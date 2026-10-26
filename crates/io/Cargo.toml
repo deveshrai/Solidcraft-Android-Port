@@ -8,6 +8,10 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Tests only: trust a model cache even when the build has no git commit.
+trust-unknown-source = []
+
 [dependencies]
 solidcraft-geom = { workspace = true }
 solidcraft-kernel = { workspace = true }
@@ -31,3 +35,7 @@ cadmpeg-registry = { workspace = true }
 # the tree through tempfile.
 [target.'cfg(target_vendor = "apple")'.dependencies]
 rustix = { version = "1", default-features = false, features = ["std", "fs"] }
+
+# The computer's name for a design's lock file (src/design_lock.rs; the browser keeps no lock files).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+gethostname = { workspace = true }

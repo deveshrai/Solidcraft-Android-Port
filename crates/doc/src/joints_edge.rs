@@ -11,7 +11,15 @@
 use solidcraft_geom::Vec3;
 
 use super::{Snap, component_bodies, frame};
-use crate::{DocError, Document, Mat, ModelBody, ModelState, Result};
+use crate::{DocError, Document, IDENTITY, Mat, ModelBody, ModelState, Result, apply_point, mat_inverse, mat_mul};
+
+/// A body's placement in its component and its inverse: a body moved in from another component
+/// (an imported part's) keeps its geometry where it was made, and its offset places it. Edges and
+/// faces are looked up in the body's own coordinates and the frame is placed back by the offset.
+fn placement(doc: &Document, b: &ModelBody) -> (Mat, Mat) {
+    let m = doc.model_body_offset(b).copied().unwrap_or(IDENTITY);
+    (m, mat_inverse(&m).unwrap_or(IDENTITY))
+}
 
 /// Points that close are one corner (as a share of the body's size, at least 1 µm).
 fn tol(b: &ModelBody) -> f64 {
@@ -103,16 +111,20 @@ pub(super) fn edge_frame(doc: &Document, st: &ModelState, comp: u64, snap: &Snap
     let Snap::Edge { pick, edge, face, corner } = snap else { return Err(DocError::Invalid("not an edge origin".into())) };
     let bad = || DocError::Invalid("joint origin: degenerate frame".into());
     let gone = |what: &str| DocError::Invalid(format!("joint origin: {what} no longer exists (edit the joint to pick again)"));
-    let found = component_bodies(doc, st, comp).into_iter().find_map(|b| edge_index(b, edge.as_deref(), *pick).map(|i| (b, i)));
-    let (b, i) = found.ok_or_else(|| match edge {
+    let found = component_bodies(doc, st, comp).into_iter().find_map(|b| {
+        let (m, inv) = placement(doc, b);
+        let local = apply_point(&inv, *pick);
+        edge_index(b, edge.as_deref(), local).map(|i| (b, i, local, m))
+    });
+    let (b, i, pick, placed) = found.ok_or_else(|| match edge {
         Some(n) => gone(&format!("the edge `{n}`")),
         None => DocError::Invalid("joint origin: no edge there".into()),
     })?;
     let m = b.mesh();
     let e = m.edges.get(i).ok_or_else(bad)?;
-    let (_, z, centroid) = face_of(b, i, face.as_deref(), *pick)?;
+    let (_, z, centroid) = face_of(b, i, face.as_deref(), pick)?;
     let flat = |v: Vec3| (v - z * v.dot(z)).normalized();
-    match corner {
+    let local = match corner {
         None => {
             let (mid, along) = middle(e).ok_or_else(bad)?;
             // Into the face: toward its centroid, square to the edge; a face whose centroid lies on
@@ -122,7 +134,7 @@ pub(super) fn edge_frame(doc: &Document, st: &ModelState, comp: u64, snap: &Snap
             frame(mid, z, Some(y.cross(z))).ok_or_else(bad)
         }
         Some(other) => {
-            let j = crate::name_lookup::locate_edge(b, other, *pick).map_err(|_| gone(&format!("the edge `{other}`")))?.edge;
+            let j = crate::name_lookup::locate_edge(b, other, pick).map_err(|_| gone(&format!("the edge `{other}`")))?.edge;
             let f = m.edges.get(j).ok_or_else(bad)?;
             let t = tol(b);
             let at = meeting(e, f, t).ok_or_else(|| DocError::Invalid(format!("joint origin: its edges no longer meet at a corner (`{other}`)")))?;
@@ -130,7 +142,8 @@ pub(super) fn edge_frame(doc: &Document, st: &ModelState, comp: u64, snap: &Snap
             let x = if z.dot(de.cross(df)) >= 0.0 { de } else { df };
             frame(at, z, Some(x)).ok_or_else(bad)
         }
-    }
+    }?;
+    Ok(mat_mul(&placed, &local))
 }
 
 /// An edge snap for an edge picked at `pick` on component `comp` (its own coordinates): on the
@@ -138,11 +151,16 @@ pub(super) fn edge_frame(doc: &Document, st: &ModelState, comp: u64, snap: &Snap
 /// middle or, with `corner`, at the end nearest it. The edge, the face and the corner's other
 /// edge are kept by name.
 pub fn edge_snap(doc: &Document, st: &ModelState, comp: u64, pick: Vec3, on: Option<Vec3>, corner: Option<Vec3>) -> Result<Snap> {
-    let (b, i) = component_bodies(doc, st, comp)
+    let (b, i, inv) = component_bodies(doc, st, comp)
         .into_iter()
-        .filter_map(|b| nearest_edge(b, pick).filter(|(_, d)| *d <= tol(b)).map(|(i, _)| (b, i)))
+        .filter_map(|b| {
+            let (_, inv) = placement(doc, b);
+            nearest_edge(b, apply_point(&inv, pick)).filter(|(_, d)| *d <= tol(b)).map(|(i, _)| (b, i, inv))
+        })
         .next()
         .ok_or_else(|| DocError::Invalid("joint origin: no edge there".into()))?;
+    // The picks in the body's own coordinates; the snap keeps the pick as given.
+    let (local, on, corner) = (apply_point(&inv, pick), on.map(|p| apply_point(&inv, p)), corner.map(|c| apply_point(&inv, c)));
     let names = crate::naming::edge_names(b);
     let face_names = crate::naming::face_names(b);
     let m = b.mesh();
@@ -158,7 +176,7 @@ pub fn edge_snap(doc: &Document, st: &ModelState, comp: u64, pick: Vec3, on: Opt
             }
             f
         }
-        None => face_of(b, i, None, pick)?.0,
+        None => face_of(b, i, None, local)?.0,
     };
     let face = face_names.get(face_index).cloned().filter(|n| !n.is_empty());
     let corner = match corner {

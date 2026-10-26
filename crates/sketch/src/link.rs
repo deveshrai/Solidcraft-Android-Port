@@ -91,7 +91,8 @@ pub enum LinkSource {
 }
 
 /// The expressions behind a text's numbers that were typed as expressions: its place (`x`, `y`),
-/// its height and its angle. A number without an expression is the number typed. The numbers
+/// its height and its angle; and behind its words (`text`), an expression of the design's text
+/// parameters. A number or text without an expression is the one typed. The numbers and words
 /// of `LinkSource::Text` are what the expressions gave last: the document evaluates them against
 /// its parameters before the text's outlines are rebuilt (`Document::apply_text_values`), and
 /// the sketch crate, which knows no parameters, only keeps them.
@@ -105,6 +106,9 @@ pub struct TextExprs {
     pub height: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<String>,
+    /// The words: text parameters and quoted texts joined by `+` (`Label + '-L'`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 impl TextExprs {
@@ -112,7 +116,8 @@ impl TextExprs {
         *self == TextExprs::default()
     }
 
-    /// The expressions set, each with what it sets.
+    /// The expressions of numbers set, each with what it sets (the words' expression is of
+    /// texts, not numbers: [`TextExprs::text`]).
     pub fn list(&self) -> Vec<(&'static str, &String)> {
         [("Text X", &self.x), ("Text Y", &self.y), ("Text height", &self.height), ("Text angle", &self.angle)]
             .into_iter()
@@ -560,6 +565,28 @@ impl Sketch {
             .collect()
     }
 
+    /// The expressions of the words of the sketch's texts (of text parameters).
+    pub fn text_word_exprs(&self) -> Vec<&String> {
+        self.links
+            .iter()
+            .filter_map(|l| match &l.source {
+                LinkSource::Text { exprs, .. } => exprs.text.as_ref(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Mutable view of [`Sketch::text_word_exprs`], for renaming the parameters they refer to.
+    pub fn text_word_exprs_mut(&mut self) -> Vec<&mut String> {
+        self.links
+            .iter_mut()
+            .filter_map(|l| match &mut l.source {
+                LinkSource::Text { exprs, .. } => exprs.text.as_mut(),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Mutable view of [`Sketch::text_exprs`], for renaming the parameters they refer to.
     pub fn text_exprs_mut(&mut self) -> Vec<&mut String> {
         self.links
@@ -624,6 +651,29 @@ impl Sketch {
             }
         }
         curves.first().copied().map(Some).ok_or_else(|| SketchError::Invalid(format!("sketch {name} axis")))
+    }
+
+    /// Is all of `geom` already linked into this sketch: the border of the face the sketch was
+    /// put on, or an edge projected before? Linking it again would lay a second copy over the
+    /// first. Lines match with either end first, circles by centre and radius, arcs by centre
+    /// and ends; other curves, and points on their own (the origin, a vertex), never count as
+    /// present.
+    pub fn link_geometry_present(&self, geom: &[LinkGeom]) -> bool {
+        let Ok(lay) = layout(geom) else { return false };
+        if lay.curves.is_empty() || !lay.lone.is_empty() {
+            return false;
+        }
+        let at = |i: usize| self.points.get(i).map(|p| p.pos);
+        let near = |i: usize, q: Option<Vec2>| lay.pts.get(i).zip(q).is_some_and(|(p, q)| p.dist(q) <= MERGE_TOL);
+        let curve_present = |c: &LCurve| {
+            self.curves.iter().filter(|k| k.link.is_some()).any(|k| match (*c, &k.kind) {
+                (LCurve::Line(a, b), CurveKind::Line { a: p, b: q }) => (near(a, at(*p)) && near(b, at(*q))) || (near(a, at(*q)) && near(b, at(*p))),
+                (LCurve::Circle(c, r), CurveKind::Circle { c: p, r: s }) => near(c, at(*p)) && (r - s).abs() <= MERGE_TOL,
+                (LCurve::Arc(c, a, b), CurveKind::Arc { c: p, a: q, b: e }) => near(c, at(*p)) && near(a, at(*q)) && near(b, at(*e)),
+                _ => false,
+            })
+        };
+        lay.curves.iter().all(curve_present)
     }
 
     /// Add linked geometry. Returns the link id; the new curve and point ids are

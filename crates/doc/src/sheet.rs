@@ -259,6 +259,11 @@ pub struct SheetRule {
     /// Gap between flanges that meet at a corner.
     #[serde(default = "rule_gap")]
     pub gap: String,
+    /// How the bend angles of its parts read in the DXF bend notes: `bend` (how far the sheet
+    /// turns from flat) or `included` (the angle left between the bend's two sides, as a press
+    /// brake is set). A choice, not an expression; saved only when it isn't `bend`.
+    #[serde(default = "rule_angle_display", skip_serializing_if = "is_bend_display")]
+    pub angle_display: String,
 }
 
 impl SheetRule {
@@ -311,6 +316,14 @@ fn rule_corner_relief_shape() -> String {
 fn rule_hem_gap() -> String {
     "0.01 mm".into()
 }
+fn rule_angle_display() -> String {
+    AngleDisplay::Bend.name().into()
+}
+/// A rule that reads bend angles as bend angles leaves the setting out of the design, which
+/// then saves as it did before the setting existed.
+fn is_bend_display(s: &str) -> bool {
+    AngleDisplay::parse(s) == Some(AngleDisplay::Bend)
+}
 
 impl SheetRule {
     /// Default: Steel (mm), 2.5 mm, K 0.44, bend radius = Thickness.
@@ -326,6 +339,7 @@ impl SheetRule {
             corner_relief_shape: rule_corner_relief_shape(),
             hem_gap: rule_hem_gap(),
             gap: rule_gap(),
+            angle_display: rule_angle_display(),
         }
     }
 }
@@ -384,6 +398,48 @@ impl ReliefShape {
     }
 }
 
+/// How a rule's bend angles read in the DXF bend notes (a rule's `angle_display`). The bend
+/// table gives both angles, and a flange's `angle` is always the bend angle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AngleDisplay {
+    /// How far the sheet turns from flat: a flange at 58° reads 58°.
+    #[default]
+    Bend,
+    /// The angle left between the bend's two sides, 180° less the bend angle: a 58° bend reads
+    /// 122°, a 90° bend 90°.
+    Included,
+}
+
+impl AngleDisplay {
+    pub fn parse(s: &str) -> Option<AngleDisplay> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "bend" => Some(AngleDisplay::Bend),
+            "included" => Some(AngleDisplay::Included),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            AngleDisplay::Bend => "bend",
+            AngleDisplay::Included => "included",
+        }
+    }
+
+    pub fn is_bend(&self) -> bool {
+        *self == AngleDisplay::Bend
+    }
+
+    /// A bend of `bend_deg` degrees as this display reads it.
+    pub fn of(self, bend_deg: f64) -> f64 {
+        match self {
+            AngleDisplay::Bend => bend_deg,
+            AngleDisplay::Included => 180.0 - bend_deg,
+        }
+    }
+}
+
 /// The corner relief an edge flange feature asks for in place of the rule's. A value left out
 /// follows the rule.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -405,6 +461,7 @@ pub struct RuleValues {
     pub corner_relief_shape: ReliefShape,
     pub hem_gap: f64,
     pub gap: f64,
+    pub angle_display: AngleDisplay,
 }
 
 impl Document {
@@ -440,6 +497,8 @@ impl Document {
             })?,
             hem_gap: with_t(&r.hem_gap, Kind::Length)?,
             gap: with_t(&r.gap, Kind::Length)?,
+            angle_display: AngleDisplay::parse(&r.angle_display)
+                .ok_or_else(|| DocError::Invalid(format!("unknown bend angle display `{}` (bend or included)", r.angle_display)))?,
         };
         if !(0.0..=1.0).contains(&v.k_factor) || v.bend_radius < 0.0 {
             return Err(DocError::Invalid("the K-factor must be 0…1 and the bend radius positive".into()));
@@ -490,14 +549,79 @@ pub struct SheetFlange {
     pub tag: String,
 }
 
-/// One edge flange to make: a pick on the sheet's edge, and that flange's height (to the outer
-/// face, from the virtual sharp) and angle (radians).
+/// One edge flange to make: a pick on the sheet's edge, that flange's height (measured as `from`
+/// says) and angle (radians).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EdgeFlange {
     pub pick: Vec3,
     pub height: f64,
     pub angle: f64,
+    pub from: HeightFrom,
 }
+
+/// Where an edge flange's height is measured from (#5938). Every one measures along the flange,
+/// up to its far edge; they differ in where the measure starts, so in how much of the height is
+/// the bend rather than the leg (the flat panel past the bend). With bend angle θ, inner radius
+/// R and thickness T, the leg is the height less [`HeightFrom::before_leg`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HeightFrom {
+    /// From the outer virtual sharp, where the lines of the base's and the flange's outer faces
+    /// meet, along the outer face: (R + T)·tan(θ/2) of the height is before the leg.
+    #[default]
+    Outer,
+    /// From the inner virtual sharp, where the lines of the two inner faces meet, along the inner
+    /// face: R·tan(θ/2) of the height is before the leg.
+    Inner,
+    /// For bends past 90°: from the line square to the flange that touches the outside of the
+    /// bend (at the point a quarter turn before the bend's end), R + T before the leg. Up to 90°
+    /// it is the outer virtual sharp, (R + T)·tan(θ/2); at 90° the two are the same line (the
+    /// base's outer face), so the height does not jump as the angle passes 90°.
+    Tangent,
+}
+
+impl HeightFrom {
+    pub const NAMES: [&'static str; 3] = ["outer", "inner", "tangent"];
+
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "outer" => Some(Self::Outer),
+            "inner" => Some(Self::Inner),
+            "tangent" => Some(Self::Tangent),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Outer => "outer",
+            Self::Inner => "inner",
+            Self::Tangent => "tangent",
+        }
+    }
+
+    /// How much of the height lies before the leg starts, for a bend of `angle` (radians), inner
+    /// `radius` and `thickness`: the smallest height that fits (a flange with no leg).
+    pub fn before_leg(self, angle: f64, radius: f64, thickness: f64) -> f64 {
+        match self {
+            Self::Outer => (radius + thickness) * (angle / 2.0).tan(),
+            Self::Inner => radius * (angle / 2.0).tan(),
+            Self::Tangent if angle <= std::f64::consts::FRAC_PI_2 => (radius + thickness) * (angle / 2.0).tan(),
+            Self::Tangent => radius + thickness,
+        }
+    }
+
+    /// What the measure starts at, for messages.
+    fn datum(self) -> &'static str {
+        match self {
+            Self::Outer => "the outer sharp",
+            Self::Inner => "the inner sharp",
+            Self::Tangent => "the bend's tangent",
+        }
+    }
+}
+
+/// The most lines a path flange's path may have (each one flange and its bend).
+pub const MAX_PATH_LINES: usize = 64;
 
 /// A sheet metal body (see the module docs).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -541,6 +665,9 @@ pub struct SheetBody {
     /// The rule's bend relief (`relief_width`, `relief_depth`), cut into the base where a
     /// flange's bend ends beside more of the base.
     pub bend_relief: (f64, f64),
+    /// How the DXF bend notes read its bend angles (the rule's `angle_display`).
+    #[serde(default, skip_serializing_if = "AngleDisplay::is_bend")]
+    pub angle_display: AngleDisplay,
     /// The base sketch's lines (id, ends in flat coordinates), naming the base panel's edges.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub base_curves: Vec<(String, Vec2, Vec2)>,
@@ -683,6 +810,13 @@ pub struct BendInfo {
     /// Centre line in flat coordinates.
     pub start: Vec2,
     pub end: Vec2,
+}
+
+impl BendInfo {
+    /// The angle left between the bend's two sides (degrees): 180° less `angle_deg`.
+    pub fn included_angle_deg(&self) -> f64 {
+        AngleDisplay::Included.of(self.angle_deg)
+    }
 }
 
 fn rot_about(o: Vec3, k: Vec3, a: f64) -> Mat {
@@ -1040,6 +1174,18 @@ impl SheetBody {
             _ => IDENTITY,
         };
         mat_mul(&self.frame_mat(), &f)
+    }
+
+    /// A world point on flange `i`'s far edge, nearer the top face than the bottom one: where to
+    /// pick that edge for a flange that stands on it (a chain of bends, one flange after another).
+    /// The side is not left to a tie in the middle of the thickness: it decides which way the
+    /// flange bends, and `flip` turns it the other way.
+    pub fn far_edge_pick(&self, i: usize) -> Option<Vec3> {
+        let f = self.flanges.get(i)?;
+        let (u0, u1) = self.far_edge(f);
+        let mid = f.p + f.n * (self.allowance(f) + f.leg) + f.d * ((u0 + u1) / 2.0);
+        let at = apply_point(&self.world(Some(i)), v3(mid) + Vec3::Z * (self.t * 0.75));
+        (at.x.is_finite() && at.y.is_finite() && at.z.is_finite()).then_some(at)
     }
 
     /// Where a flat point of a piece lands (folded), at height `z` in the sheet.
@@ -2276,8 +2422,9 @@ impl SheetBody {
         Ok(())
     }
 
-    /// Add an edge flange on the panel edge nearest `pick` (world): `height` to the outer face
-    /// from the virtual sharp, `angle` (0…180°), inside / outside / middle bend position.
+    /// Add an edge flange on the panel edge nearest `pick` (world): `height` measured from the
+    /// outer virtual sharp ([`HeightFrom::Outer`]), `angle` (0…180°), inside / outside / middle /
+    /// material_outside / tangent bend position (see `add_flanges_each`).
     pub fn add_flange(&mut self, pick: Vec3, height: f64, angle: f64, radius: f64, position: &str, flip: bool) -> Result<usize> {
         self.add_flanges(&[pick], height, angle, radius, position, flip)?.into_iter().next().ok_or_else(|| DocError::Invalid("flange".into()))
     }
@@ -2300,8 +2447,104 @@ impl SheetBody {
         position: &str,
         flip: bool,
     ) -> Result<(Vec<usize>, Vec<String>)> {
-        let each: Vec<EdgeFlange> = picks.iter().map(|&pick| EdgeFlange { pick, height, angle }).collect();
+        let each: Vec<EdgeFlange> = picks.iter().map(|&pick| EdgeFlange { pick, height, angle, from: HeightFrom::Outer }).collect();
         self.add_flanges_each(&each, radius, position, flip, ReliefOverride::default())
+    }
+
+    /// A path flange: a chain of edge flanges on the edge nearest `pick` that follows `path`, an
+    /// open chain of world points drawn on a plane across that edge, from the end nearer the edge.
+    /// Each line of the path is one flange, its length the flange's height (to the outer face from
+    /// the virtual sharp, as for an edge flange), and each corner one bend: the first line's angle
+    /// to the sheet makes the first bend, the turn between two lines the next. Which way the path
+    /// turns says which way each bend goes. Returns the flanges made, in order, and the notes of
+    /// the first one's corners.
+    pub fn add_path_flange(&mut self, pick: Vec3, path: &[Vec3], radius: f64, relief: ReliefOverride) -> Result<(Vec<usize>, Vec<String>)> {
+        if path.len() < 2 || path.len() > MAX_PATH_LINES + 1 {
+            return Err(DocError::Invalid(format!("a path flange's path must have 1…{MAX_PATH_LINES} lines")));
+        }
+        if !path.iter().all(|p| p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
+            return Err(DocError::Invalid("the path flange's path is not finite".into()));
+        }
+        let (panel, a, b, top, dist) = self.edge_at(pick).ok_or_else(|| DocError::Invalid("no sheet edge there".into()))?;
+        if dist > self.t * 2.0 + 1e-3 {
+            return Err(DocError::Invalid("pick an edge of the sheet's top or bottom face".into()));
+        }
+        let d = (b - a).normalized().ok_or_else(|| DocError::Invalid("edge".into()))?;
+        // The edge's frame in the world: along it, out of the sheet past it, and the top face's normal.
+        let w = self.world(panel);
+        let at = apply_point(&w, v3(a));
+        let dir = |v: Vec3| apply_point(&w, v3(a) + v) - at;
+        let (along, out, up) = (dir(v3(d)), dir(v3(Vec2::new(d.y, -d.x))), dir(Vec3::Z));
+        // From the end nearer the edge.
+        let off = |p: Vec3| {
+            let q = p - at;
+            (q - along * q.dot(along)).len()
+        };
+        let path: Vec<Vec3> = match (path.first(), path.last()) {
+            (Some(&f), Some(&l)) if off(l) < off(f) => path.iter().rev().copied().collect(),
+            _ => path.to_vec(),
+        };
+        // Each line's length and its direction in the plane across the edge (out, up).
+        let mut lines: Vec<(f64, f64)> = Vec::with_capacity(path.len() - 1);
+        for (k, pair) in path.windows(2).enumerate() {
+            let [p, q] = pair else { continue };
+            let v = *q - *p;
+            let len = v.len();
+            if !(len > 1e-6) {
+                return Err(DocError::Invalid(format!("line {} of the path flange's path has no length", k + 1)));
+            }
+            if v.dot(along).abs() > len * 1e-4 {
+                return Err(DocError::Invalid("draw the path flange's path on a plane across the edge (square to it)".into()));
+            }
+            let heading = v.dot(up).atan2(v.dot(out));
+            // A line straight on from the one before lengthens it.
+            match lines.last_mut() {
+                Some((l, h)) if (heading - *h).abs() < 1e-9 => *l += len,
+                _ => lines.push((len, heading)),
+            }
+        }
+        // Each bend's turn: the first from the sheet, the others from the line before. A turn
+        // toward the panel's top face is positive.
+        let mut turns = Vec::with_capacity(lines.len());
+        let mut before = 0.0;
+        for (k, &(len, heading)) in lines.iter().enumerate() {
+            let mut turn = heading - before;
+            while turn > std::f64::consts::PI {
+                turn -= std::f64::consts::TAU;
+            }
+            while turn <= -std::f64::consts::PI {
+                turn += std::f64::consts::TAU;
+            }
+            if !(turn.abs() > 1e-6 && turn.abs() < std::f64::consts::PI - 1e-6) {
+                let what = if k == 0 { "the sheet" } else { "the line before it" };
+                return Err(DocError::Invalid(format!(
+                    "line {} of the path flange's path runs straight on from {what} or back over it: each line must turn",
+                    k + 1
+                )));
+            }
+            turns.push((len, turn));
+            before = heading;
+        }
+        let mut made = Vec::with_capacity(turns.len());
+        let mut notes = Vec::new();
+        for (k, &(height, turn)) in turns.iter().enumerate() {
+            let line = |e: DocError| match e {
+                DocError::Invalid(m) => DocError::Invalid(format!("line {}: {m}", k + 1)),
+                e => e,
+            };
+            // The first bend on the picked face's side; each after it on the last flange's far
+            // edge, picked nearer its top face, so `flip` turns it toward the bottom one.
+            let (at, flip) = match made.last() {
+                None => (pick, top == (turn < 0.0)),
+                Some(&i) => (self.far_edge_pick(i).ok_or_else(|| DocError::Invalid("the flange has no far edge to bend again".into()))?, turn < 0.0),
+            };
+            let each = [EdgeFlange { pick: at, height, angle: turn.abs(), from: HeightFrom::Outer }];
+            let own = if k == 0 { relief } else { ReliefOverride::default() };
+            let (new, more) = self.add_flanges_each(&each, radius, "inside", flip, own).map_err(line)?;
+            made.extend(new);
+            notes.extend(more);
+        }
+        Ok((made, notes))
     }
 
     /// Edge flanges that each have their own height and angle, in one go: every edge is trimmed
@@ -2336,15 +2579,39 @@ impl SheetBody {
                 return Err(DocError::Invalid(format!("{}the flange angle must be between 0 and 180°", on(k))));
             }
             let sharp = (radius + self.t) * (e.angle / 2.0).tan();
+            // How far inside the picked edge the bend starts (the base is cut back that far), with
+            // bend angle θ, inner radius R and thickness T:
+            // - inside: (R + T)·tan(θ/2), the outer virtual sharp on the edge (at 90° the flange's
+            //   outer face is flush with the edge's face);
+            // - outside: 0, the bend starts at the edge and lies wholly outside it (`sheet.flange`
+            //   also takes `bend_outside` and saves it as `outside`);
+            // - middle: half of inside;
+            // - material_outside: R·tan(θ/2), the inner virtual sharp on the edge (at 90° the
+            //   flange's inner face is flush with the edge's face, its material outside);
+            // - tangent: from 90° on R + T, the bend's outer face tangent to the edge's face (it
+            //   touches that face a quarter turn into the bend and nothing of the bend passes it);
+            //   below 90° the outer face never turns parallel to the edge's face, so the bend
+            //   reaches furthest out at its end: (R + T)·sin θ puts that end on the edge's face
+            //   (the leg leans on out past it). Both are R + T at 90°.
             let setback = match position {
                 "inside" | "" => sharp,
                 "outside" => 0.0,
                 "middle" | "mid" => sharp / 2.0,
-                other => return Err(DocError::Invalid(format!("unknown bend position `{other}` (inside, outside or middle)"))),
+                "material_outside" => radius * (e.angle / 2.0).tan(),
+                "tangent" if e.angle < std::f64::consts::FRAC_PI_2 => (radius + self.t) * e.angle.sin(),
+                "tangent" => radius + self.t,
+                other => {
+                    return Err(DocError::Invalid(format!("unknown bend position `{other}` (inside, outside, middle, material_outside or tangent)")));
+                }
             };
-            let leg = e.height - sharp;
+            let least = e.from.before_leg(e.angle, radius, self.t);
+            let leg = e.height - least;
             if !(leg >= -1e-9) {
-                return Err(DocError::Invalid(format!("{}the flange height must be at least {sharp:.3} mm for this bend", on(k))));
+                let from = match e.from {
+                    HeightFrom::Outer => String::new(),
+                    other => format!(" from {}", other.datum()),
+                };
+                return Err(DocError::Invalid(format!("{}the flange height{from} must be at least {least:.3} mm for this bend", on(k))));
             }
             sizes.push((setback, leg));
         }
@@ -4515,6 +4782,7 @@ pub fn base_flange(body: &str, rule: &str, rv: &RuleValues, plane: Plane, region
         relief: rv.corner_relief_shape,
         relief_size: rv.corner_relief,
         bend_relief: (rv.relief_width, rv.relief_depth),
+        angle_display: rv.angle_display,
         base_curves: Vec::new(),
         altered_by: None,
     }
@@ -4574,6 +4842,7 @@ pub fn contour_flange(body: &str, rule: &str, rv: &RuleValues, plane: &Plane, pt
         relief: rv.corner_relief_shape,
         relief_size: rv.corner_relief,
         bend_relief: (rv.relief_width, rv.relief_depth),
+        angle_display: rv.angle_display,
         base_curves: Vec::new(),
         altered_by: None,
     };
@@ -4635,9 +4904,10 @@ pub fn rename_plane_sheet_body(plane: &mut crate::PlaneRef, old: &str, new: &str
                 *name = renamed;
             }
         }
-        crate::PlaneRef::Offset { base, .. } | crate::PlaneRef::AtAngle { base, .. } | crate::PlaneRef::Flipped { base, .. } => {
-            rename_plane_sheet_body(base, old, new)
-        }
+        crate::PlaneRef::Offset { base, .. }
+        | crate::PlaneRef::ThroughPoint { base, .. }
+        | crate::PlaneRef::AtAngle { base, .. }
+        | crate::PlaneRef::Flipped { base, .. } => rename_plane_sheet_body(base, old, new),
         _ => {}
     }
 }
@@ -4647,9 +4917,10 @@ pub fn rename_plane_sheet_body(plane: &mut crate::PlaneRef, old: &str, new: &str
 pub fn plane_sheet_face(plane: &crate::PlaneRef) -> Option<&str> {
     match plane {
         crate::PlaneRef::Face { name: Some(name), anchor: None, .. } if split_sheet_face_name(name).is_some() => Some(name),
-        crate::PlaneRef::Offset { base, .. } | crate::PlaneRef::AtAngle { base, .. } | crate::PlaneRef::Flipped { base, .. } => {
-            plane_sheet_face(base)
-        }
+        crate::PlaneRef::Offset { base, .. }
+        | crate::PlaneRef::ThroughPoint { base, .. }
+        | crate::PlaneRef::AtAngle { base, .. }
+        | crate::PlaneRef::Flipped { base, .. } => plane_sheet_face(base),
         _ => None,
     }
 }
@@ -4699,6 +4970,7 @@ mod tests {
             corner_relief_shape: ReliefShape::Notch,
             hem_gap: 0.01,
             gap: 2.5,
+            angle_display: AngleDisplay::Bend,
         }
     }
 
@@ -5251,6 +5523,7 @@ mod tests {
             corner_relief_shape: ReliefShape::Notch,
             hem_gap: 0.01,
             gap: 2.0,
+            angle_display: AngleDisplay::Bend,
         };
         let r = rect(Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0), Vec2::new(100.0, 80.0), Vec2::new(0.0, 80.0));
         let mut s = base_flange("Body1", "AL2", &rule, Plane::XY, r);
@@ -5346,6 +5619,7 @@ mod tests {
             corner_relief_shape: ReliefShape::Notch,
             hem_gap: 0.01,
             gap: 0.5,
+            angle_display: AngleDisplay::Bend,
         }
     }
 
@@ -5594,6 +5868,49 @@ mod tests {
     }
 
     #[test]
+    fn the_rule_names_how_its_bend_angles_read() {
+        // A rule saved before the setting existed reads bend angles, and saves as it did.
+        let old: SheetRule = serde_json::from_str(r#"{"name":"Old","thickness":"2 mm","k_factor":"0.5","bend_radius":"1 mm"}"#).unwrap();
+        assert_eq!(old.angle_display, "bend");
+        assert_eq!(SheetRule::steel().angle_display, "bend");
+        assert!(serde_json::to_value(&old).unwrap().get("angle_display").is_none());
+        let (doc, vals) = (Document::default(), std::collections::BTreeMap::new());
+        assert_eq!(doc.rule_values(&vals, &old).unwrap().angle_display, AngleDisplay::Bend);
+        for (text, display) in [("included", AngleDisplay::Included), (" Included ", AngleDisplay::Included), ("BEND", AngleDisplay::Bend)] {
+            let rule = SheetRule { angle_display: text.into(), ..old.clone() };
+            assert_eq!(doc.rule_values(&vals, &rule).unwrap().angle_display, display);
+            assert_eq!(AngleDisplay::parse(display.name()), Some(display));
+        }
+        // An included rule is saved with the setting and read back the same.
+        let included = SheetRule { angle_display: "included".into(), ..old.clone() };
+        let saved = serde_json::to_value(&included).unwrap();
+        assert_eq!(saved["angle_display"], "included");
+        assert_eq!(serde_json::from_value::<SheetRule>(saved).unwrap(), included);
+        // No other word is a display.
+        for text in ["deflection", "inside", ""] {
+            let err = doc.rule_values(&vals, &SheetRule { angle_display: text.into(), ..old.clone() }).unwrap_err().to_string();
+            assert!(err.contains(&format!("unknown bend angle display `{text}` (bend or included)")), "{err}");
+        }
+    }
+
+    /// The included angle is what a bend leaves between its sides: 180° less the bend angle, so a
+    /// 90° bend reads the same both ways. A body keeps its rule's display.
+    #[test]
+    fn the_included_angle_is_180_less_the_bend_angle() {
+        for (deg, included) in [(58.0, 122.0), (90.0, 90.0), (120.0, 60.0)] {
+            let bends = flanged(f64::to_radians(deg)).bends();
+            assert_eq!(bends.len(), 1);
+            assert!((bends[0].angle_deg - deg).abs() < 1e-9 && (bends[0].included_angle_deg() - included).abs() < 1e-9, "{bends:?}");
+            assert!((AngleDisplay::Bend.of(bends[0].angle_deg) - deg).abs() < 1e-9);
+            assert!((AngleDisplay::Included.of(bends[0].angle_deg) - included).abs() < 1e-9);
+        }
+        let r = rect(Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0), Vec2::new(100.0, 80.0), Vec2::new(0.0, 80.0));
+        assert_eq!(base_flange("Body1", "Steel", &steel(), Plane::XY, r.clone()).angle_display, AngleDisplay::Bend);
+        let shop = RuleValues { angle_display: AngleDisplay::Included, ..steel() };
+        assert_eq!(base_flange("Body1", "Shop", &shop, Plane::XY, r).angle_display, AngleDisplay::Included);
+    }
+
+    #[test]
     fn corner_reliefs_cut_the_base_corner_and_stop_the_bends() {
         use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
         // The tray: the bends on x = 0 and y = 0 meet at c = (s0, s0), s0 = (R + T)·tan(θ/2) in from
@@ -5756,7 +6073,8 @@ mod tests {
             Vec3::new(60.0 + u.x * 90.0, u.y * 90.0, 2.0),
             Vec3::new(u.x * 45.0, u.y * 45.0, 2.0),
         ];
-        let each: Vec<EdgeFlange> = (0..4).map(|i| EdgeFlange { pick: picks[i], height: heights[i], angle: angles[i].to_radians() }).collect();
+        let each: Vec<EdgeFlange> =
+            (0..4).map(|i| EdgeFlange { pick: picks[i], height: heights[i], angle: angles[i].to_radians(), from: HeightFrom::Outer }).collect();
         flanges_each(rhombus(), rv, &each)
     }
 
@@ -5786,7 +6104,7 @@ mod tests {
             Vec3::new(l * 0.75, -l * u.y / 2.0, 2.0),
             Vec3::new(l / 4.0, -l * u.y / 2.0, 2.0),
         ];
-        let flange = |i: usize| EdgeFlange { pick: picks[i], height: 38.6, angle: 90f64.to_radians() };
+        let flange = |i: usize| EdgeFlange { pick: picks[i], height: 38.6, angle: 90f64.to_radians(), from: HeightFrom::Outer };
         // The round relief reaches r from its corner and the two are 12 mm apart: it fits at both.
         for shape in [ReliefShape::Round, ReliefShape::Rectangular] {
             let what = format!("{shape:?} at two corners opposite each other");
@@ -5937,7 +6255,7 @@ mod tests {
         let pts = [Vec2::new(0.0, 0.0), Vec2::new(9.0, 0.0), Vec2::new(9.0, 40.0), Vec2::new(-20.0, 20.0 * 3.0f64.sqrt())];
         let base = || Region2 { outer: Loop2::polygon(&pts).ccw(), holes: vec![] };
         let picks = [Vec3::new(-10.0, 17.32, 2.0), Vec3::new(4.5, 0.0, 2.0), Vec3::new(9.0, 20.0, 2.0)];
-        let flange = |i: usize| EdgeFlange { pick: picks[i], height: 38.6, angle: 90f64.to_radians() };
+        let flange = |i: usize| EdgeFlange { pick: picks[i], height: 38.6, angle: 90f64.to_radians(), from: HeightFrom::Outer };
         for shape in [ReliefShape::Round, ReliefShape::Rectangular] {
             let what = format!("{shape:?} at both ends of a short edge");
             let rv = RuleValues { corner_relief_shape: shape, corner_relief: 4.0, ..alu() };
@@ -6031,6 +6349,16 @@ mod tests {
     }
 
     #[test]
+    fn a_bend_position_only_the_command_takes_as_another_name_is_refused_when_built() {
+        // `sheet.flange` saves `bend_outside` as `outside`; a design that names it itself is
+        // refused rather than built (or edited) as some other position.
+        let mut s = plate(200.0, 100.0);
+        let e = s.add_flange(Vec3::new(100.0, 0.0, 2.5), 40.0, std::f64::consts::FRAC_PI_2, 2.5, "bend_outside", false).unwrap_err().to_string();
+        assert!(e.contains("unknown bend position `bend_outside`"), "{e}");
+        assert!(s.flanges.is_empty());
+    }
+
+    #[test]
     fn edge_flanges_across_an_existing_bend_close_their_corner() {
         for position in ["inside", "outside", "middle"] {
             for reverse in [false, true] {
@@ -6111,7 +6439,7 @@ mod tests {
             let parent = s.flanges.get(wall).unwrap();
             let point = parent.p + parent.d * parent.len + parent.n * (s.allowance(parent) + parent.leg * 0.5);
             let side = apply_point(&s.world(Some(wall)), Vec3::new(point.x, point.y, s.t));
-            let edges = [Vec3::new(120.0, 45.0, 2.0), side].map(|pick| EdgeFlange { pick, height: 20.0, angle });
+            let edges = [Vec3::new(120.0, 45.0, 2.0), side].map(|pick| EdgeFlange { pick, height: 20.0, angle, from: HeightFrom::Outer });
             let (_, notes) = s.add_flanges_each(&edges, 1.0, "inside", false, ReliefOverride { shape: Some(shape), size: Some(4.0) }).unwrap();
             assert!(notes.is_empty(), "{shape:?}: {notes:?}");
             assert_eq!(s.holes.len(), 1);
@@ -6829,7 +7157,8 @@ mod tests {
         let base = rect(Vec2::new(0.0, 0.0), Vec2::new(120.0, 0.0), Vec2::new(120.0, 90.0), Vec2::new(0.0, 90.0));
         let t = rv.thickness;
         let picks = [Vec3::new(60.0, 0.0, t), Vec3::new(120.0, 45.0, t), Vec3::new(60.0, 90.0, t), Vec3::new(0.0, 45.0, t)];
-        let each: Vec<EdgeFlange> = (0..4).map(|i| EdgeFlange { pick: picks[i], height: heights[i], angle: angles[i].to_radians() }).collect();
+        let each: Vec<EdgeFlange> =
+            (0..4).map(|i| EdgeFlange { pick: picks[i], height: heights[i], angle: angles[i].to_radians(), from: HeightFrom::Outer }).collect();
         flanges_each(base, rv, &each)
     }
 
@@ -7029,7 +7358,8 @@ mod tests {
         let pts = [Vec2::new(0.0, 0.0), Vec2::new(120.0, 0.0), Vec2::new(100.0, 90.0), Vec2::new(20.0, 90.0)];
         let picks = [Vec3::new(60.0, 0.0, 2.0), Vec3::new(110.0, 45.0, 2.0), Vec3::new(60.0, 90.0, 2.0), Vec3::new(10.0, 45.0, 2.0)];
         let (angles, heights) = ([60.0f64, 105.0, 75.0, 120.0], [38.6, 30.0, 45.0, 25.0]);
-        let each: Vec<EdgeFlange> = (0..4).map(|i| EdgeFlange { pick: picks[i], height: heights[i], angle: angles[i].to_radians() }).collect();
+        let each: Vec<EdgeFlange> =
+            (0..4).map(|i| EdgeFlange { pick: picks[i], height: heights[i], angle: angles[i].to_radians(), from: HeightFrom::Outer }).collect();
         let (s, notes) = flanges_each(Region2 { outer: Loop2::polygon(&pts).ccw(), holes: vec![] }, &alu(), &each);
         assert!(notes.is_empty(), "{notes:?}");
         for i in 0..4 {
@@ -7053,7 +7383,7 @@ mod tests {
             .iter()
             .map(|&k| {
                 let m = (pts[k] + pts[(k + 1) % n]) * 0.5;
-                EdgeFlange { pick: Vec3::new(m.x, m.y, rv.thickness), height, angle: deg.to_radians() }
+                EdgeFlange { pick: Vec3::new(m.x, m.y, rv.thickness), height, angle: deg.to_radians(), from: HeightFrom::Outer }
             })
             .collect();
         let (s, notes) = flanges_each(Region2 { outer: Loop2::polygon(pts).ccw(), holes: vec![] }, rv, &each);
@@ -7372,8 +7702,9 @@ mod tests {
         let rv = alu();
         let (t, g) = (rv.thickness, rv.gap);
         let (mut s, _) = tray(&rv, 90.0, 20.0);
-        let each: Vec<EdgeFlange> =
-            (0..4).map(|i| EdgeFlange { pick: far_edge_pick(&s, i, true), height: 12.0, angle: [90f64, 70.0][i % 2].to_radians() }).collect();
+        let each: Vec<EdgeFlange> = (0..4)
+            .map(|i| EdgeFlange { pick: far_edge_pick(&s, i, true), height: 12.0, angle: [90f64, 70.0][i % 2].to_radians(), from: HeightFrom::Outer })
+            .collect();
         let (made, notes) = s.add_flanges_each(&each, 1.0, "inside", false, ReliefOverride::default()).unwrap();
         assert!(notes.is_empty() && made == [4, 5, 6, 7], "{made:?} {notes:?}");
         for (a, a_end, b, b_end) in TRAY_RETURNS {
@@ -7544,7 +7875,7 @@ mod tests {
             let each: Vec<EdgeFlange> = (0..4)
                 .map(|i| {
                     let deg: f64 = if square { 90.0 } else { 180.0 - angles[i] };
-                    EdgeFlange { pick: far_edge_pick(&s, i, true), height: 12.0, angle: deg.to_radians() }
+                    EdgeFlange { pick: far_edge_pick(&s, i, true), height: 12.0, angle: deg.to_radians(), from: HeightFrom::Outer }
                 })
                 .collect();
             let (_, notes) = s.add_flanges_each(&each, 1.0, "inside", false, ReliefOverride::default()).unwrap();
@@ -7684,8 +8015,8 @@ mod tests {
                 for b in SWEEP {
                     let what = format!("corner {alpha}°, flanges {a}° and {b}°");
                     let each = [
-                        EdgeFlange { pick: Vec3::new(60.0, 0.0, 2.0), height: 38.6, angle: a.to_radians() },
-                        EdgeFlange { pick: Vec3::new(u.x * 45.0, u.y * 45.0, 2.0), height: 38.6, angle: b.to_radians() },
+                        EdgeFlange { pick: Vec3::new(60.0, 0.0, 2.0), height: 38.6, angle: a.to_radians(), from: HeightFrom::Outer },
+                        EdgeFlange { pick: Vec3::new(u.x * 45.0, u.y * 45.0, 2.0), height: 38.6, angle: b.to_radians(), from: HeightFrom::Outer },
                     ];
                     let (s, notes) = flanges_each(Region2 { outer: Loop2::polygon(&pts).ccw(), holes: vec![] }, &rv, &each);
                     assert!(notes.is_empty(), "{what}: {notes:?}");
@@ -8084,8 +8415,8 @@ mod tests {
                 for b in SWEEP {
                     let what = format!("corner {alpha}°, flanges {a}° and {b}°");
                     let each = [
-                        EdgeFlange { pick: Vec3::new(60.0, 0.0, 2.0), height: 38.6, angle: a.to_radians() },
-                        EdgeFlange { pick: Vec3::new(u.x * 45.0, u.y * 45.0, 2.0), height: 38.6, angle: b.to_radians() },
+                        EdgeFlange { pick: Vec3::new(60.0, 0.0, 2.0), height: 38.6, angle: a.to_radians(), from: HeightFrom::Outer },
+                        EdgeFlange { pick: Vec3::new(u.x * 45.0, u.y * 45.0, 2.0), height: 38.6, angle: b.to_radians(), from: HeightFrom::Outer },
                     ];
                     let base = || Region2 { outer: Loop2::polygon(&pts).ccw(), holes: vec![] };
                     let (notch, _) = flanges_each(base(), &alu(), &each);
@@ -8252,8 +8583,8 @@ mod tests {
             let u = Vec2::new(alpha.cos(), alpha.sin());
             let pts = [Vec2::new(0.0, 0.0), Vec2::new(120.0, 0.0), Vec2::new(120.0, 0.0) + u * 90.0, u * 90.0];
             let each = [
-                EdgeFlange { pick: Vec3::new(60.0, 0.0, 2.0), height: 38.6, angle: a.to_radians() },
-                EdgeFlange { pick: Vec3::new(u.x * 45.0, u.y * 45.0, 2.0), height: 38.6, angle: b.to_radians() },
+                EdgeFlange { pick: Vec3::new(60.0, 0.0, 2.0), height: 38.6, angle: a.to_radians(), from: HeightFrom::Outer },
+                EdgeFlange { pick: Vec3::new(u.x * 45.0, u.y * 45.0, 2.0), height: 38.6, angle: b.to_radians(), from: HeightFrom::Outer },
             ];
             let base = || Region2 { outer: Loop2::polygon(&pts).ccw(), holes: vec![] };
             let (notch, none) = flanges_each(base(), &alu(), &each);

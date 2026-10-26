@@ -23,8 +23,8 @@ pub const POINT_TO_POSITION: usize = 4;
 const POINTS: u16 = VERTICES | FACES | EDGES | ORIGIN;
 
 /// A fresh Move dialog of a type (all values zero).
-pub fn kind(mode: usize) -> Kind {
-    let z = || "0 mm".to_string();
+pub fn kind(mode: usize, doc: &solidcraft_engine::doc::Document) -> Kind {
+    let z = || crate::length_input::default(doc, "0");
     let a = || "0 deg".to_string();
     Kind::Move { mode, x: z(), y: z(), z: z(), rx: a(), ry: a(), rz: a(), angle: a() }
 }
@@ -46,13 +46,13 @@ pub fn inputs(mode: usize) -> Vec<SelInput> {
 }
 
 /// The Move Type row (above the inputs); switching keeps the bodies and resets the values.
-pub fn type_row(d: &mut Dialog, ui: &mut egui::Ui) {
+pub fn type_row(d: &mut Dialog, ui: &mut egui::Ui, doc: &solidcraft_engine::doc::Document) {
     let Kind::Move { mode, .. } = d.kind else { return };
     let mut m = mode;
     choice_row(ui, "Move Type", "move_type", &mut m, &TYPES);
     if m != mode {
         let bodies = d.inputs.first().map(|i| i.items.clone()).unwrap_or_default();
-        d.kind = kind(m);
+        d.kind = kind(m, doc);
         d.inputs = inputs(m);
         if let Some(i) = d.inputs.first_mut() {
             i.items = bodies;
@@ -137,11 +137,15 @@ fn pivot(app: &SolveApp, d: &Dialog) -> Option<Vec3> {
 }
 
 fn len(app: &SolveApp, s: &str) -> Result<f64, String> {
-    app.session.doc.eval(s, ValueKind::Length).map_err(|e| e.to_string()).and_then(|v| if v.is_finite() { Ok(v) } else { Err("not a number".into()) })
+    crate::length_input::eval(&app.session.doc, s, ValueKind::Length)
+        .map_err(|e| e.to_string())
+        .and_then(|v| if v.is_finite() { Ok(v) } else { Err("not a number".into()) })
 }
 
 fn ang(app: &SolveApp, s: &str) -> Result<f64, String> {
-    app.session.doc.eval(s, ValueKind::Angle).map_err(|e| e.to_string()).and_then(|v| if v.is_finite() { Ok(v) } else { Err("not a number".into()) })
+    crate::length_input::eval(&app.session.doc, s, ValueKind::Angle)
+        .map_err(|e| e.to_string())
+        .and_then(|v| if v.is_finite() { Ok(v) } else { Err("not a number".into()) })
 }
 
 fn mm(v: f64) -> String {
@@ -298,9 +302,9 @@ pub fn drag(app: &SolveApp, d: &mut Dialog, g: Drag) {
     let Kind::Move { x, y, z, rx, ry, rz, .. } = &mut d.kind else { return };
     match g.change {
         Change::Translate(t) => {
-            *x = mm(v0[0] + t.x);
-            *y = mm(v0[1] + t.y);
-            *z = mm(v0[2] + t.z);
+            *x = crate::length_input::model(&app.session.doc, v0[0] + t.x);
+            *y = crate::length_input::model(&app.session.doc, v0[1] + t.y);
+            *z = crate::length_input::model(&app.session.doc, v0[2] + t.z);
         }
         Change::Rotate { axis, angle } => {
             let slot = match axis {
@@ -319,6 +323,7 @@ pub fn drag(app: &SolveApp, d: &mut Dialog, g: Drag) {
 /// The dialog for editing a move: Free Move with its translation and, about a world axis
 /// through the origin, its angle (another axis is kept as it is).
 pub fn for_feature(
+    doc: &solidcraft_engine::doc::Document,
     d: &mut Dialog,
     bodies: &[String],
     translate: &[solidcraft_engine::doc::Expr; 3],
@@ -327,7 +332,7 @@ pub fn for_feature(
     copy: bool,
 ) {
     let [x, y, z] = translate.clone().map(String::from);
-    let mut k = kind(FREE);
+    let mut k = kind(FREE, doc);
     if let Kind::Move { x: kx, y: ky, z: kz, rx, ry, rz, .. } = &mut k {
         (*kx, *ky, *kz) = (x, y, z);
         if let Some(a) = angle {

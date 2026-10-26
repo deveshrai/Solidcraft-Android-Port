@@ -14,7 +14,7 @@ raytrace-cpu = ["solidcraft-engine/raytrace-cpu"]
 
 # The workspace lints, except unsafe_code: denied, not forbidden, so that src/open_documents.rs
 # (macOS file-open events), src/native_crash.rs (Windows exception filter) and src/native_frame.rs
-# (Windows resize border) can allow it: none has a safe API. Keep the rest in sync with [workspace.lints].
+# (Windows resize border, taskbar icon) can allow it: none has a safe API. Keep the rest in sync with [workspace.lints].
 [lints.rust]
 unsafe_code = "deny"
 
@@ -54,7 +54,8 @@ hidapi = { version = "2.6.7", default-features = false, features = ["windows-nat
 # The main window's handle for src/native_frame.rs (already in the tree through eframe and winit).
 raw-window-handle = "0.6"
 # Native crash capture (src/native_crash.rs): the exception filter, the faulting module, a minidump.
-# The window's resize border and DPI size (src/native_frame.rs): the window procedure, hit test, DPI.
+# The window's resize border, DPI size and class icon (src/native_frame.rs): the window procedure, hit
+# test, DPI, the exe's icon.
 # Finding 3D mice through Plug and Play without asking other devices anything (src/space_mouse/windows_hid.rs).
 windows-sys = { version = "0.61", features = [
     "Win32_Devices_DeviceAndDriverInstallation",
@@ -81,9 +82,10 @@ solidcraft-3dx-client = { workspace = true }
 # The 3D mouse (src/space_mouse.rs), in the shared-device open mode so that a running 3DxWare
 # driver does not shut the app out.
 hidapi = { version = "2.6.7", default-features = false, features = ["macos-shared-device"] }
-# Files opened from Finder and the Dock (src/open_documents.rs); all already come with eframe and rfd.
+# Files opened from Finder and the Dock (src/open_documents.rs), and the fullscreen title-bar
+# inset (src/main.rs); all already come with eframe and rfd.
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSArray", "NSNotification", "NSOperation", "NSProcessInfo", "NSString", "NSURL"] }
 block2 = "0.6"
 

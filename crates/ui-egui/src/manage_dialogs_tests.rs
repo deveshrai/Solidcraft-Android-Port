@@ -247,6 +247,20 @@ fn configure_alias_is_dense_and_adds_rows() {
 }
 
 #[test]
+fn a_long_configuration_table_builds_the_cells_of_the_rows_on_screen() {
+    let mut h = fixture();
+    h.app.run("config.configure", json!({"params":["width"]})).unwrap();
+    for k in 1..=200 {
+        h.app.session.execute("config.row", &json!({ "name": format!("Row{k}") })).unwrap();
+    }
+    h.app.start("config.table");
+    h.frames(4);
+    assert!(scenario::rect_of("dialog:table:configuration_table:Default:cell:width").is_some());
+    // The last of 201 rows is far below the card's bottom: it keeps its place but builds nothing.
+    assert!(scenario::rect_of("dialog:table:configuration_table:Row200:cell:width").is_none(), "an off-screen row built its cells");
+}
+
+#[test]
 fn parameters_are_dense_and_keep_inline_edits_order_and_undo() {
     let mut h = fixture();
     h.app.run("parameters.add", json!({"name":"height","expression":"20 mm"})).unwrap();

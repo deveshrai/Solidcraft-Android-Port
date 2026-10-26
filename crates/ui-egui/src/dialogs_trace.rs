@@ -45,7 +45,11 @@ pub fn form(s: &Session, joint: usize) -> TraceForm {
 fn range(s: &Session, joint: usize, index: usize) -> (String, String) {
     let Some(j) = s.doc.assembly.joints.get(joint) else { return Default::default() };
     let v = j.values.get(index).copied().unwrap_or(0.0);
-    if j.kind.is_angle(index) { (num(v.to_degrees(), "deg"), num(v.to_degrees() + 360.0, "deg")) } else { (num(v, "mm"), num(v + 20.0, "mm")) }
+    if j.kind.is_angle(index) {
+        (num(v.to_degrees(), "deg"), num(v.to_degrees() + 360.0, "deg"))
+    } else {
+        (crate::length_input::model(&s.doc, v), crate::length_input::model(&s.doc, v + 20.0))
+    }
 }
 
 /// The occurrence path placing the picked body: the instance clicked, also when its component
@@ -95,8 +99,9 @@ pub fn params(s: &Session, f: &TraceForm, inputs: &[SelInput]) -> Result<Value, 
         let j = s.doc.assembly.joints.get(f.joint).ok_or("no joint that moves yet")?;
         p["joint"] = json!(j.id);
         p["index"] = json!(f.index);
-        p["from"] = json!(f.from.trim());
-        p["to"] = json!(f.to.trim());
+        let kind = if j.kind.is_angle(f.index) { solidcraft_engine::doc::expr::Kind::Angle } else { solidcraft_engine::doc::expr::Kind::Length };
+        p["from"] = json!(crate::length_input::expression(&s.doc, &f.from, kind));
+        p["to"] = json!(crate::length_input::expression(&s.doc, &f.to, kind));
     }
     if !f.samples.trim().is_empty() {
         p["samples"] = json!(f.samples.trim().parse::<f64>().map_err(|_| "samples must be a number")?);

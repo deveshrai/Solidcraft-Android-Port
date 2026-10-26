@@ -202,6 +202,55 @@ pub struct Curve {
     pub infinite: bool,
 }
 
+/// How two circles lie, for a [`ConstraintKind::CircleCircleDistance`]: which gap between their
+/// edges it measures, along the line through their centres.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TwoCircles {
+    /// Each outside the other: the gap between them, `distance − ra − rb`.
+    #[default]
+    Apart,
+    /// Crossing each other: how far they overlap, `ra + rb − distance`.
+    Crossing,
+    /// One inside the other: the narrowest gap between the inner one and the outer one,
+    /// `|ra − rb| − distance`.
+    Nested,
+}
+
+impl TwoCircles {
+    /// Saved only when the circles are not apart.
+    pub fn is_apart(&self) -> bool {
+        *self == TwoCircles::Apart
+    }
+    /// How circles of radii `ra` and `rb` with centres `distance` apart lie (touching circles
+    /// count as apart, or as nested when one touches the other from inside).
+    pub fn of(distance: f64, ra: f64, rb: f64) -> TwoCircles {
+        if distance >= ra + rb {
+            TwoCircles::Apart
+        } else if distance <= (ra - rb).abs() {
+            TwoCircles::Nested
+        } else {
+            TwoCircles::Crossing
+        }
+    }
+    /// The gap between the edges of such circles (what the dimension measures).
+    pub fn gap(self, distance: f64, ra: f64, rb: f64) -> f64 {
+        match self {
+            TwoCircles::Apart => distance - ra - rb,
+            TwoCircles::Crossing => ra + rb - distance,
+            TwoCircles::Nested => (ra - rb).abs() - distance,
+        }
+    }
+    /// How far apart the centres are when the gap is `value` (the inverse of [`Self::gap`]).
+    pub fn centres_apart(self, value: f64, ra: f64, rb: f64) -> f64 {
+        match self {
+            TwoCircles::Apart => ra + rb + value,
+            TwoCircles::Crossing => ra + rb - value,
+            TwoCircles::Nested => (ra - rb).abs() - value,
+        }
+    }
+}
+
 /// Geometric constraints and dimensions. Indices refer to `Sketch::points` (`p`, `q`) or
 /// `Sketch::curves` (`l`, `c`, `a`, `b`). Dimension values are millimetres or radians.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -314,6 +363,28 @@ pub enum ConstraintKind {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         inside: bool,
     },
+    /// Distance from point `p` to the edge of circle or arc `c`, along the radius through the
+    /// point: `|p − centre| − radius` while the point is outside the circle or, `inside`, how
+    /// far within the edge it lies, `radius − |p − centre|`. Zero puts the point on the circle.
+    /// An arc is measured to its whole circle.
+    PointCircleDistance {
+        p: usize,
+        c: usize,
+        value: f64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        inside: bool,
+    },
+    /// Distance between the edges of circles or arcs `a` and `b`, along the line through their
+    /// centres: the gap between them, how far they overlap, or the narrowest gap between the
+    /// inner one and the outer one, as `circles` says ([`TwoCircles`]). Zero is tangency in each
+    /// case. Arcs are measured to their whole circles.
+    CircleCircleDistance {
+        a: usize,
+        b: usize,
+        value: f64,
+        #[serde(default, skip_serializing_if = "TwoCircles::is_apart")]
+        circles: TwoCircles,
+    },
     Length {
         l: usize,
         value: f64,
@@ -392,6 +463,8 @@ impl ConstraintKind {
             | DistanceY { value, .. }
             | PointLineDistance { value, .. }
             | LineCircleDistance { value, .. }
+            | PointCircleDistance { value, .. }
+            | CircleCircleDistance { value, .. }
             | Length { value, .. }
             | LineAngle { value, .. }
             | ArcSweep { value, .. }
@@ -413,6 +486,8 @@ impl ConstraintKind {
             | DistanceY { value, .. }
             | PointLineDistance { value, .. }
             | LineCircleDistance { value, .. }
+            | PointCircleDistance { value, .. }
+            | CircleCircleDistance { value, .. }
             | Length { value, .. }
             | LineAngle { value, .. }
             | ArcSweep { value, .. }
@@ -446,9 +521,14 @@ impl ConstraintKind {
             Midpoint { .. } => "MidPoint",
             Symmetric { .. } => "Symmetry",
             Fix { .. } => "Fix",
-            Distance { .. } | DistanceX { .. } | DistanceY { .. } | PointLineDistance { .. } | LineCircleDistance { .. } | Length { .. } => {
-                "LinearDimension"
-            }
+            Distance { .. }
+            | DistanceX { .. }
+            | DistanceY { .. }
+            | PointLineDistance { .. }
+            | LineCircleDistance { .. }
+            | PointCircleDistance { .. }
+            | CircleCircleDistance { .. }
+            | Length { .. } => "LinearDimension",
             Radius { .. } => "RadialDimension",
             Diameter { .. } => "DiameterDimension",
             Angle { .. } | LineAngle { .. } | ArcSweep { .. } => "AngularDimension",
@@ -482,6 +562,8 @@ impl ConstraintKind {
             Angle { a, b, .. } | SlotOverallLength { a, b, .. } => (vec![], vec![a, b]),
             Midpoint { p, l } | PointLineDistance { p, l, .. } => (vec![p], vec![l]),
             LineCircleDistance { l, c, .. } => (vec![], vec![l, c]),
+            PointCircleDistance { p, c, .. } => (vec![p], vec![c]),
+            CircleCircleDistance { a, b, .. } => (vec![], vec![a, b]),
             Symmetric { p, q, l } => (vec![p, q], vec![l]),
             Fix { p } => (vec![p], vec![]),
             Smooth { a, b } => (vec![], vec![a, b]),
@@ -548,6 +630,14 @@ impl ConstraintKind {
             LineCircleDistance { l, c, .. } => {
                 fc(l);
                 fc(c);
+            }
+            PointCircleDistance { p, c, .. } => {
+                fp(p);
+                fc(c);
+            }
+            CircleCircleDistance { a, b, .. } => {
+                fc(a);
+                fc(b);
             }
             Symmetric { p, q, l } => {
                 fp(p);
@@ -993,6 +1083,14 @@ impl Sketch {
                 need_line(l)?;
                 need_round(c)?;
             }
+            PointCircleDistance { c, .. } => need_round(c)?,
+            CircleCircleDistance { a, b, .. } => {
+                if a == b {
+                    return Err(SketchError::Invalid("a distance between circles needs two different circles or arcs".into()));
+                }
+                need_round(a)?;
+                need_round(b)?;
+            }
             Tangent { a, b } => {
                 let free = |i: usize| self.curves.get(i).is_some_and(|c| c.kind.is_freeform());
                 if !(is_round(a) || is_round(b) || free(a) || free(b)) {
@@ -1029,7 +1127,8 @@ impl Sketch {
     /// with nothing that fixes a size: no other driving length dimension, nothing fixed,
     /// projected or patterned, no offsets and no 3D curves. Every geometric constraint
     /// (coincident, horizontal, parallel, tangent, equal, symmetric, …) and every angle holds
-    /// on the scaled sketch as it held before. `None` when the sketch does not qualify.
+    /// on the scaled sketch as it held before. `None` when the sketch does not qualify, also
+    /// when its curves form several separate chains (#3786): the dimension sizes only its own.
     pub fn scaled_for_first_dimension(&self, factor: f64) -> Option<Sketch> {
         if !(factor.is_finite() && (1e-6..=1e6).contains(&factor)) {
             return None;
@@ -1046,6 +1145,31 @@ impl Sketch {
             || !self.wires.is_empty()
             || self.curves.iter().any(|c| c.fixed || c.link.is_some())
             || self.points.iter().enumerate().any(|(i, p)| (p.fixed || p.link.is_some()) && (i != 0 || p.pos != Vec2::ZERO))
+        {
+            return None;
+        }
+        // Shapes nothing joins (#3786) are not one drawing: only one connected chain of curves
+        // scales. Curves and driving constraints join their points; the origin is a point too.
+        let mut parent: Vec<usize> = (0..self.points.len()).collect();
+        for c in &self.curves {
+            let ids = c.kind.point_ids();
+            for w in ids.windows(2) {
+                if let [a, b] = *w {
+                    union(&mut parent, a, b);
+                }
+            }
+        }
+        for c in self.constraints.iter().filter(|c| !c.driven) {
+            let ids = self.constraint_points(&c.kind);
+            for w in ids.windows(2) {
+                if let [a, b] = *w {
+                    union(&mut parent, a, b);
+                }
+            }
+        }
+        let mut roots = self.curves.iter().filter_map(|c| c.kind.point_ids().first().map(|&p| find(&mut parent, p)));
+        if let Some(first) = roots.next()
+            && roots.any(|r| r != first)
         {
             return None;
         }

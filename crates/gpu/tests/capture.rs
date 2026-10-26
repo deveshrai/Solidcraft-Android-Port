@@ -96,6 +96,31 @@ fn pictures_show_appearances() {
     assert!(pixels(&img).all(|p| p[3] == 255), "the picture is opaque");
 }
 
+/// The renderer counts what it draws (the performance overlay, #2548): every mesh triangle and
+/// edge segment of the scene, more with more geometry, nothing with nothing to draw.
+#[test]
+fn the_renderer_counts_what_it_draws() {
+    let Some(c) = capturer() else { return };
+    let drawn = |s: &Session| {
+        let cam = view::home_camera(s);
+        let scene = view::scene_with_guides(s, &cam, None, Guides { grid: false, axes: false });
+        let triangles: usize = scene.meshes.iter().map(|m| m.mesh.triangles.len()).sum();
+        c.rgba(&scene, &cam, 160, 100).unwrap();
+        (c.last_stats(), triangles as u64)
+    };
+    let (empty, _) = drawn(&Session::default());
+    assert_eq!((empty.triangles, empty.line_segments), (0, 0), "{empty:?}");
+    let (one, one_mesh) = drawn(&session(&[("solid.box", json!({"length": 40, "width": 30, "height": 20}))]));
+    assert!(one_mesh >= 12 && one.triangles >= one_mesh, "{one:?} for {one_mesh} mesh triangles");
+    assert!(one.line_segments >= 12 && one.draw_calls > empty.draw_calls, "{one:?}");
+    let (two, two_mesh) = drawn(&session(&[
+        ("solid.box", json!({"length": 40, "width": 30, "height": 20})),
+        ("solid.cylinder", json!({"diameter": 14, "height": 30, "base": [50, 15, 0], "operation": "new"})),
+    ]));
+    assert!(two_mesh > one_mesh && two.triangles >= two_mesh && two.triangles > one.triangles, "{two:?} for {two_mesh}");
+    assert!(two.line_segments > one.line_segments, "{two:?}");
+}
+
 /// The ground grid and the origin's axes each change the picture.
 #[test]
 fn guides_change_the_picture() {
@@ -165,6 +190,40 @@ fn pictures_show_a_plain_cut_without_the_hatch() {
     let (hatched, plain) = (picture(true), picture(false));
     assert!(solid(&plain) > 500, "plain cut: {} pixels in the body's colour", solid(&plain));
     assert!(solid(&hatched) < 50, "the hatched cut is tinted: {}", solid(&hatched));
+}
+
+/// A body inside another's hollow, behind the cut, leaves no trace on the cap (#6328): the cap
+/// used to be painted by every face behind it, last drawn last, so the inner body's colour and
+/// outline showed through the cut like an X-ray. Hatched and plain, orthographic and
+/// perspective, the picture is the same with the inner body as without it.
+#[test]
+fn a_body_behind_the_cut_does_not_colour_the_cap() {
+    let Some(c) = capturer() else { return };
+    let outer = [
+        ("solid.box", json!({"length": 40, "width": 40, "height": 30, "body_name": "outer"})),
+        ("solid.box", json!({"length": 20, "width": 20, "height": 16, "corner": [10, 10, 7], "operation": "cut"})),
+        ("appearance.assign", json!({"bodies": ["outer"], "color": [40, 160, 90]})),
+    ];
+    let inner = [
+        ("solid.box", json!({"length": 8, "width": 8, "height": 6, "corner": [16, 16, 12], "operation": "new_body", "body_name": "inner"})),
+        ("appearance.assign", json!({"bodies": ["inner"], "color": [220, 30, 30]})),
+    ];
+    let mut alone = session(&outer);
+    let mut with = session(&[outer[0].clone(), outer[1].clone(), outer[2].clone(), inner[0].clone(), inner[1].clone()]);
+    for hatch in [true, false] {
+        // Cut away y < 6: the hollow (and the inner body) lie 4 mm behind the cut face.
+        for s in [&mut alone, &mut with] {
+            s.execute("inspect.section", &json!({"plane": {"origin": [0, 6, 0], "normal": [0, -1, 0]}, "hatch": hatch})).unwrap();
+        }
+        for fov in [0.0, 0.6] {
+            let mut cam = view::home_camera(&alone);
+            cam.fov = fov;
+            let picture = |s: &Session| c.rgba(&view::scene(s, &cam), &cam, 300, 220).unwrap();
+            let (a, b) = (picture(&alone), picture(&with));
+            let differ = pixels(&a).zip(pixels(&b)).filter(|(p, q)| p.iter().zip(q).any(|(x, y)| x.abs_diff(*y) > 8)).count();
+            assert_eq!(differ, 0, "hatch {hatch}, fov {fov}: the inner body shows through the cap in {differ} pixels");
+        }
+    }
 }
 
 /// Surface analysis shades headless pictures as it shades the viewport: a box's flat faces in

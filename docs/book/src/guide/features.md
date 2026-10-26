@@ -9,7 +9,7 @@ it.
 |---|---|
 | Create | extrude (one side, two sides, symmetric, taper, start offset, to a distance or through all; new body, join, cut, intersect; thin walls along curves), revolve, sweep, loft, box, cylinder, sphere, torus, coil, pipe, rib, web, emboss, hole (simple, counterbore, countersink, tapped; on faces, at distances from edges, or at sketch points), thread, rectangular/circular/path patterns, mirror |
 | Modify | press pull, fillet, chamfer, shell, draft, scale, combine, split body, offset face, replace face, move/copy, align, remove |
-| Construct | offset plane, plane at angle, plane along path |
+| Construct | offset plane (at a distance or through a point), plane at angle, plane along path |
 | Inspect | measure, section analysis, interference, compare bodies, curvature comb and map, zebra, draft, minimum radius, isocurves, centre of mass |
 
 Extrude automatically selects **Join** for additions when the active component already has a
@@ -29,6 +29,12 @@ planes are not targets. The extent can still be chosen manually. For a new extru
 start or end offsets or a From Object input, the target also sets the stored distance and
 one-sided direction, so returning to **Distance** keeps that reach. Thin Extrude keeps its
 existing picks. With the setting off, picks only add profiles, as before.
+
+A positive extrude taper slopes the side walls outward, so the profile grows along the
+extrusion direction and the far end is larger; a negative taper slopes them inward, making
+the far end smaller. For example, a 10 × 10 mm square extruded 10 mm with `taper: "5 deg"`
+has an approximately 11.75 × 11.75 mm far face; with `taper: "-5 deg"`, it is approximately
+8.25 × 8.25 mm.
 
 A taper slopes the sides of any profile, sketch text included: lines, arcs and spline or conic
 curves move in or out together, and a flat tip shorter than the taper closes to a point. On

@@ -637,6 +637,9 @@ pub struct Tokens {
     pub origin_plane_edge: Color32,
     pub origin_plane_hover: Color32,
     pub origin_point: Color32,
+    /// The X, Y and Z colours, one set for every axis drawn (#976): the origin axes, the view
+    /// triad, the navigation cube's triad, the Move gizmo, a 3D sketch point's triad, joint
+    /// origins, measured distances along the axes and the headless picture's origin axes.
     pub axis_x: Color32,
     pub axis_y: Color32,
     pub axis_z: Color32,
@@ -674,6 +677,8 @@ pub struct Tokens {
     /// Sketch curves: under-constrained, fully constrained (and finished sketches).
     pub sketch: Color32,
     pub sketch_fixed: Color32,
+    /// Wider rim beneath sketch curves to separate them from shaded faces.
+    pub sketch_halo: Color32,
     /// Fixed (locked) sketch geometry.
     pub sketch_locked: Color32,
     /// Sketch dimensions: driving, driven (reference).
@@ -733,10 +738,6 @@ pub struct Tokens {
     pub sketch_lost: Color32,
     pub sketch_construction: Color32,
     pub sketch_centerline: Color32,
-    /// The view triad's X, Y and Z (and the CPU scene's origin axes).
-    pub triad: [Color32; 3],
-    /// The move gizmo's X, Y and Z.
-    pub gizmo: [Color32; 3],
     /// Sheet metal flat pattern: bend up, bend down.
     pub bend_up: Color32,
     pub bend_down: Color32,
@@ -764,6 +765,11 @@ impl Tokens {
     /// Subtle shell elevation, derived from the semantic application-bar colour.
     pub(crate) fn shell_shadow(self) -> egui::Shadow {
         egui::Shadow { offset: [0, self.space_2 as i8], blur: self.space_8 as u8, spread: 0, color: self.app_bar.gamma_multiply(0.18) }
+    }
+
+    /// The X, Y and Z axis colours, in that order.
+    pub const fn axes(&self) -> [Color32; 3] {
+        [self.axis_x, self.axis_y, self.axis_z]
     }
 
     /// The tokens of the current theme and colour vision mode.
@@ -858,6 +864,9 @@ pub fn apply(ctx: &egui::Context) {
         s.spacing.item_spacing = egui::vec2(t.space_6, t.space_4);
         s.spacing.button_padding = egui::vec2(t.space_6, t.space_3);
     });
+    // The new visuals are painted on the next pass: without a repaint request the widgets
+    // keep the previous theme's colours until some other event schedules a pass (#5802).
+    ctx.request_repaint();
 }
 
 #[cfg(test)]
@@ -893,6 +902,45 @@ mod tests {
         }
         assert_eq!(Tokens::outset_radius(0.0, 3.0), 0.0);
         assert_eq!(Tokens::outset_radius(6.0, 3.0), 9.0);
+    }
+
+    /// A theme change repaints: egui paints the new visuals on the next pass, so without a
+    /// repaint request the widgets keep the previous theme's colours until another event
+    /// schedules a pass (#5802).
+    #[test]
+    fn applying_a_theme_asks_for_a_repaint_with_the_new_visuals() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let ctx = egui::Context::default();
+        // The integration hook fires on every repaint request, whoever asked for it.
+        let requests = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&requests);
+        ctx.set_request_repaint_callback(move |_| {
+            counter.fetch_add(1, Ordering::Relaxed);
+        });
+        // Let egui's own startup repaints settle: the context must be idle before the
+        // theme changes, so the only repaint left is the one the theme asks for.
+        let mut settled = false;
+        for _ in 0..8 {
+            ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+            if !ctx.has_requested_repaint() {
+                settled = true;
+                break;
+            }
+        }
+        assert!(settled, "the context must be idle before the theme changes");
+        let before = requests.load(Ordering::Relaxed);
+        let previous = super::is_dark();
+        super::set_dark(!previous);
+        let dark = super::is_dark();
+        let expected = super::visuals(dark);
+        // The theme is applied outside a pass: inside one egui schedules repaints of its
+        // own, and the request of the theme would hide among them.
+        super::apply(&ctx);
+        super::set_dark(previous);
+        assert!(requests.load(Ordering::Relaxed) > before, "a theme change must ask for a repaint");
+        assert!(ctx.has_requested_repaint(), "a theme change must leave a repaint pending");
+        let theme = if dark { egui::Theme::Dark } else { egui::Theme::Light };
+        assert_eq!(ctx.style_of(theme).visuals, expected, "the new theme's visuals must be in place");
     }
 
     #[test]
@@ -967,6 +1015,23 @@ mod tests {
             let [color, ink, soft] = values.map(rgb);
             assert_eq!(super::TabAccent::for_tab(&t, "MODEL"), super::TabAccent { color, ink, soft });
         }
+    }
+
+    #[test]
+    fn built_in_selected_tab_labels_hold_wcag_small_text_contrast() {
+        let mut themes = vec![("Dark", super::Tokens::dark()), ("Light", super::Tokens::light())];
+        themes.extend(crate::theme_files::builtin().iter().map(|theme| (theme.name.as_str(), crate::theme_files::resolve(theme))));
+        let mut failures = Vec::new();
+        for (name, tokens) in themes {
+            for tab in crate::workspace::TABS.iter().copied().chain(["SKETCH", "MESH", "FORM", "SHEET METAL", "RENDER"]) {
+                let accent = super::TabAccent::for_tab(&tokens, tab);
+                let ratio = super::contrast_ratio(accent.ink, accent.soft);
+                if ratio < 4.5 {
+                    failures.push(format!("{name} {tab}: {ratio:.4}:1 ({:?} on {:?})", accent.ink, accent.soft));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "selected tab contrast below 4.5:1:\n{}", failures.join("\n"));
     }
 
     #[test]

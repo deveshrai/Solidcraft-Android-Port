@@ -6,7 +6,20 @@
 use crate::i18n;
 
 /// The commands that have help text. Each one needs a `help.<id>` message in the catalogs.
-pub const DOCUMENTED: &[&str] = &["solid.chamfer", "solid.extrude", "solid.fillet", "solid.hole", "solid.revolve", "solid.shell"];
+pub const DOCUMENTED: &[&str] = &[
+    "solid.chamfer",
+    "solid.combine",
+    "solid.extrude",
+    "solid.fillet",
+    "solid.hole",
+    "solid.loft",
+    "solid.mirror",
+    "solid.pattern.circular",
+    "solid.pattern.rectangular",
+    "solid.revolve",
+    "solid.shell",
+    "solid.sweep",
+];
 
 /// The help for `command` in the current language, when it has any.
 pub fn help(command: &str) -> Option<String> {
@@ -68,7 +81,7 @@ mod tests {
 
     #[test]
     fn every_help_message_is_for_a_documented_command() {
-        let english = help_keys(include_str!("../../../assets/locales/en.json"));
+        let english = help_keys(include_str!(concat!(env!("OUT_DIR"), "/locales/en.json")));
         let wanted: BTreeSet<String> = DOCUMENTED.iter().map(|id| format!("help.{id}")).collect();
         assert_eq!(english, wanted);
         for key in &english {
@@ -79,8 +92,8 @@ mod tests {
 
     #[test]
     fn the_help_texts_are_written_in_every_complete_language() {
-        let english = catalog(include_str!("../../../assets/locales/en.json"));
-        for source in [include_str!("../../../assets/locales/ja.json"), include_str!("../../../assets/locales/zh.json")] {
+        let english = catalog(include_str!(concat!(env!("OUT_DIR"), "/locales/en.json")));
+        for source in [include_str!(concat!(env!("OUT_DIR"), "/locales/ja.json")), include_str!(concat!(env!("OUT_DIR"), "/locales/zh.json"))] {
             let other = catalog(source);
             for (key, text) in english.iter().filter(|(k, _)| k.starts_with("help.")) {
                 let translated = other.get(key).unwrap_or_else(|| panic!("{key} missing"));
@@ -96,7 +109,7 @@ mod tests {
         for id in DOCUMENTED {
             assert!(help(id).is_some_and(|text| !text.is_empty()), "{id}");
         }
-        assert!(help("solid.pattern.rectangular").is_none());
+        assert!(help("solid.draft").is_none());
     }
 
     #[test]
@@ -104,7 +117,7 @@ mod tests {
         assert_eq!(row_tip("solid.shell", "Shell", Some("S"), None).as_deref(), Some("Shell  (S)"));
         assert_eq!(row_tip("solid.hole", "Hole", None, None).as_deref(), Some("Hole"));
         assert_eq!(row_tip("solid.hole", "Hole", None, Some("Select a face")).as_deref(), Some("Select a face"));
-        assert_eq!(row_tip("solid.pattern.rectangular", "Pattern", None, None), None);
-        assert_eq!(row_tip("solid.pattern.rectangular", "Pattern", None, Some("No body")).as_deref(), Some("No body"));
+        assert_eq!(row_tip("solid.draft", "Draft", None, None), None);
+        assert_eq!(row_tip("solid.draft", "Draft", None, Some("No body")).as_deref(), Some("No body"));
     }
 }

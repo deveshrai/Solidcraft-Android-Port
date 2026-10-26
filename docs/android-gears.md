@@ -18,7 +18,7 @@ This manual has three parts:
 
 Screenshots are from a Samsung Galaxy Tab (SM-X840, Android 17, 2800 × 1752, Mali-G1-Ultra) and
 the Pixel Tablet emulator (Android 16, 2560 × 1600), both running SolidCraft 0.22.0 with this
-feature. General use of the app on Android: [android-touch.md](android-touch.md).
+feature; it is unchanged in the 0.23.0 port. General use of the app on Android: [android-touch.md](android-touch.md).
 
 ![The ten gear types on the Galaxy Tab: spur, helical with bore and hub, herringbone, internal, rack; bevel, miter, worm, worm wheel, crossed helical](screenshots/android/gears-tab-08-all-types.jpg)
 
@@ -640,9 +640,9 @@ it a gear is its stored parameters, which `gear.edit` rebuilds it from.
 | `crates/ui-egui/src/workspace.rs` | Short ribbon names (*Gear*, *Edit Gear*) |
 | `apps/solidcraft-android/src/lib.rs` | `apply_off_thread`, as the desktop app sets it |
 | `apps/solidcraft-android/android/app/src/main/java/io/solidcraft/android/SolidCraftActivity.java` | `hideSystemBars`, `onWindowFocusChanged` |
-| `assets/locales/en, en-GB, ja, zh, de, ko .json` | The gear labels, the Thread dialog's missing labels |
+| `assets/locales/pending/android-port.json` | The gear labels and the Thread dialog's missing labels, in en, en-GB, ja, zh, de and ko (in the catalogs themselves before the 0.23 merge) |
 | `assets/icons/ui/design/requested_icons.txt` | `spur_gear` |
-| `ATTRIBUTION.md` | The icon and the screenshots |
+| `attribution/pending/android-port.md` | The icon and the screenshots (in `ATTRIBUTION.md` before the 0.23 merge) |
 | `docs/android.md` | Status, the port's changes to upstream files |
 
 ## 22. The tooth geometry: `gear_profile.rs`
@@ -768,8 +768,11 @@ Wiring: `Kind::Gear` in `dialogs.rs` (start order, title, preview off on the web
 
 A gear's parameters are stored in its component's metadata under `io.solidcraft.gear`, a
 namespaced key that the design format keeps as it is. So designs with gears need **no format
-change**: builds without this feature open them, and the gears are ordinary components with their
-sketches and features (only Edit Gear is missing there). STEP, mesh and the other exports see an
+change**: the gears are ordinary components with their sketches and features, and a build without
+this feature would show them as such (only Edit Gear is missing there). The port as a whole still
+saves one format past upstream's release because of the helical threads, so upstream's releases
+refuse its designs until that changes ([android.md, "Design files"](android.md)); STEP is the way
+to take a gear to them. STEP, mesh and the other exports see an
 ordinary body.
 
 ## 29. Performance: why so few booleans

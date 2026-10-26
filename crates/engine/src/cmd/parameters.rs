@@ -11,16 +11,21 @@ use crate::{EngineError, Result, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("parameters.change", "Change Parameters", change_param).at("SOLID", "MODIFY").icon("params").params(
-        "name, expression (number or text), unit?: mm|cm|m|in|ft|deg|rad|\"\" (new parameters default to their value's unit), comment?, \
+        "name, expression (number or text), unit?: mm|cm|m|in|ft|deg|rad|\"\"|text (new parameters default to their value's unit; \
+         a text parameter's expression is its text, quotes round it optional: sketch texts' words are built from it), comment?, \
              favorite?: bool, new_name?: rename (references follow); or delete: name; or changes: {name: expression, …} (existing \
          parameters, checked together and rebuilt once, all or nothing) → changed?: {name: value} (with changes), recomputed: features rebuilt, \
-         restored: features whose earlier result for the same inputs was reused (e.g. a value set back)",
+         restored: features whose earlier result for the same inputs was reused (e.g. a value set back), switched?: [{feature, name, suppressed}] \
+         (the configuration rules that switch a feature's suppression and read a parameter whose value changed run in their order, as on \
+         activation; driven parameters and restrictions wait for a configuration edit or activation)",
     ),
     CommandSpec::new("parameters.list", "List Parameters", list).icon("list").noundo().doc_only().params(
         "favorites?: bool (only favourites), filter?: all|user|sketch|feature|favorites → parameters (name, expression, unit, value in its unit, \
          source, feature/input, comment, favorite, uses, used_by, error) and cycles",
     ),
-    CommandSpec::new("parameters.add", "Add User Parameter", add).icon("new").params("name, expression, unit?, comment?, favorite?: bool"),
+    CommandSpec::new("parameters.add", "Add User Parameter", add)
+        .icon("new")
+        .params("name, expression, unit?: as parameters.change (text: a text parameter, its expression the text), comment?, favorite?: bool"),
     CommandSpec::new("parameters.rename", "Rename Parameter", rename)
         .icon("rename")
         .params("name, new_name (expressions, feature inputs and dimensions that use it follow)"),
@@ -51,7 +56,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("params")
         .noundo()
         .doc_only()
-        .params("expression, kind?: length|angle|unitless (or unit?: mm|in|deg…) → ok, value (mm/rad), display_value, references, error"),
+        .params("expression, kind?: length|angle|unitless (or unit?: mm|in|deg…; text: the text a text parameter would hold, as `text`) → ok, value (mm/rad), display_value, references, error"),
     CommandSpec::new("parameters.complete", "Complete Expression", complete)
         .icon("params")
         .noundo()
@@ -76,8 +81,8 @@ fn failing(s: &Session) -> Vec<Value> {
     s.model.results.iter().filter_map(|r| r.error.as_ref().map(|e| json!({"feature": r.name, "error": e}))).collect()
 }
 
-fn known(s: &Session, name: &str) -> bool {
-    s.doc.param(name).is_some() || s.doc.features.iter().any(|f| f.param_names.iter().any(|n| n == name))
+pub(super) fn known(s: &Session, name: &str) -> bool {
+    s.doc.param(name).is_some() || s.doc.text_param(name).is_some() || s.doc.features.iter().any(|f| f.param_names.iter().any(|n| n == name))
 }
 
 fn change_param(s: &mut Session, p: &Value) -> Result<Value> {
@@ -107,6 +112,7 @@ fn change_param(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "`expression` must be a number or text"));
     };
     let (unit, comment) = (str_(p, "unit"), str_(p, "comment"));
+    let before = s.doc.param_values().0;
     match &e {
         Some(e) => s.doc_mut().change_param(&name, e, unit, comment)?,
         None => {
@@ -121,10 +127,17 @@ fn change_param(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(f) = bool_(p, "favorite") {
         s.doc_mut().set_favorite(&name, f)?;
     }
+    let switched = switch_by_rules(s, &before);
     s.settle_value_edit(&solved)?;
     let (vals, _) = s.doc.param_values();
+    if !switched.is_empty() {
+        out["switched"] = json!(switched);
+    }
     out["name"] = json!(name);
     out["expression"] = json!(e);
+    if let Some(t) = s.doc.text_param(&name) {
+        out["text"] = json!(t.text);
+    }
     out["value"] = json!(vals.get(&name).map(|v| v.v));
     out["display_value"] = json!(s.doc.param_display_value(&vals, &name));
     out["recomputed"] = json!(s.model.last_recomputed);
@@ -146,11 +159,34 @@ fn change_many(s: &mut Session, changes: &Value, solved: &crate::SketchValues) -
         let e = expr_arg(&json!({"e": e}), "e").ok_or_else(|| bad(cmd, format!("`changes.{name}` must be a number or text")))?;
         list.push((name.trim().to_string(), e));
     }
+    let before = s.doc.param_values().0;
     s.doc_mut().change_params_atomic(&list)?;
+    let switched = switch_by_rules(s, &before);
     s.settle_value_edit(solved)?;
     let (vals, _) = s.doc.param_values();
     let values: serde_json::Map<String, Value> = list.iter().map(|(n, _)| (n.clone(), json!(vals.get(n).map(|v| v.v)))).collect();
-    Ok(json!({"changed": values, "recomputed": s.model.last_recomputed, "restored": s.model.last_restored, "errors": failing(s)}))
+    let mut out = json!({"changed": values, "recomputed": s.model.last_recomputed, "restored": s.model.last_restored, "errors": failing(s)});
+    if !switched.is_empty() {
+        out["switched"] = json!(switched);
+    }
+    Ok(out)
+}
+
+/// The configuration rules that switch a feature's suppression and read a parameter this edit
+/// changed (`Document::apply_suppression_rules`), applied before the design is rebuilt, so that
+/// one rebuild has them: `[{feature, name, suppressed}]` for each feature they switched.
+fn switch_by_rules(s: &mut Session, before: &std::collections::BTreeMap<String, expr::Value>) -> Vec<Value> {
+    if s.doc.configs.rules.is_empty() {
+        return Vec::new();
+    }
+    let switched = s.doc_mut().apply_suppression_rules(before);
+    switched
+        .into_iter()
+        .map(|(id, suppressed)| {
+            let name = s.doc.features.iter().find(|f| f.id == id).map(|f| f.name.clone());
+            json!({"feature": id, "name": name, "suppressed": suppressed})
+        })
+        .collect()
 }
 
 fn list(s: &mut Session, p: &Value) -> Result<Value> {
@@ -187,6 +223,9 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         s.doc_mut().set_favorite(&name, f)?;
     }
     let (vals, _) = s.doc.param_values();
+    if let Some(t) = s.doc.text_param(&name) {
+        return Ok(json!({"name": name, "unit": solidcraft_doc::text_params::TEXT_UNIT, "text": t.text, "value": null}));
+    }
     Ok(
         json!({"name": name, "unit": s.doc.param(&name).map(|x| x.unit.clone()), "value": vals.get(&name).map(|v| v.v), "display_value": s.doc.param_display_value(&vals, &name)}),
     )
@@ -305,6 +344,10 @@ fn evaluate(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "expr.evaluate";
     let e = expr_arg(p, "expression").ok_or_else(|| bad(cmd, "`expression` must be text or a number"))?;
     let unit = str_(p, "unit");
+    // A text parameter's expression is its text.
+    if unit.is_some_and(solidcraft_doc::text_params::is_text_unit) {
+        return Ok(json!({"ok": true, "kind": "text", "text": solidcraft_doc::text_params::unquote(&e), "references": []}));
+    }
     if let Some(u) = unit
         && expr::unit_info(u).is_none()
     {

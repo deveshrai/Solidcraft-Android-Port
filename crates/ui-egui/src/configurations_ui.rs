@@ -13,32 +13,16 @@ pub(super) fn configurations_rows(
 ) {
     // Physical materials for the configuration table's Library: the library's, then the design's own.
     let material_names = app.session.doc.material_names();
+    // The table and its cells are made once per design revision: a table of hundreds of rows
+    // costs too much to rebuild every frame.
     let revision = app.session.revision;
-    let v = rule_editor.table.as_ref().filter(|(r, _)| *r == revision).map(|(_, v)| v.clone()).unwrap_or_else(|| {
+    if rule_editor.table.as_ref().is_none_or(|shown| shown.0 != revision) {
         let value = app.session.execute("config.table", &json!({})).unwrap_or(Value::Null);
-        rule_editor.table = Some((revision, value.clone()));
-        value
-    });
-    let mut tb = table(&v);
-    // Bare numbers show with their parameter's unit ("40" is 40 mm), as Fusion shows them.
-    let kinds = app.session.doc.all_param_exprs();
-    for (_, vals) in &mut tb.rows {
-        for (c, val) in tb.columns.iter().zip(vals.iter_mut()) {
-            let (kind, n) = column_parts(c);
-            if kind == "param"
-                && val.trim().parse::<f64>().is_ok()
-                && let Some(unit) = app.session.doc.param(n).map(|parameter| parameter.unit.clone()).or_else(|| {
-                    kinds.iter().find(|x| x.0 == n).and_then(|x| {
-                        unit_of(x.2).map(|unit| {
-                            if x.2 == solidcraft_engine::doc::expr::Kind::Length { app.session.doc.units.clone() } else { unit.to_string() }
-                        })
-                    })
-                })
-            {
-                *val = format!("{} {unit}", val.trim());
-            }
-        }
+        let tb = with_units(app, table(&value));
+        rule_editor.table = Some(std::sync::Arc::new((revision, value, tb)));
     }
+    let Some(shown) = rule_editor.table.clone() else { return };
+    let (_, v, tb) = &*shown;
     let run = |app: &mut SolveApp, error: &mut Option<String>, id: &str, p: Value| {
         *error = app.run(id, p).err();
     };
@@ -112,7 +96,10 @@ pub(super) fn configurations_rows(
         });
         for (name, values) in &tb.rows {
             let active = tb.active.as_deref() == Some(name.as_str());
-            table.row(ui, name, active, |row| {
+            // Rows off screen keep their space without building their cells; one with an edit
+            // in progress stays live, so leaving its cell still commits the edit.
+            let editing = rule_editor.drafts.keys().any(|(row, _)| row == name);
+            table.row_visible(ui, name, active, editing, |row| {
                 row.cell(|ui| {
                     // A measured name slot keeps status/actions inside the Configuration column.
                     ui.allocate_ui_with_layout(
@@ -281,6 +268,39 @@ pub(super) fn configurations_rows(
     ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
 }
 
+/// Bare numbers show with their parameter's unit ("40" is 40 mm), as Fusion shows them. The
+/// unit is looked up once per column, not once per cell.
+fn with_units(app: &SolveApp, mut tb: super::Table) -> super::Table {
+    let kinds = app.session.doc.all_param_exprs();
+    let units: Vec<Option<String>> =
+        tb.columns
+            .iter()
+            .map(|c| {
+                let (kind, n) = column_parts(c);
+                if kind != "param" {
+                    return None;
+                }
+                app.session.doc.param(n).map(|parameter| parameter.unit.clone()).or_else(|| {
+                    kinds.iter().find(|x| x.0 == n).and_then(|x| {
+                        unit_of(x.2).map(|unit| {
+                            if x.2 == solidcraft_engine::doc::expr::Kind::Length { app.session.doc.units.clone() } else { unit.to_string() }
+                        })
+                    })
+                })
+            })
+            .collect();
+    for (_, vals) in &mut tb.rows {
+        for (unit, val) in units.iter().zip(vals.iter_mut()) {
+            if let Some(unit) = unit
+                && val.trim().parse::<f64>().is_ok()
+            {
+                *val = format!("{} {unit}", val.trim());
+            }
+        }
+    }
+    tb
+}
+
 fn column_menu(app: &mut SolveApp, ui: &mut egui::Ui, error: &mut Option<String>, columns: &[String]) {
     let run = |app: &mut SolveApp, error: &mut Option<String>, id: &str, params: Value| {
         *error = app.run(id, params).err();
@@ -361,7 +381,7 @@ fn column_menu(app: &mut SolveApp, ui: &mut egui::Ui, error: &mut Option<String>
                                 if !supported || !seen.insert(target.name.clone()) {
                                     continue;
                                 }
-                                let Some((_, role)) = target.name.split_once(':') else { continue };
+                                let Some((_, role)) = solidcraft_engine::doc::persistent_name::split_feature(&target.name) else { continue };
                                 if ui_kit::button(ui, role, ui_kit::Button::Normal).clicked() {
                                     pick = Some(json!({"face_appearance":{"target":target}}));
                                     ui.close();

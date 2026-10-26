@@ -3,8 +3,10 @@
 //! belong to their feature's component unless moved; occurrences place components (instances
 //! share contents, "paste new" copies them) and can be grounded and moved.
 
+use std::collections::HashMap;
+
 use serde_json::{Value, json};
-use solidcraft_doc::{FeatureKind, Mat, Occurrence};
+use solidcraft_doc::{Feature, FeatureKind, Mat, Occurrence};
 use solidcraft_geom::Vec3;
 
 use super::CommandSpec;
@@ -40,10 +42,10 @@ pub static COMMANDS: &[CommandSpec] = &[
     ),
     CommandSpec::new("component.properties", "Component Physical Properties", properties::component)
         .icon("measure").noundo()
-        .params("component?: id or name (default active); descendants?: bool (default true). Measures the first placement, or all placements for root, including pending moves; material-aware mass and center of mass in world coordinates"),
+        .params("component?: id or name (default active); descendants?: bool (default true). Measures the first placement, or all placements for root, including pending moves; material-aware mass and center of mass in world coordinates; volume, density, mass and center of mass only for closed, consistently oriented bodies; total.open_bodies_skipped counts open bodies excluded from volume/mass totals"),
     CommandSpec::new("occurrence.properties", "Occurrence Physical Properties", properties::occurrence)
         .icon("measure").noundo()
-        .params("occurrence: id or name; path?: [occurrence ids] (required if nested under multiple instances); descendants?: bool (default true). Physical properties of this placement in world coordinates, including pending moves"),
+        .params("occurrence: id or name; path?: [occurrence ids] (required if nested under multiple instances); descendants?: bool (default true). Physical properties of this placement in world coordinates, including pending moves; volume, density, mass and center of mass only for closed, consistently oriented bodies; total.open_bodies_skipped counts open bodies excluded from volume/mass totals"),
     CommandSpec::new("component.rename", "Rename Component", rename).icon("rename").params("component, name"),
     CommandSpec::new("component.delete", "Delete Component", delete).icon("delete").params("component: deletes it, its subcomponents, occurrences and features"),
     CommandSpec::new("component.unlock", "Unlock Contents", unlock).icon("rigid_group").params(
@@ -204,24 +206,30 @@ fn list(s: &mut Session, p: &Value) -> Result<Value> {
         }
         v
     };
+    // Each component's bodies, features, occurrences and children, grouped once rather than
+    // searched for every component (thousands of each in a design with many components).
+    let mut bodies_of: HashMap<u64, Vec<&str>> = HashMap::new();
+    for b in &st.bodies {
+        bodies_of.entry(doc.model_body_component(b)).or_default().push(b.name.as_str());
+    }
+    let mut features_of: HashMap<u64, Vec<&Feature>> = HashMap::new();
+    for f in &doc.features {
+        features_of.entry(f.component).or_default().push(f);
+    }
+    let (mut occurrences_of, mut children_of): (HashMap<u64, Vec<&Occurrence>>, HashMap<u64, Vec<&Occurrence>>) = Default::default();
+    for o in &doc.occurrences {
+        occurrences_of.entry(o.component).or_default().push(o);
+        children_of.entry(o.parent).or_default().push(o);
+    }
     let node = |id: u64, name: &str, parent: Option<u64>| {
-        let bodies: Vec<&str> = st.bodies.iter().filter(|b| doc.model_body_component(b) == id).map(|b| b.name.as_str()).collect();
-        let features: Vec<&str> = doc
-            .features
-            .iter()
-            .filter(|f| f.component == id && !matches!(f.kind, FeatureKind::Sketch { .. } | FeatureKind::ConstructionPlane { .. }))
-            .map(|f| f.name.as_str())
-            .collect();
-        let sketches: Vec<&str> =
-            doc.features.iter().filter(|f| f.component == id && matches!(f.kind, FeatureKind::Sketch { .. })).map(|f| f.name.as_str()).collect();
-        let construction: Vec<&str> = doc
-            .features
-            .iter()
-            .filter(|f| f.component == id && matches!(f.kind, FeatureKind::ConstructionPlane { .. }))
-            .map(|f| f.name.as_str())
-            .collect();
-        let occurrences: Vec<Value> = doc.occurrences.iter().filter(|o| o.component == id).map(placement).collect();
-        let children: Vec<Value> = doc.occurrences.iter().filter(|o| o.parent == id).map(|o| if compact { json!(o.id) } else { json!(o) }).collect();
+        let bodies = bodies_of.get(&id).cloned().unwrap_or_default();
+        let features = features_of.get(&id).map(Vec::as_slice).unwrap_or_default();
+        let named = |keep: fn(&FeatureKind) -> bool| -> Vec<&str> { features.iter().filter(|f| keep(&f.kind)).map(|f| f.name.as_str()).collect() };
+        let sketches = named(|k| matches!(k, FeatureKind::Sketch { .. }));
+        let construction = named(|k| matches!(k, FeatureKind::ConstructionPlane { .. }));
+        let features = named(|k| !matches!(k, FeatureKind::Sketch { .. } | FeatureKind::ConstructionPlane { .. }));
+        let occurrences: Vec<Value> = occurrences_of.get(&id).into_iter().flatten().map(|o| placement(o)).collect();
+        let children: Vec<Value> = children_of.get(&id).into_iter().flatten().map(|o| if compact { json!(o.id) } else { json!(o) }).collect();
         let bodies = if body_names { json!(bodies) } else { json!(bodies.len()) };
         json!({"id": id, "name": name, "parent": parent, "bodies": bodies, "features": names(features), "sketches": names(sketches),
             "construction": names(construction), "occurrences": occurrences, "children": children})

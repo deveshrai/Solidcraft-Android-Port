@@ -35,7 +35,15 @@ pub struct HomeState {
     /// Recent design paths, newest first (kept in the preferences).
     pub recent: Vec<String>,
     pub opened_at: std::collections::BTreeMap<String, u64>,
+    /// Designs the user removed from the list. Kept in the preferences so a host that rebuilds
+    /// the recent list from its stored designs (the web build, see `sync_recents`) does not add
+    /// them back. Opening or saving a design clears it from here.
+    pub forgotten: std::collections::BTreeSet<String>,
     thumbs: HashMap<String, Option<egui::TextureHandle>>,
+    /// Keys whose picture could not be made (an empty or unreadable design). Terminal: the card
+    /// shows a placeholder instead of spinning forever. Cleared when the design is opened or saved
+    /// (see `add_recent`), which asks for the picture again.
+    failed: std::collections::HashSet<String>,
     samples: HashMap<usize, Session>,
     /// Keys asked for and not made yet.
     queued: Vec<String>,
@@ -75,6 +83,12 @@ impl HomeState {
         self.recent.iter().filter(|p| self.thumbs.get(*p).is_some_and(Option::is_some)).count()
     }
 
+    /// Whether a design's picture could not be made, so its card shows a placeholder rather than
+    /// a spinner that would otherwise turn forever.
+    fn thumb_failed(&self, key: &str) -> bool {
+        self.failed.contains(key)
+    }
+
     pub fn ready_samples(&self) -> usize {
         (0..solidcraft_engine::sample::samples().len()).filter(|i| self.thumbs.get(&format!("sample:{i}")).is_some_and(Option::is_some)).count()
     }
@@ -94,6 +108,19 @@ impl HomeState {
         self.opened_at.insert(path.to_string(), web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0));
         self.opened_at.retain(|p, _| self.recent.contains(p));
         self.thumbs.remove(path);
+        // Opening or saving a design undoes an earlier removal from the list.
+        self.forgotten.remove(path);
+        // A fresh open or save earns another attempt at the picture.
+        self.failed.remove(path);
+    }
+
+    /// Drop a design from the recent list and remember that the user did so, so a host that
+    /// rebuilds the list from its stored designs (the web build) does not add it back.
+    pub fn forget(&mut self, path: &str) {
+        self.recent.retain(|p| p != path);
+        self.opened_at.remove(path);
+        self.thumbs.remove(path);
+        self.forgotten.insert(path.to_string());
     }
 }
 
@@ -185,6 +212,21 @@ fn remember_at(s: &Session, key: &str, #[cfg(not(target_arch = "wasm32"))] ident
     Some(img)
 }
 
+/// Waits up to `within` for the threads drawing Home pictures, and drops what they made: the
+/// window is going, and a picture still on the GPU as the process exits can crash the driver.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn finish_pictures(h: &mut HomeState, within: std::time::Duration) {
+    let end = std::time::Instant::now() + within;
+    for rx in [h.rx.take(), h.sample_rx.take(), h.remembering.take()].into_iter().flatten() {
+        // Each thread sends what it made and ends; its channel closes when it has.
+        while let Some(left) = end.checked_duration_since(std::time::Instant::now()) {
+            if let Err(std::sync::mpsc::RecvTimeoutError::Disconnected) = rx.recv_timeout(left) {
+                break;
+            }
+        }
+    }
+}
+
 /// A Home picture is being drawn off the UI thread.
 #[cfg(test)]
 pub(crate) fn remembering(h: &HomeState) -> bool {
@@ -225,8 +267,19 @@ pub(crate) fn remember_source(h: &mut HomeState, s: &Session, key: &str) {
 }
 
 pub(crate) fn install(h: &mut HomeState, ctx: &egui::Context, key: &str, img: Option<egui::ColorImage>) {
-    let tex = img.map(|i| ctx.load_texture(format!("thumb:{key}"), i, egui::TextureOptions::LINEAR));
-    h.thumbs.insert(key.to_string(), tex);
+    match img {
+        Some(i) => {
+            let tex = ctx.load_texture(format!("thumb:{key}"), i, egui::TextureOptions::LINEAR);
+            h.thumbs.insert(key.to_string(), Some(tex));
+            h.failed.remove(key);
+        }
+        // The job finished with no picture: an empty design, or one that could not be read. Mark
+        // it so the card stops spinning and shows a placeholder (#4655).
+        None => {
+            h.thumbs.insert(key.to_string(), None);
+            h.failed.insert(key.to_string());
+        }
+    }
 }
 
 /// Read a disposable picture without evaluating, importing or meshing a model.
@@ -408,8 +461,13 @@ fn poll(app: &mut SolveApp, ctx: &egui::Context) {
             app.home.wanted = None;
             app.set_status(format!("the sample could not be built ({key})"), true);
         }
-        // A failed sample build does not discard its shipped preview.
-        if img.is_some() || !app.home.thumbs.contains_key(&key) {
+        // A failed sample build keeps its shipped preview, so never overwrite a sample that
+        // already has a picture with an empty result. A recent with no picture, though, must
+        // settle into a terminal "failed" state so its card stops spinning (#4655); `install`
+        // records that.
+        let is_sample = key.starts_with("sample:");
+        let already_ready = app.home.thumbs.get(&key).is_some_and(Option::is_some);
+        if img.is_some() || (!is_sample && !already_ready) || !app.home.thumbs.contains_key(&key) {
             install(&mut app.home, ctx, &key, img);
         }
         if let (Some(s), Some(i)) = (session, key.strip_prefix("sample:").and_then(|i| i.parse::<usize>().ok())) {
@@ -791,13 +849,15 @@ fn start_content(app: &mut SolveApp, ui: &mut egui::Ui, action: &mut Option<File
                             when: &when,
                             workspace: app.tr("home.design_workspace"),
                             thumbnail: texture(app.home.thumbs.get(path).and_then(Option::as_ref)),
+                            // A design whose picture could not be made shows a dimmed placeholder,
+                            // distinct from the one shown while a picture is still loading (#4655).
+                            thumbnail_failed: app.home.thumb_failed(path),
                         },
                     );
                     publish(&format!("home:recent:{index}"), &response);
                     ui_kit::Menu::context(&response, |ui| {
                         if crate::context_menu::button(ui, app.tr_label("Remove from list"), "delete").clicked() {
-                            app.home.recent.retain(|x| x != path);
-                            app.home.opened_at.remove(path);
+                            app.home.forget(path);
                             ui.close();
                         }
                         if !cfg!(target_arch = "wasm32") && crate::context_menu::button(ui, app.tr_label("Show in folder"), "folder").clicked() {
@@ -843,7 +903,7 @@ fn texture(texture: Option<&egui::TextureHandle>) -> Option<(egui::TextureId, eg
 }
 
 /// Abbreviate only an actual home-directory ancestor; the source path is kept for actions.
-fn friendly_path(path: &str) -> String {
+pub(crate) fn friendly_path(path: &str) -> String {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
     abbreviated_path(path, home.as_deref().map(std::path::Path::new))
 }

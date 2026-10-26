@@ -614,7 +614,12 @@ fn first_point(sk: &solidcraft_engine::sketch::Sketch, k: &ConstraintKind) -> Op
     use ConstraintKind::*;
     match *k {
         Length { l, .. } => sk.curves.get(l).and_then(|c| c.kind.point_ids().first().copied()),
-        Distance { p, .. } | DistanceX { p, .. } | DistanceY { p, .. } | PointLineDistance { p, .. } | LinearDiameter { p, .. } => Some(p),
+        Distance { p, .. }
+        | DistanceX { p, .. }
+        | DistanceY { p, .. }
+        | PointLineDistance { p, .. }
+        | PointCircleDistance { p, .. }
+        | LinearDiameter { p, .. } => Some(p),
         _ => None,
     }
 }
@@ -800,7 +805,7 @@ fn edit_box(app: &mut SolveApp, ctx: &egui::Context) {
                     .and_then(|p| solidcraft_engine::doc::expr::unit_info(&p.unit))
                     .map(|(k, _)| k)
                     .unwrap_or(solidcraft_engine::doc::expr::Kind::Unitless);
-                let expression = app.session.doc.with_design_unit(&e.expr, kind);
+                let expression = crate::length_input::expression(&app.session.doc, &e.expr, kind);
                 app.run("parameters.change", json!({"name": e.param, "expression": expression})).map_err(|err| shown_error("parameters.change", &err))
             };
             match result {

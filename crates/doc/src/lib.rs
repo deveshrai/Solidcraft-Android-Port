@@ -43,6 +43,7 @@ mod name_lookup;
 mod names;
 pub mod naming;
 mod params;
+pub mod persistent_name;
 pub mod physical_material;
 mod piece_names;
 pub mod pipe_thread_catalog;
@@ -64,6 +65,7 @@ pub mod render_settings;
 pub mod render_surface;
 pub use project3d::iso_grid;
 pub mod sheet;
+pub mod text_params;
 
 pub use assembly::{
     IDENTITY, MAX_PLACEMENT_DEPTH, MAX_PLACEMENTS, Mat, Occurrence, apply_point, apply_vector, is_identity, map_point_expr, mat_inverse, mat_mul,
@@ -101,6 +103,8 @@ pub enum DocError {
 
 pub type Result<T> = std::result::Result<T, DocError>;
 
+#[cfg(test)]
+mod coil_tests;
 #[cfg(test)]
 mod feature_walk_tests;
 #[cfg(test)]

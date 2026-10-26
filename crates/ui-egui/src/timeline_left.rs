@@ -662,6 +662,21 @@ pub fn delete_selected_folders(app: &mut SolveApp) -> bool {
     true
 }
 
+/// Open the folder holding this feature and every folder above it, so its row is shown.
+pub fn reveal_feature(app: &mut SolveApp, feature: u64) {
+    let groups = &app.session.doc.timeline_groups;
+    let mut current = group_for(groups, feature);
+    let mut steps = 0usize;
+    while let Some(id) = current {
+        app.tree.collapsed.remove(&format!("timeline_group:{id}"));
+        steps += 1;
+        if steps > groups.len() {
+            break;
+        }
+        current = groups.iter().find(|group| group.id == id).and_then(|group| group.parent);
+    }
+}
+
 fn group_is_descendant(groups: &[solidcraft_engine::doc::TimelineGroup], group: u64, ancestor: u64) -> bool {
     let mut current = groups.iter().find(|candidate| candidate.id == group).and_then(|candidate| candidate.parent);
     let mut steps = 0usize;
@@ -920,6 +935,8 @@ fn vertical_features(app: &mut SolveApp, ui: &mut egui::Ui, names: bool) {
         .collect();
     let groups = app.session.doc.timeline_groups.clone();
     let order = visible_order(app, &features, &groups);
+    // Find in Timeline: scroll the found feature into the history on this frame (#5850).
+    let reveal = app.tree.timeline_reveal.take();
     let first_indices: std::collections::BTreeMap<u64, Option<usize>> =
         groups.iter().map(|group| (group.id, group_first_feature(&groups, &features, group.id))).collect();
     let end_indices: std::collections::BTreeMap<u64, usize> = groups
@@ -999,6 +1016,9 @@ fn vertical_features(app: &mut SolveApp, ui: &mut egui::Ui, names: bool) {
             row
         };
         crate::scenario::publish_rect(&format!("history:feature:{name}"), rect);
+        if reveal == Some(*id) {
+            ui.scroll_to_rect(rect, Some(egui::Align::Center));
+        }
         let fold_rect = Rect::from_min_size(rect.left_top() + vec2(indent, 0.0), vec2(16.0, rect.height()));
         let on_fold = has_patterns && response.interact_pointer_pos().is_some_and(|p| fold_rect.contains(p));
         crate::scenario::publish_handle(&format!("timeline:{name}"), rect.center());
@@ -1652,6 +1672,27 @@ mod tests {
             assert_eq!(harness.app.viewport.rect.unwrap().left(), 0.0);
             assert!(handle_at("left-browser-rail").is_some(), "both card and sidebar resize");
         }
+    }
+
+    #[test]
+    fn find_in_timeline_opens_the_collapsed_folders_around_the_feature() {
+        let mut harness = Harness::new();
+        harness.app.preferences.timeline_left = true;
+        harness.app.run("solid.box", json!({"length": 20, "width": 15, "height": 10, "name": "Base", "body_name": "Plate"})).unwrap();
+        let inner = harness.app.run("timeline.group", json!({"name": "Inner", "features": ["Base"]})).unwrap()["group"].as_u64().unwrap();
+        let outer = harness.app.run("timeline.group", json!({"name": "Outer", "groups": [inner]})).unwrap()["group"].as_u64().unwrap();
+        harness.app.tree.collapsed.insert(format!("timeline_group:{inner}"));
+        harness.app.tree.collapsed.insert(format!("timeline_group:{outer}"));
+        harness.frames(4);
+        assert!(handle_at("timeline:Base").is_none(), "the feature starts hidden in its folders");
+
+        let menu = crate::context_menu::items(&harness.app, &crate::context_menu::Target::Body { name: "Plate".into() });
+        let item = menu.into_iter().find(|item| item.id == "ui.findTimeline").unwrap();
+        crate::context_menu::run_item(&mut harness.app, &item, pos2(0.0, 0.0));
+        harness.frames(4);
+        assert!(handle_at("timeline:Base").is_some(), "Find in Timeline must open the folders holding the feature");
+        let base = harness.app.session.doc.find_feature("Base").unwrap().id;
+        assert_eq!(harness.app.session.selection, vec![solidcraft_engine::Sel::Feature { id: base }]);
     }
 
     #[test]

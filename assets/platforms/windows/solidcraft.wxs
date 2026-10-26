@@ -8,7 +8,7 @@
 
   Per-machine install with a setup wizard: Welcome, install folder (Program Files\SolidCraft by
   default, remembered for upgrades), Ready, progress, and a Finish page with a ticked "Launch
-  SolidCraft" box. Installs a Start Menu shortcut, solidcraft-cli, the licence files (including
+  SolidCraft" box. Installs a Start Menu shortcut, solidcraft-cli (and adds its folder to the system PATH), the licence files (including
   THIRD-PARTY-LICENSES.txt), makes SolidCraft the owner of `.solidcraft` (and of the pre-rename `.solvecraft`), and offers it under
   "Open with" for STEP, IGES, 3MF and STL. `msiexec /qn` installs silently.
   Adapted from PhotoCraft's (storytold/photocraft, Apache-2.0; see ATTRIBUTION.md).
@@ -122,6 +122,9 @@
 
       <Component Id="SolidcraftCli">
         <File Id="SolidcraftCliExe" Source="$(var.BinDir)\solidcraft-cli.exe" KeyPath="yes" />
+        <!-- The install folder on the system PATH, so MCP clients and shells find `solidcraft-cli` by name;
+             removed again on uninstall. -->
+        <Environment Id="SolidcraftPath" Name="PATH" Value="[INSTALLFOLDER]" Action="set" Part="last" System="yes" Permanent="no" />
       </Component>
       <!-- Compatibility shim (docs/compatibility.md): the old CLI name, forwarding to solidcraft-cli. -->
       <Component Id="SolidcraftCliAlias">

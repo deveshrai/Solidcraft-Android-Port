@@ -124,6 +124,32 @@ fn an_explicit_reverse_keeps_the_operation() {
     assert_eq!(state(&h), (1, JOIN, false));
 }
 
+/// A Cut latched for a drag into the box gives way once the extrude starts from the bottom
+/// face: from there the same distance goes out of the box, so it joins (#467).
+#[test]
+fn a_new_start_object_decides_the_operation_again() {
+    let mut h = box_with_top_extrude(false);
+    drag_to(&mut h, 5.0);
+    assert_eq!(state(&h), (0, CUT, true), "into the box: Cut");
+    // Start: From Object, the box's bottom face (as the Start choice and a pick there make it).
+    let st = h.app.session.world_state();
+    let b = st.bodies.first().expect("the box");
+    let bottom =
+        (0..64).find(|i| b.body.planar_face(*i).is_some_and(|p| p.normal().z < -0.99 && p.origin.z.abs() < 1e-9)).expect("the box's bottom face");
+    let face = solidcraft_engine::Sel::Face { body: b.name.clone(), index: bottom, point: solidcraft_engine::geom::Vec3::new(10.0, 10.0, 0.0) };
+    if let Some(d) = &mut h.app.dialog {
+        let mut from = crate::selection::SelInput::new("From Object", crate::selection::FACES | crate::selection::VERTICES, false);
+        from.items.push(face);
+        d.inputs.push(from);
+    }
+    h.frames(2);
+    assert_eq!(h.app.dialog.as_ref().unwrap().inputs.last().unwrap().items.len(), 1, "the bottom face is the start");
+    assert_eq!(state(&h), (0, JOIN, true), "from the bottom face, 5 mm down: Join");
+    h.step(&json!({"key":"Enter"})).unwrap();
+    assert!(h.app.dialog.is_none());
+    assert!((volume(&h) - (4000.0 + 500.0)).abs() < 1e-6, "a 10 x 10 x 5 block under the box: {}", volume(&h));
+}
+
 /// Press Pull on a hole's wall shows an arrow along the wall's normal: dragged 2 mm towards the
 /// axis, the 5 mm hole closes to 3 mm (#2873).
 #[test]
@@ -150,4 +176,70 @@ fn press_pull_drags_a_hole_wall() {
     assert!(h.app.dialog.is_none());
     let v = volume(&h);
     assert!((v - (24000.0 - std::f64::consts::PI * 9.0 * 20.0)).abs() / v < 5e-4, "{v}");
+}
+
+/// Pressing on a top face and pulling it up extrudes it by the distance dragged, without any
+/// tool being started; letting go leaves the window open until OK.
+#[test]
+fn pulling_a_face_up_extrudes_it() {
+    let mut h = Harness::new();
+    h.app.preferences.direct_interaction = true;
+    h.app.run("solid.box", json!({"length":20,"width":20,"height":10,"corner":[0,0,0]})).unwrap();
+    h.step(&json!({"call":"ui.view","params":{"view":"home"}})).unwrap();
+    h.step(&json!({"call":"ui.view","params":{"view":"fit"}})).unwrap();
+    h.settle();
+    h.step(&json!({"drag":[{"world":[10,10,10]},{"world":[10,10,20]}]})).unwrap();
+    h.frames(4);
+    assert!(h.app.dialog.is_some(), "the window stays open after the release");
+    assert_eq!(state(&h), (0, JOIN, true), "pulled out: Join");
+    h.step(&json!({"key":"Enter"})).unwrap();
+    assert!(h.app.dialog.is_none(), "OK applied the extrude");
+    let (lo, hi) = bounds_z(&h);
+    assert!(lo.abs() < 1e-6 && hi > 10.5, "the box grew upward: z {lo}..{hi}");
+}
+
+/// Direct interaction is a setting, off until someone turns it on: a pull then does nothing.
+#[test]
+fn direct_interaction_is_off_until_the_setting_is_on() {
+    let mut h = Harness::new();
+    assert!(!h.app.preferences.direct_interaction);
+    h.app.run("solid.box", json!({"length":20,"width":20,"height":10,"corner":[0,0,0]})).unwrap();
+    h.step(&json!({"call":"ui.view","params":{"view":"home"}})).unwrap();
+    h.step(&json!({"call":"ui.view","params":{"view":"fit"}})).unwrap();
+    h.settle();
+    let before = volume(&h);
+    h.step(&json!({"drag":[{"world":[10,10,10]},{"world":[10,10,20]}]})).unwrap();
+    h.frames(4);
+    assert!(h.app.dialog.is_none(), "no extrude window");
+    assert!((volume(&h) - before).abs() < 1e-6);
+}
+
+/// A press on a face that moves sideways is still a box selection: nothing is extruded.
+#[test]
+fn dragging_sideways_over_a_face_does_not_extrude() {
+    let mut h = Harness::new();
+    h.app.preferences.direct_interaction = true;
+    h.app.run("solid.box", json!({"length":20,"width":20,"height":10,"corner":[0,0,0]})).unwrap();
+    h.step(&json!({"call":"ui.view","params":{"view":"home"}})).unwrap();
+    h.step(&json!({"call":"ui.view","params":{"view":"fit"}})).unwrap();
+    h.settle();
+    let before = volume(&h);
+    h.step(&json!({"drag":[{"world":[10,10,10]},{"world":[18,10,10]}]})).unwrap();
+    h.frames(4);
+    assert!(h.app.dialog.is_none());
+    assert!((volume(&h) - before).abs() < 1e-6);
+}
+
+/// Pulling a face down into the body cuts, and the window waits for OK as well.
+#[test]
+fn pulling_a_face_down_into_the_body_cuts() {
+    let mut h = Harness::new();
+    h.app.preferences.direct_interaction = true;
+    h.app.run("solid.box", json!({"length":20,"width":20,"height":10,"corner":[0,0,0]})).unwrap();
+    h.step(&json!({"call":"ui.view","params":{"view":"home"}})).unwrap();
+    h.step(&json!({"call":"ui.view","params":{"view":"fit"}})).unwrap();
+    h.settle();
+    h.step(&json!({"drag":[{"world":[10,10,10]},{"world":[10,10,5]}]})).unwrap();
+    h.frames(4);
+    assert_eq!(state(&h).1, CUT, "pushed into the box: Cut");
 }

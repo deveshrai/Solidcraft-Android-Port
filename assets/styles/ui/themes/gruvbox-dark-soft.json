@@ -12,6 +12,7 @@
     "text_dim": "#a89984",
     "accent": "#83a598",
     "accent_soft": "#4e5954",
+    "selected_ink": "#ebdbb2",
     "sketch_accent": "#a1a322",
     "error": "#fb4934",
     "warning": "#fabd2f",
@@ -53,6 +54,7 @@
     "body_selected": "#83a598",
     "sketch": "#83a598",
     "sketch_fixed": "#ebdbb2",
+    "sketch_halo": "#1d2021",
     "sketch_locked": "#b8bb26",
     "dimension": "#ebdbb2",
     "dimension_driven": "#928374",
@@ -83,16 +85,6 @@
     "bend_up": "#b8bb26",
     "bend_down": "#fe8019",
     "interference": "#fb4934",
-    "triad": [
-      "#fb4934",
-      "#b8bb26",
-      "#83a598"
-    ],
-    "gizmo": [
-      "#fb4934",
-      "#b8bb26",
-      "#83a598"
-    ],
     "icons.agent": "#d3869b",
     "surface_fill": "#fe9755",
     "surface_soft": "#4a3a2c",

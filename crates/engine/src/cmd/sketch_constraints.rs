@@ -218,13 +218,13 @@ fn run_auto(sk: &mut Sketch, doc: &mut solidcraft_doc::Document, p: &Value, datu
         }
     }
     if dims {
+        // Construction curves have degrees of freedom too: locating a circle's centre
+        // does not constrain its radius. Dimension them just like profile curves.
         for i in 0..nc {
-            let k = match sk.curves.get(i).map(|c| (c.kind.clone(), c.construction)) {
-                Some((CurveKind::Circle { r, .. }, false)) => Diameter { c: i, value: 2.0 * r },
-                Some((CurveKind::Arc { .. }, false)) => Radius { c: i, value: sk.radius(i).unwrap_or(1.0) },
-                Some((CurveKind::Line { a, b }, false)) => {
-                    Length { l: i, value: sk.point(a).zip(sk.point(b)).map(|(x, y)| x.dist(y)).unwrap_or(1.0) }
-                }
+            let k = match sk.curves.get(i).map(|c| c.kind.clone()) {
+                Some(CurveKind::Circle { r, .. }) => Diameter { c: i, value: 2.0 * r },
+                Some(CurveKind::Arc { .. }) => Radius { c: i, value: sk.radius(i).unwrap_or(1.0) },
+                Some(CurveKind::Line { a, b }) => Length { l: i, value: sk.point(a).zip(sk.point(b)).map(|(x, y)| x.dist(y)).unwrap_or(1.0) },
                 _ => continue,
             };
             attempt(sk, doc, k, true, &mut dof);
@@ -450,6 +450,8 @@ fn anchor(sk: &Sketch, k: &ConstraintKind) -> Option<Vec2> {
         Distance { p, q, .. } | DistanceX { p, q, .. } | DistanceY { p, q, .. } => Some((pt(p)? + pt(q)?) * 0.5),
         PointLineDistance { p, .. } | LinearDiameter { p, .. } => pt(p),
         LineCircleDistance { c, .. } => sk.center(c),
+        PointCircleDistance { p, .. } => pt(p),
+        CircleCircleDistance { a, b, .. } => Some((sk.center(a)? + sk.center(b)?) * 0.5),
         Length { l, .. } | LineAngle { l, .. } => mid(l),
         Radius { c, .. } | Diameter { c, .. } | ArcLength { c, .. } | ArcSweep { c, .. } => mid(c),
         SlotOverallLength { a, b, .. } => Some((sk.center(a)? + sk.center(b)?) * 0.5),

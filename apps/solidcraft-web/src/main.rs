@@ -14,6 +14,8 @@ mod disk;
 mod files;
 #[cfg(target_arch = "wasm32")]
 mod install;
+#[cfg(target_arch = "wasm32")]
+mod linked;
 #[cfg(any(target_arch = "wasm32", test))]
 mod space_mouse;
 
@@ -23,6 +25,61 @@ mod space_mouse;
 #[cfg(any(target_arch = "wasm32", test))]
 fn browser_switches_tabs(key: &str, ctrl: bool) -> bool {
     ctrl && key == "Tab"
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn query_flag(query: &str, name: &str) -> bool {
+    url::form_urlencoded::parse(query.trim_start_matches('?').as_bytes()).any(|(key, _)| key == name)
+}
+
+/// Launch options use exact query keys; URL values are decoded only once.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Default, Debug)]
+struct Launch {
+    open: Option<String>,
+    embed: bool,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl Launch {
+    fn parse(query: &str) -> Self {
+        let mut launch = Self::default();
+        let mut embed = false;
+        for (key, value) in url::form_urlencoded::parse(query.trim_start_matches('?').as_bytes()) {
+            match key.as_ref() {
+                "open" if launch.open.is_none() => launch.open = Some(value.into_owned()),
+                "embed" => embed = true,
+                _ => {}
+            }
+        }
+        launch.embed = embed && launch.open.is_some();
+        launch
+    }
+
+    fn persists(&self) -> bool {
+        !self.embed
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn design_url(value: &str) -> Result<url::Url, String> {
+    if value.len() > 16_384 {
+        return Err("Design URL is too long".into());
+    }
+    let url = url::Url::parse(value).map_err(|_| "Invalid design URL")?;
+    if url.scheme() != "https" || url.host_str().is_none() || !url.username().is_empty() || url.password().is_some() {
+        return Err("Design links must use HTTPS without credentials".into());
+    }
+    Ok(url)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn check_download_size(current: usize, incoming: u64) -> Result<(), String> {
+    let cap = solidcraft_engine::io::MAX_DESIGN_BYTES as u64;
+    if current as u64 > cap || incoming > cap.saturating_sub(current as u64) {
+        return Err(format!("Design exceeds the {} MB size limit", cap / (1024 * 1024)));
+    }
+    Ok(())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -112,6 +169,9 @@ mod web {
 
     struct Shell {
         app: SolveApp,
+        launch: crate::Launch,
+        linked: crate::linked::Download,
+        full_url: Option<String>,
         api: Api,
         files: Rc<Files>,
         /// When the last autosave was (seconds), and the revision it holds (none stored: `None`).
@@ -137,6 +197,9 @@ mod web {
     impl Shell {
         /// Files from the computer, writes to store, messages and the autosave.
         fn files_tick(&mut self, ctx: &egui::Context) {
+            if !self.launch.persists() {
+                return;
+            }
             if self.files.ctx.borrow().is_none() {
                 *self.files.ctx.borrow_mut() = Some(ctx.clone());
             }
@@ -230,13 +293,15 @@ mod web {
         fn sync_recents(&mut self) {
             let mut entries = self.files.entries.borrow().clone();
             entries.sort_by(|a, b| b.modified.total_cmp(&a.modified));
+            let forgotten = self.app.home.forgotten.clone();
             let recent = &mut self.app.home.recent;
             let known = self.files.disk_known.borrow().clone();
             // A design on the computer's disk stays listed while its file is remembered.
             recent.retain(|p| vfs::exists(p) || disk::parse(p).is_some_and(|(id, _)| known.contains(id)));
             for e in entries.iter().filter(|e| solidcraft_engine::io::is_design_path(&e.name)) {
                 let p = format!("{}{}", files::OPFS, e.name);
-                if !recent.contains(&p) {
+                // A design the user removed from the list is not added back while it is stored.
+                if !recent.contains(&p) && !forgotten.contains(&p) {
                     recent.push(p);
                 }
             }
@@ -245,6 +310,10 @@ mod web {
             let recovered = self.files.recovery.borrow().as_ref().and_then(|(_, p)| p.clone());
             let keep = recent.iter().chain(recovered.as_ref()).filter_map(|p| disk::parse(p)).map(|(id, _)| id.to_string()).collect();
             disk::prune(keep);
+            // Drop forgotten entries whose stored design is gone, so the set does not grow without bound.
+            let stored: std::collections::BTreeSet<String> =
+                entries.iter().filter(|e| solidcraft_engine::io::is_design_path(&e.name)).map(|e| format!("{}{}", files::OPFS, e.name)).collect();
+            self.app.home.forgotten.retain(|p| stored.contains(p));
         }
 
         /// The stored designs: open, insert, rename, delete, download; open from the computer.
@@ -383,6 +452,8 @@ mod web {
                 "delete" => {
                     files::delete(&self.files, &name);
                     self.app.home.recent.retain(|r| *r != path);
+                    // The file is gone, so there is nothing left to keep forgotten.
+                    self.app.home.forgotten.remove(&path);
                 }
                 "rename_cancel" => self.renaming = None,
                 "rename" => {
@@ -395,6 +466,10 @@ mod web {
                                     if *r == old {
                                         *r = new.clone();
                                     }
+                                }
+                                // A forgotten design follows its new name.
+                                if self.app.home.forgotten.remove(&old) {
+                                    self.app.home.forgotten.insert(new);
                                 }
                             }
                             Err(e) => self.app.set_status(e, true),
@@ -514,19 +589,42 @@ mod web {
             if let Some(delay) = self.wheel_gestures.update(raw, now) {
                 ctx.request_repaint_after(delay);
             }
-            files::take_drops(&self.files, raw);
+            if self.launch.persists() {
+                files::take_drops(&self.files, raw);
+            } else {
+                raw.dropped_files.clear();
+            }
             // Before the app's own hook, which adds the control channel's events.
             self.space_mouse.raw_input_hook(ctx, self.app.preferences.space_mouse_enabled, raw);
             self.app.raw_input_hook(raw);
         }
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+            self.linked.tick(&mut self.app, ui.ctx());
+            UNSAVED.with(|u| u.set(self.launch.persists() && solidcraft_ui_egui::documents::any_dirty(&self.app)));
+            if self.launch.embed {
+                ui_kit::Container::new(ui.ctx(), ui_kit::Surface::Chrome).edge("embed_header", ui_kit::Edge::Top).show(ui, |ui| {
+                    if ui_kit::button(ui, solidcraft_ui_egui::i18n::tr("web.open_full"), ui_kit::Button::Normal).clicked()
+                        && let (Some(window), Some(url)) = (web_sys::window(), &self.full_url)
+                    {
+                        let _ = window.open_with_url_and_target_and_features(url, "_blank", "noopener");
+                    }
+                });
+            }
             self.app.ui(ui);
             let ctx = ui.ctx().clone();
-            self.file_panel(&ctx);
-            self.recovery_prompt(&ctx);
+            if self.launch.persists() {
+                self.file_panel(&ctx);
+                self.recovery_prompt(&ctx);
+            }
             self.watch_text_for_font(&ctx);
         }
+        fn persist_egui_memory(&self) -> bool {
+            self.launch.persists()
+        }
         fn save(&mut self, storage: &mut dyn eframe::Storage) {
+            if !self.launch.persists() {
+                return;
+            }
             // Persist the user's own language, not a session-only English fallback.
             let saved = self.font.persisted_language(&self.app.preferences.language).to_owned();
             let live = std::mem::replace(&mut self.app.preferences.language, saved);
@@ -545,15 +643,15 @@ mod web {
 
     /// Render with WebGL2: asked for now (`?webgl`, remembered) or before (until `?webgpu`).
     fn webgl() -> bool {
-        let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten());
+        let storage = crate::Launch::parse(&query()).persists().then(|| web_sys::window().and_then(|w| w.local_storage().ok().flatten())).flatten();
         let q = query();
-        if q.contains("webgl") {
+        if crate::query_flag(&q, "webgl") {
             if let Some(s) = &storage {
                 let _ = s.set_item(WEBGL_KEY, "1");
             }
             return true;
         }
-        if q.contains("webgpu") {
+        if crate::query_flag(&q, "webgpu") {
             if let Some(s) = &storage {
                 let _ = s.remove_item(WEBGL_KEY);
             }
@@ -579,7 +677,10 @@ mod web {
         eframe::WebLogger::init(log::LevelFilter::Info).ok();
         wasm_bindgen_futures::spawn_local(async {
             let Some(window) = web_sys::window() else { return };
-            ask_before_unload(&window);
+            let launch = crate::Launch::parse(&query());
+            if launch.persists() {
+                ask_before_unload(&window);
+            }
             leave_tab_switching_to_browser(&window);
             let Some(document) = window.document() else { return };
             let Some(canvas) = document.get_element_by_id(CANVAS_ID).and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok()) else {
@@ -599,10 +700,12 @@ mod web {
                     Box::new(move |cc| {
                         solidcraft_ui_egui::fonts::setup_fonts(&cc.egui_ctx);
                         let files = Rc::new(Files::default());
-                        files::start(&files);
+                        if launch.persists() {
+                            files::start(&files);
+                        }
                         let (panel, opener, saver, shown) = (files.clone(), files.clone(), files.clone(), files.clone());
                         let (restorable, restorer) = (files.clone(), files.clone());
-                        let services = Services {
+                        let services = if launch.embed { Services::default() } else { Services {
                             // Open shows the browser's open dialog for a design where it has one
                             // (the file keeps its handle, so Save writes back to it); otherwise,
                             // and for inserting STEP or meshes, the browser's files window.
@@ -636,26 +739,27 @@ mod web {
                             browser_files: Some(Box::new(move || shown.panel.set(true))),
                             install_app: Some(crate::install::service(&cc.egui_ctx)),
                             ..Default::default()
-                        };
+                        }};
                         // Thumbnails of saves and start-page cards.
                         solidcraft_ui_egui::gpu::install_cpu_picture_renderer();
                         let (sender, receiver) = std::sync::mpsc::channel();
                         let mut app = SolveApp::new(Session::default(), services).with_control(receiver);
-                        if let Some(p) = cc.storage.and_then(|s| solidcraft_ui_egui::prefs::stored(|k| s.get_string(k))) {
+                        app.embedded = launch.embed;
+                        if launch.persists() && let Some(p) = cc.storage.and_then(|s| solidcraft_ui_egui::prefs::stored(|k| s.get_string(k))) {
                             app.load_prefs(&p);
                         }
                         if let Some(rs) = &cc.wgpu_render_state {
                             // eframe's web painter has no stencil buffer.
                             app.set_wgpu(rs, DEPTH_BITS, 0, 1);
                         }
-                        if query().contains("sample") {
+                        if launch.open.is_none() && crate::query_flag(&query(), "sample") {
                             if let Err(e) = app.session.run_script(&solidcraft_engine::sample::script()) {
                                 app.set_status(format!("sample: {e}"), true);
                             }
                             app.session.doc_mut().name = "Sample Plate".into();
                             app.session.mark_saved();
                         }
-                        if !query().contains("sample") {
+                        if launch.open.is_none() && !crate::query_flag(&query(), "sample") {
                             // The empty design takes Units of new designs (#1205). The sample
                             // part is built in millimetres and is left that way.
                             solidcraft_ui_egui::prefs::apply_new_design(&mut app);
@@ -664,8 +768,20 @@ mod web {
                         }
                         let api = Api::install(sender, cc.egui_ctx.clone()).map_err(|e| format!("SolidCraft browser API: {e:?}"))?;
                         let font_language = app.preferences.language.clone();
+                        let linked = crate::linked::Download::start(launch.open.as_deref(), &cc.egui_ctx);
+                        let full_url = window.location().href().ok().and_then(|value| url::Url::parse(&value).ok()).map(|mut url| {
+                            url.set_query(None);
+                            url.set_fragment(None);
+                            if let Some(open) = &launch.open {
+                                url.query_pairs_mut().append_pair("open", open);
+                            }
+                            url.to_string()
+                        });
                         Ok(Box::new(Shell {
                             app,
+                            launch,
+                            linked,
+                            full_url,
                             api,
                             files,
                             autosaved_at: f64::NEG_INFINITY,
@@ -708,6 +824,48 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_query_decodes_once_and_embed_disables_persistence() {
+        assert!(!query_flag("?open=https://example.org/webgl?sample", "webgl"));
+        assert!(!query_flag("?open=https://example.org/webgl?sample", "sample"));
+        assert!(query_flag("?embed&webgl", "webgl"));
+        let launch = Launch::parse("?embed&open=https%3A%2F%2Fexample.org%2Farm.solidcraft%3Fx%3Da%2520b%26y%3D1");
+        assert_eq!(launch.open.as_deref(), Some("https://example.org/arm.solidcraft?x=a%20b&y=1"));
+        assert!(launch.embed);
+        assert!(!launch.persists());
+        assert!(!Launch::parse("?embed").embed);
+        assert!(!Launch::parse("?other=embed&reopen=https://example.org").embed);
+        assert!(Launch::parse("?open=https://example.org/a").persists());
+        assert_eq!(Launch::parse("?open=first&open=second").open.as_deref(), Some("first"));
+    }
+
+    #[test]
+    fn design_links_refuse_hostile_schemes_credentials_and_sizes() {
+        assert!(design_url("https://example.org/arm.solidcraft?download=1").is_ok());
+        for value in [
+            "http://example.org/a",
+            "data:application/json,{}",
+            "blob:https://example.org/a",
+            "javascript:alert(1)",
+            "/arm.solidcraft",
+            "https://user:secret@example.org/a",
+            "",
+        ] {
+            assert!(design_url(value).is_err(), "{value}");
+        }
+        assert!(design_url(&format!("https://example.org/{}", "x".repeat(16_384))).is_err());
+        assert!(design_url("http://redirect.example.org/a").is_err());
+
+        let cap = solidcraft_engine::io::MAX_DESIGN_BYTES;
+        assert!(check_download_size(0, cap as u64).is_ok());
+        assert!(check_download_size(0, cap as u64 + 1).is_err());
+        assert!(check_download_size(cap - 2, 2).is_ok());
+        assert!(check_download_size(cap - 2, 3).is_err());
+        assert!(check_download_size(0, u64::MAX).is_err());
+        assert!(check_download_size(cap, 1).is_err());
+        assert!(check_download_size(usize::MAX, 0).is_err());
+    }
 
     #[test]
     fn only_ctrl_tab_is_left_to_the_browser() {

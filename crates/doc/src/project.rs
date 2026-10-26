@@ -572,6 +572,32 @@ pub fn refresh_links(doc: &Document, vals: &BTreeMap<String, Value>, st: &ModelS
     refresh_links_in(doc, vals, st, plane, sk, None)
 }
 
+/// Lay every text that runs along a curve of its sketch along that curve as the solve left it.
+/// The texts are laid out with the other links, before the solve, which can move their path (a
+/// path dimensioned from a parameter): without this a text followed its path one evaluation
+/// late. The warnings for texts that no longer lay out.
+pub(crate) fn relay_path_texts(sk: &mut Sketch) -> Vec<String> {
+    let texts: Vec<(String, LinkSource)> = sk
+        .links
+        .iter()
+        .filter(|l| !l.lost && matches!(&l.source, LinkSource::Text { style, .. } if style.path.is_some()))
+        .map(|l| (l.id.clone(), l.source.clone()))
+        .collect();
+    let mut warn = Vec::new();
+    for (id, source) in texts {
+        match sk.text_source_geometry(&source) {
+            Ok(geom) if geom.is_empty() => warn.push(format!("the {} makes no outline", source.describe())),
+            Ok(geom) => {
+                if let Err(e) = sk.update_link(&id, &geom) {
+                    warn.push(format!("{}: {e}", source.describe()));
+                }
+            }
+            Err(e) => warn.push(format!("{}: {e}", source.describe())),
+        }
+    }
+    warn
+}
+
 fn refresh_links_in(
     doc: &Document,
     vals: &BTreeMap<String, Value>,
@@ -662,7 +688,11 @@ fn refresh_links_in(
                 }
                 sk.set_link_source(&l.id, r.source);
                 let _ = sk.set_link_wires(&l.id, &r.wires);
+                // Words built from text parameters change shape when the parameters do: that
+                // rebuild is the text following them, not a reference that changed under it.
+                let words_follow = matches!(&l.source, LinkSource::Text { exprs, .. } if exprs.text.is_some());
                 match sk.update_link(&l.id, &r.geom) {
+                    Ok(true) if words_follow => {}
                     Ok(true) => warn.push(format!("projected {} changed shape and was rebuilt", l.source.describe())),
                     Ok(false) if r.moved => warn.push(format!("projected {} was re-found on the nearest geometry", l.source.describe())),
                     Ok(false) => {}

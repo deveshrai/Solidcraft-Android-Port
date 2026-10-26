@@ -18,6 +18,7 @@
 //! solidcraft-cli mcp [--headless] [--in design|script] [--connect HOST:PORT [--token T]] [--allow-path DIR]... [--allow-any-path]
 //!                    [--param-check off|warn|strict]
 //!                                                             MCP server on stdio (docs/mcp.md)
+//! solidcraft-cli mcp setup [--dry-run] [--client NAME] [--live] (alias: mcp install) add it to OpenCode, Claude Desktop, Claude Code, Cursor
 //! solidcraft-cli licences                                     SolidCraft's licence and the third-party licences
 //! solidcraft-cli icon --out F.png|F.ico [--size N]             the app icon (packaging; drawn, not a file)
 //!
@@ -82,7 +83,7 @@ const USAGE_ORACLE: &str = "  solidcraft-cli oracle <case-dir>... [--json]\n";
 const USAGE_FUZZ: &str =
     "  solidcraft-cli fuzz [--from N] [--count N] [--jobs J] [--timeout S] [--steps N] [--minimise] [--out DIR] [--report FILE]\n";
 /// `mcp`'s lines in the usage.
-const USAGE_MCP: &str = "  solidcraft-cli mcp [--headless] [--in design.solidcraft|script.json] [--connect 127.0.0.1:PORT [--token T]] [--allow-path DIR]... [--allow-any-path]\n                     [--param-check off|warn|strict] [--render-gpu]\n";
+const USAGE_MCP: &str = "  solidcraft-cli mcp [--headless] [--in design.solidcraft|script.json] [--connect 127.0.0.1:PORT [--token T]] [--allow-path DIR]... [--allow-any-path]\n                     [--param-check off|warn|strict] [--render-gpu]\n  solidcraft-cli mcp setup [--dry-run] [--client opencode|claude-desktop|claude-code|cursor] [--live]\n      (adds a `solidcraft` server, with this program's path, to each installed AI client; --live adds `solidcraft-live` for the running app; alias: mcp install)\n";
 /// `crashes`'s lines in the usage.
 const USAGE_CRASHES: &str = "  solidcraft-cli crashes [list [--json] | show <id> | replay <id> | dir | clear [<id>]]\n";
 /// `licences`'s lines in the usage.
@@ -625,10 +626,23 @@ fn cmd_exec(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// `mcp setup`: add the server to each installed AI client, with this program's own path.
+fn cmd_mcp_setup(args: &[String]) -> Result<(), String> {
+    use solidcraft_engine::agent_setup as setup;
+    let (lines, ok) = setup::setup(args, &setup::Env::from_process(), &setup::current_exe()?)?;
+    for l in lines {
+        println!("{l}");
+    }
+    if ok { Ok(()) } else { Err("mcp setup: some clients could not be configured".into()) }
+}
+
 /// MCP server on stdio: headless (optionally starting from a design or script) or bridged to
 /// a running app's control port. stdout carries only protocol messages. Files the agent's tool
 /// calls reach are confined to `solidcraft_mcp::agent_scope` unless `--allow-any-path` is given.
 fn cmd_mcp(args: &[String]) -> Result<(), String> {
+    if matches!(args.first().map(String::as_str), Some("setup" | "install")) {
+        return cmd_mcp_setup(&args[1..]);
+    }
     let render_gpu = args.iter().any(|arg| arg == "--render-gpu");
     if render_gpu && flag(args, "--connect").is_some() {
         return Err("mcp: --render-gpu installs a headless image host; a connected application owns its own device".into());
@@ -684,9 +698,8 @@ fn cmd_mcp(args: &[String]) -> Result<(), String> {
             Box::new(headless)
         }
         (None, None) => {
-            if !args.iter().any(|a| a == "--headless")
-                && let Some(port) = discover_app()
-            {
+            let auto = !args.iter().any(|a| a == "--headless");
+            if auto && let Some(port) = discover_app() {
                 eprintln!("solidcraft mcp: bridged to the running app at 127.0.0.1:{port} (--headless starts a session of its own)");
                 return serve_mcp(Box::new(solidcraft_mcp::Remote::new(&format!("127.0.0.1:{port}"), flag(args, "--token"))), scope);
             }
@@ -695,7 +708,12 @@ fn cmd_mcp(args: &[String]) -> Result<(), String> {
             if render_gpu {
                 headless.session.register_render_job_host(solidcraft_gpu::path::host().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
             }
-            Box::new(headless)
+            if auto {
+                // The app may start after the agent: look for it again until there is work here.
+                Box::new(solidcraft_mcp::Auto::new(headless, Box::new(discover_app), flag(args, "--token")))
+            } else {
+                Box::new(headless)
+            }
         }
     };
     serve_mcp(backend, scope)

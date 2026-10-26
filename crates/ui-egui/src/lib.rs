@@ -12,11 +12,13 @@ use crate::ui_kit::{Container, Surface};
 pub mod access;
 pub mod agent_chat;
 pub mod agent_cursor;
+pub mod ai_connect;
 pub mod bom_panel;
 pub mod browser;
 pub mod browser_canvas;
 pub mod browser_prompts;
 pub mod canvas;
+pub mod cli_link;
 #[cfg(test)]
 mod colour_tokens_tests;
 #[cfg(test)]
@@ -53,6 +55,7 @@ pub mod dim_view;
 #[cfg(test)]
 mod dimension_create_ui_tests;
 pub mod documents;
+pub mod drag_extrude;
 pub mod drag_snap;
 pub mod edit_clipboard;
 #[cfg(test)]
@@ -88,6 +91,7 @@ pub mod install;
 pub mod issue_report;
 pub mod joint_drag;
 pub mod keymap;
+mod length_input;
 mod linked_source;
 #[cfg(test)]
 mod loft_rails_dialog_tests;
@@ -173,6 +177,7 @@ mod fillet_spline_handle_tests;
 pub mod mouse_gesture;
 pub(crate) mod navigation;
 pub use navigation::WebWheelGestures;
+pub mod open_elsewhere;
 pub(crate) mod open_meshing;
 pub mod params_dialog;
 pub(crate) mod pick_index;
@@ -250,6 +255,7 @@ mod thin_extrude_tests;
 pub mod timeline;
 pub mod timeline_left;
 pub mod titlebar;
+pub mod tool_cursor;
 pub mod tool_modifiers;
 pub mod toolbar;
 pub mod toolbar_custom;
@@ -258,6 +264,8 @@ pub mod ui_kit;
 #[cfg(test)]
 mod ui_kit_guard_tests;
 pub mod update;
+mod value_step;
+pub mod view_pick;
 pub mod viewport;
 mod viewport_layout;
 pub mod workspace;
@@ -305,6 +313,9 @@ pub struct UiState {
     pub up_axis: solidcraft_engine::render::UpAxis,
     /// The agent cursor: shown, speed, follow camera (#35).
     pub agent_cursor: agent_cursor::Settings,
+    /// The running tool's icon rides beside the pointer in the viewport (View settings; off by
+    /// default).
+    pub tool_cursor: bool,
 }
 
 impl Default for UiState {
@@ -326,6 +337,7 @@ impl Default for UiState {
             ground_shadow: true,
             up_axis: Default::default(),
             agent_cursor: Default::default(),
+            tool_cursor: false,
         }
     }
 }
@@ -348,6 +360,8 @@ pub struct Services {
     pub graphics_path: Option<String>,
     /// Linux: the window system this run uses, `wayland` or `x11` (Preferences shows it, #3083).
     pub window_system: Option<&'static str>,
+    /// Adapter names and descriptive labels from the desktop renderer's chosen backends.
+    pub graphics_adapters: Vec<(String, String)>,
     /// HTTPS GET for the update check (`update`); None: never check (browser, tests).
     pub http_get: Option<update::HttpGet>,
     /// HTTPS download to a file, with progress, for one-click updates (`update::install`).
@@ -372,6 +386,8 @@ pub struct Services {
 }
 
 pub struct SolveApp {
+    /// Compact browser embed: retain model panels and joint controls without application chrome.
+    pub embedded: bool,
     pub session: Session,
     pub ui: UiState,
     pub(crate) shell: shell::State,
@@ -457,6 +473,12 @@ pub struct SolveApp {
     pub quit_requested: bool,
     /// Autosave into the recovery folder (the desktop app turns it on).
     pub autosave: Option<recovery_ui::Autosaves>,
+    /// Lock files next to the open designs (the desktop app turns them on; #5467).
+    pub locks: Option<open_elsewhere::Locks>,
+    /// Opens waiting for "this design is open elsewhere" to be answered, first asked first.
+    pub lock_prompts: Vec<open_elsewhere::LockPrompt>,
+    /// A Save waiting for "the file changed on disk" to be answered.
+    pub disk_prompt: bool,
     /// Designs left by crashed apps, offered for recovery.
     pub recoverable: Vec<solidcraft_engine::recovery::Entry>,
     /// The bodies of a just-opened Y-up file, offered to be stood up (`stand_up`).
@@ -504,7 +526,10 @@ pub struct SolveApp {
     pub agent: agent_cursor::AgentCursor,
     /// The agent chat panel (docs/design/in-app-agent-chat.md).
     pub agent_chat: agent_chat::AgentChat,
+    /// Making SolidCraft available to the AI apps installed here ([`ai_connect`]).
+    pub ai_connect: ai_connect::State,
     pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
+    shot_chat_turns: std::collections::HashMap<u64, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     queued_shots: Vec<(u64, f64, u32)>,
     shot_token: u64,
     styled: bool,
@@ -532,6 +557,15 @@ pub struct SolveApp {
     applied_ui_font: String,
     /// The fonts installed include the system's fallback faces.
     applied_system_fonts: bool,
+}
+
+impl Drop for SolveApp {
+    /// The Home pictures it started are drawn before it goes: one still on the GPU as the
+    /// process exits can crash the graphics driver.
+    fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        home::finish_pictures(&mut self.home, std::time::Duration::from_secs(10));
+    }
 }
 
 impl SolveApp {
@@ -595,6 +629,9 @@ impl SolveApp {
             status_undo: false,
             quit_requested: false,
             autosave: None,
+            locks: None,
+            lock_prompts: Vec::new(),
+            disk_prompt: false,
             recoverable: Vec::new(),
             stand_up: None,
             stand_up_occurrence: None,
@@ -614,17 +651,20 @@ impl SolveApp {
             synthetic_mods: egui::Modifiers::default(),
             control_rx: None,
             agent_chat: Default::default(),
+            ai_connect: Default::default(),
             control_held: Default::default(),
             control_job: None,
             control_answering: Vec::new(),
             agent: Default::default(),
             pending_shots: Vec::new(),
+            shot_chat_turns: Default::default(),
             queued_shots: Vec::new(),
             shot_token: 0,
             styled: false,
             fitted: false,
             pending_fit: None,
             flat_view: Default::default(),
+            embedded: false,
             home: home::HomeState::default(),
             space_mouse: Default::default(),
             file_load: file_load::FileLoad::default(),
@@ -676,7 +716,9 @@ impl SolveApp {
     }
 
     fn set_wgpu_targets(&mut self, rs: &egui_wgpu::RenderState, scene: crate::gpu::GpuTarget, window: crate::gpu::GpuTarget) {
-        self.viewport.gpu = Some(gpu::install(rs, scene, window, !self.cpu_meshing));
+        let (target, stats) = gpu::install(rs, scene, window, !self.cpu_meshing);
+        self.viewport.gpu = Some(target);
+        self.viewport.draw_stats = Some(stats);
         render_workspace::invalidate_scene(self);
         let (samples, has_depth) = self.viewport.gpu.map_or((1, false), |g| (g.samples.max(1), g.depth.is_some()));
         self.render_workspace.host = match render_workspace::host_executor(rs.device.limits().max_texture_dimension_2d, has_depth, samples) {
@@ -693,9 +735,11 @@ impl SolveApp {
             self.render_workspace.defer_path_host(key, move || solidcraft_gpu::path::host_on_adapter(&adapter).map_err(|e| e.to_string()));
         }
         render_workspace::sync_backend(self);
+        ai_connect::tick(self);
         self.msaa_supported = rs.msaa_supported.clone();
         let info = rs.adapter.get_info();
         self.help.gpu = Some(format!("{} ({:?}, {:?})", info.name.trim(), info.backend, info.device_type));
+        self.viewport.adapter = format!("{:?} · {}", info.backend, info.name);
     }
 
     /// Preferences kept between runs (JSON), for the host to store.
@@ -711,6 +755,7 @@ impl SolveApp {
             "browser_expanded": self.tree.expanded,
             "recent": self.home.recent,
             "recent_opened_at": self.home.opened_at,
+            "recent_forgotten": self.home.forgotten,
             "shortcut_box": self.sbox.prefs(),
             "shortcuts": self.keymap.prefs(),
             "toolbar": self.toolbar_custom.prefs(),
@@ -766,6 +811,7 @@ impl SolveApp {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(Value::as_str).take(home::MAX_RECENT).map(str::to_string).collect())
             .unwrap_or_default();
+        self.home.forgotten = keys("recent_forgotten");
         if let Some(s) = v.get("shortcut_box") {
             self.sbox.load(s);
         }
@@ -873,6 +919,7 @@ impl SolveApp {
     /// What follows a command's run, whether it ran here or on a worker (a save): its echo,
     /// the status line when it failed, what opening and saving update, and the toolbar tab.
     pub(crate) fn finish_command(&mut self, id: &str, r: &Result<Value, String>) {
+        let id = solidcraft_engine::find_command(id).map_or(id, |spec| spec.id);
         match r {
             Ok(v) => {
                 // Programmatic callers (the control channel, scripts) run outside a render
@@ -891,6 +938,7 @@ impl SolveApp {
                     prefs::apply_new_design(self);
                 }
                 if matches!(id, "file.new" | "doc.open" | "doc.recover") {
+                    documents::reset_chat(self);
                     render_workspace::reset_document(self);
                     dim_view::cancel();
                     self.menu.props = None;
@@ -932,9 +980,24 @@ impl SolveApp {
         true
     }
 
-    /// Start a command the way a toolbar click does: interactive tools and dialogs for commands
+    /// Start a command the way a toolbar click does: interactive tools, menus and dialogs for commands
     /// that have them, otherwise run it with defaults.
     pub fn start(&mut self, id: &str) {
+        self.start_at(id, None);
+    }
+
+    /// Start an interactive command with its menu anchored below the invoking button.
+    pub(crate) fn start_at(&mut self, id: &str, opener: Option<egui::Rect>) {
+        self.start_with_variant_memory(id, true, opener);
+    }
+
+    /// A dedicated toolbar button starts its exact tool without replacing the sketch family's
+    /// main button. Choosing a variant from a menu still uses `start` and remembers that choice.
+    pub(crate) fn start_pinned(&mut self, id: &str, opener: Option<egui::Rect>) {
+        self.start_with_variant_memory(id, false, opener);
+    }
+
+    fn start_with_variant_memory(&mut self, id: &str, remember_variant: bool, opener: Option<egui::Rect>) {
         if id == "ui.palette" {
             shortcut_box::open(self, None);
             return;
@@ -1027,6 +1090,12 @@ impl SolveApp {
             self.pick_open_command(id, json!({}), &[ext]);
             return;
         }
+        if id == "component.update_links" && !self.session.doc.links.is_empty() {
+            // Reading the linked designs again takes a while in a large assembly: off the window
+            // thread, the overlay naming the one being read (#5329).
+            let _ = file_load::begin_request(self, file_load::Request::new("", file_load::Kind::UpdateLinks));
+            return;
+        }
         if id == "component.insert_design" {
             // Another design becomes a linked component; a STEP or mesh file picked here is
             // inserted the way Insert STEP or Insert Mesh would (#1240).
@@ -1057,8 +1126,17 @@ impl SolveApp {
         if !sketch_tools::start_hook(self, id) {
             return;
         }
-        if solidcraft_engine::find_command(id).is_some_and(|c| c.info(&self.session).enabled) {
+        if remember_variant && solidcraft_engine::find_command(id).is_some_and(|c| c.info(&self.session).enabled) {
             self.preferences.sketch_variants.remember(id);
+        }
+        if id == "document.units" {
+            if let Some(rect) = opener {
+                context_menu::toggle_for(self, rect, rect.left_bottom(), context_menu::Target::Units);
+            } else {
+                let at = self.viewport.rect.map(|rect| rect.center()).unwrap_or(egui::pos2(300.0, 200.0));
+                context_menu::open_for(self, at, context_menu::Target::Units);
+            }
+            return;
         }
         if id == "parameters.change" {
             params_dialog::open(self);
@@ -1111,7 +1189,9 @@ impl SolveApp {
             self.last_command = Some((spec.id.to_string(), spec.label.to_string()));
         }
         if let Some(mut t) = tools::Tool::for_command(id) {
-            if let Some(params) = tools::constraint_preselection(id, &self.session.selection) {
+            let state = self.session.world_state();
+            let sketch = self.session.active_sketch.and_then(|s| state.sketch(s)).map(|ss| &ss.sketch);
+            if let Some(params) = tools::constraint_preselection(id, &self.session.selection, sketch) {
                 if self.run(id, params).is_ok() {
                     let _ = self.session.execute("select.clear", &json!({}));
                     self.set_status("Constraint applied", false);
@@ -1137,7 +1217,7 @@ impl SolveApp {
                     | "sketch.constraint.tangent"
                     | "sketch.constraint.concentric"
                     | "sketch.constraint.collinear"
-            ) && let [solidcraft_engine::Sel::SketchCurve { id: a }, solidcraft_engine::Sel::SketchCurve { id: b }] =
+            ) && let [solidcraft_engine::Sel::SketchCurve { id: a, .. }, solidcraft_engine::Sel::SketchCurve { id: b, .. }] =
                 self.session.selection.as_slice()
                 && a != b
             {
@@ -1154,7 +1234,7 @@ impl SolveApp {
                     .selection
                     .iter()
                     .filter_map(|s| match s {
-                        solidcraft_engine::Sel::SketchCurve { id } | solidcraft_engine::Sel::SketchPoint { id } => Some(id.clone()),
+                        solidcraft_engine::Sel::SketchCurve { id, .. } | solidcraft_engine::Sel::SketchPoint { id } => Some(id.clone()),
                         _ => None,
                     })
                     .take(2)
@@ -1190,11 +1270,8 @@ impl SolveApp {
             self.edit_sketch(id);
             return;
         }
-        if self.session.active_sketch.is_some() {
-            self.finish_sketch();
-        }
         let Some(idx) = self.session.doc.feature_index(id) else { return };
-        let marker = self.session.doc.marker;
+        let marker = self.finish_sketch_for_edit();
         self.tool = None;
         if dialogs::roll_marker(self, Some(idx)).is_err() {
             return;
@@ -1225,22 +1302,29 @@ impl SolveApp {
         if self.session.active_sketch == Some(id) {
             return;
         }
-        if self.session.active_sketch.is_some() {
-            self.finish_sketch();
-        }
+        let Some(idx) = self.session.doc.feature_index(id) else { return };
+        let marker = self.finish_sketch_for_edit();
         self.tool = None;
         self.dialog = None;
-        let Some(idx) = self.session.doc.feature_index(id) else { return };
-        let marker = self.session.doc.marker;
-        let rolled = marker != Some(idx + 1) && self.run("timeline.roll_to", json!({ "position": idx + 1 })).is_ok();
+        let rolled = self.session.doc.marker != Some(idx + 1) && self.run("timeline.roll_to", json!({ "position": idx + 1 })).is_ok();
         if self.run("sketch.edit", json!({ "sketch": id })).is_err() {
-            if rolled {
+            if rolled || marker != self.session.doc.marker {
                 self.restore_marker(marker);
             }
             return;
         }
-        self.pre_sketch_marker = rolled.then_some(marker);
+        self.pre_sketch_marker = (rolled || marker != self.session.doc.marker).then_some(marker);
         dialogs::look_at_sketch(self);
+    }
+
+    /// Pass the original marker to the next editor. Restoring it between editors could finish
+    /// in the background after the next rollback, moving the marker out from under that edit.
+    fn finish_sketch_for_edit(&mut self) -> Option<usize> {
+        let marker = self.pre_sketch_marker.take().unwrap_or(self.session.doc.marker);
+        if self.session.active_sketch.is_some() {
+            self.finish_sketch();
+        }
+        marker
     }
 
     /// Finish the active sketch: stop editing and restore the history marker Edit Sketch moved.
@@ -1324,7 +1408,7 @@ impl SolveApp {
     }
 
     pub fn set_status(&mut self, s: impl Into<String>, error: bool) {
-        let (text, at) = (s.into(), now_ms());
+        let (text, at) = (i18n::tr_diagnostic(&s.into()), now_ms());
         self.messages.push(&text, error, at);
         self.status = Some((text, at, error));
         self.status_undo = false;
@@ -1626,9 +1710,12 @@ impl SolveApp {
             if !keymap::capturing(self) {
                 expression_complete::begin_frame(ctx);
             }
-            toolbar::shortcuts(self, ctx);
+            if !self.embedded {
+                toolbar::shortcuts(self, ctx);
+            }
         }
         recovery_ui::tick(self);
+        open_elsewhere::tick(self, ctx);
         update::tick(self, ctx);
         if self.issue_report.draft.is_none() && self.file_picker.is_none() {
             // Files dropped on the agent chat attach to its next message instead.
@@ -1688,6 +1775,7 @@ impl SolveApp {
 
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        value_step::set_enabled(ui.ctx(), self.preferences.step_values);
         let t0 = now_ms();
         // The first frames draw with the bundled faces while the system's CJK, Hangul and Thai
         // faces are read on a thread; the fonts are installed again once they are there.
@@ -1726,15 +1814,24 @@ impl SolveApp {
     }
 
     fn cad_ui(&mut self, ui: &mut egui::Ui, report_input: &mut Option<issue_report::CadInput>) {
+        if self.embedded {
+            self.ui.layout = shell::LayoutMode::Docked;
+            self.home.open = false;
+            self.ui.show_browser = true;
+            self.ui.show_timeline = true;
+        }
         self.ui.layout.publish(ui.ctx());
         scenario::clear_handles();
         self.poll_deferred(ui.ctx());
         self.poll_delete_check(ui.ctx());
-        toolbar::app_bar(self, ui);
+        if !self.embedded {
+            toolbar::app_bar(self, ui);
+        }
         issue_report::CadInput::block(self, ui, report_input);
         file_load::show(self, ui.ctx());
         open_meshing::show(self, ui.ctx());
         documents::prompt(self, ui.ctx());
+        open_elsewhere::show(self, ui.ctx());
         update::show(self, ui.ctx());
         install::show(self, ui.ctx());
         // Settings › AI's Add agent dialog: Settings opens over Home too (#3483).
@@ -1756,7 +1853,7 @@ impl SolveApp {
         let show_timeline = self.ui.show_timeline && !render_workspace::active(self);
         let left_timeline = show_timeline && self.preferences.timeline_left;
         timeline_left::animate_folds(self, ui.ctx());
-        if !floating {
+        if !floating && !self.embedded {
             toolbar::toolbar(self, ui);
         }
         theme::TabAccent::publish(self, ui.ctx());
@@ -1773,6 +1870,8 @@ impl SolveApp {
         if floating || left_timeline || !show_timeline {
             self.shell.history = None;
         }
+        // The model draws next: a dialog the toolbar closed last frame no longer shows its sketch.
+        dialogs::sync_feature_edit_sketch(self);
         let full = ui.available_rect_before_wrap();
         if floating {
             let cards = shell::Cards::new(full, self.ui.layout, toolbar::ribbon_height(self.preferences.ribbon_labels));
@@ -1892,6 +1991,9 @@ impl SolveApp {
             // Held requests go first, in order, once nothing makes them wait.
             let held = if waits || shot_waits { None } else { self.control_held.pop_front() };
             let Some(req) = held.or_else(|| rx.as_ref().and_then(|rx| rx.try_recv().ok())) else { break };
+            if req.refuse_cancelled_chat() {
+                continue;
+            }
             if shot_waits {
                 if self.control_held.len() < MAX_HELD {
                     self.control_held.push_back(req);
@@ -1918,8 +2020,7 @@ impl SolveApp {
                 ctx.request_repaint();
                 continue;
             };
-            let reply = req.reply.clone();
-            if agent_cursor::intercept(self, &req.method, &req.params, &reply) {
+            if agent_cursor::intercept(self, &req) {
                 ctx.request_repaint();
                 continue;
             }
@@ -1935,6 +2036,9 @@ impl SolveApp {
 
     /// Run a control request here, now, and reply (or queue the screenshot it asks for).
     pub(crate) fn run_control(&mut self, ctx: &egui::Context, req: ControlRequest) {
+        if req.refuse_cancelled_chat() {
+            return;
+        }
         let reply = req.reply.clone();
         match control::handle(self, ctx, &req) {
             control::Outcome::Done(v) => {
@@ -1948,6 +2052,9 @@ impl SolveApp {
             control::Outcome::Screenshot { path } => {
                 self.shot_token += 1;
                 let token = self.shot_token;
+                if let Some(turn) = req.chat_turn {
+                    self.shot_chat_turns.insert(token, turn);
+                }
                 self.queued_shots.push((token, now_ms() + 150.0, 0));
                 self.pending_shots.push((token, path, reply, now_ms() + 8000.0));
             }
@@ -1972,6 +2079,19 @@ impl SolveApp {
     }
 
     fn collect_screenshots(&mut self, ctx: &egui::Context) {
+        // A screenshot requested in one tab must never return or save a frame of another.
+        let chat_turns = &mut self.shot_chat_turns;
+        let queued_shots = &mut self.queued_shots;
+        self.pending_shots.retain(|(token, _, reply, _)| {
+            if control::chat_turn_cancelled(chat_turns.get(token).map(std::sync::Arc::as_ref)) {
+                chat_turns.remove(token);
+                queued_shots.retain(|(queued, ..)| queued != token);
+                let _ = reply.send(control::cancelled_chat_response());
+                false
+            } else {
+                true
+            }
+        });
         if self.pending_shots.is_empty() && !issue_report::pending(self) {
             return;
         }
@@ -1992,17 +2112,19 @@ impl SolveApp {
             issue_report::receive(self, token, image.clone());
             if let Some(i) = self.pending_shots.iter().position(|(t, ..)| *t == token) {
                 let (_, path, reply, _) = self.pending_shots.remove(i);
+                self.shot_chat_turns.remove(&token);
                 let _ = reply.send(control::save_screenshot(&image, path.as_deref()));
             }
         }
         let now = now_ms();
         // Hidden while waiting: no frame is coming.
         let hidden = window_hidden(ctx);
-        self.pending_shots.retain(|(_, _, reply, deadline)| {
+        self.pending_shots.retain(|(token, _, reply, deadline)| {
             if now < *deadline && !hidden {
                 return true;
             }
             let _ = reply.send(json!({"ok": false, "error": "no frame was presented (window hidden?); use ui.render"}));
+            self.shot_chat_turns.remove(token);
             false
         });
     }

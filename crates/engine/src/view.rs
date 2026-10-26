@@ -30,6 +30,8 @@ pub mod colors {
     pub const PROFILE: Rgb = Rgb(255, 196, 120);
     pub const GRID: Rgb = Rgb(196, 202, 212);
     pub const GRID_MAJOR: Rgb = Rgb(170, 178, 190);
+    /// The origin axes: the light theme's X, Y and Z, the one set every axis in the UI is drawn
+    /// with (#976).
     pub const AXIS_X: Rgb = Rgb(220, 60, 60);
     pub const AXIS_Y: Rgb = Rgb(60, 170, 60);
     pub const AXIS_Z: Rgb = Rgb(60, 100, 230);
@@ -419,7 +421,7 @@ pub fn scene_with_palette(
     sampler: impl FnMut(&Sketch, usize, &Plane) -> Vec<Vec<Vec3>>,
     p: &Palette,
 ) -> Scene {
-    build_scene(s, cam, section, Guides::default(), sampler, p)
+    build_scene(s, cam, section, Guides::default(), sampler, p, false)
 }
 
 /// [`scene_with_palette`] with the ground grid and the origin's axes shown or left out.
@@ -431,7 +433,21 @@ pub fn scene_with_palette_and_guides(
     p: &Palette,
     guides: Guides,
 ) -> Scene {
-    build_scene(s, cam, section, guides, sampler, p)
+    build_scene(s, cam, section, guides, sampler, p, false)
+}
+
+/// A picture of the view with cosmetic thread markings explicitly enabled or disabled.
+/// The ordinary scene helpers leave these optional markings off.
+pub fn scene_with_thread_markings(
+    s: &Session,
+    cam: &Camera,
+    section: Option<(Vec3, Vec3)>,
+    sampler: impl FnMut(&Sketch, usize, &Plane) -> Vec<Vec<Vec3>>,
+    p: &Palette,
+    guides: Guides,
+    cosmetic_threads: bool,
+) -> Scene {
+    build_scene(s, cam, section, guides, sampler, p, cosmetic_threads)
 }
 
 fn build_scene(
@@ -441,6 +457,7 @@ fn build_scene(
     guides: Guides,
     mut sampler: impl FnMut(&Sketch, usize, &Plane) -> Vec<Vec<Vec3>>,
     p: &Palette,
+    cosmetic_threads: bool,
 ) -> Scene {
     let st = s.world_state();
     let section = section.filter(|(o, n)| o.is_finite() && n.is_finite() && n.len() > 1e-9);
@@ -496,6 +513,7 @@ fn build_scene(
         })
         .flatten()
         .collect();
+    let mut thread_budget = crate::cosmetic_threads::Budget::default();
     for body in st.bodies.iter().filter(|b| s.body_visible(&b.name)) {
         let selected = selected_occurrences.contains(&body.name) || s.selection.iter().any(|x| matches!(x, Sel::Body { name } if *name == body.name));
         let mesh = body.mesh();
@@ -512,6 +530,15 @@ fn build_scene(
         // body is drawn solid, so the selection colour reads.
         let opacity = if selected { 1.0 } else { s.doc.model_body_opacity(body) as f32 };
         sc.meshes.push(SceneMesh { mesh: Arc::clone(&mesh), color, face_colors, opacity });
+        if cosmetic_threads
+            && thread_budget.available()
+            && s.doc.model_body_opacity(body) >= 0.999
+            && s.doc.face_colors(body).iter().all(|(_, l)| l.opacity >= 0.999)
+        {
+            for (a, b) in crate::cosmetic_threads::segments_with_budget(body, &mesh, &st.threads, &mut thread_budget) {
+                sc.lines.push(SceneLine { points: vec![a, b], color: p.edge, width: 0.85, on_top: false });
+            }
+        }
         for (i, e) in mesh.edges.iter().enumerate() {
             if !mesh.shaded_edge_visible(i) {
                 continue;
@@ -644,7 +671,7 @@ impl SectionIndex {
 /// ones used by a feature unless shown on their own, retain their stored visibility.
 pub fn sketch_shown(s: &Session, id: u64) -> bool {
     let v = &s.visibility;
-    if s.active_sketch == Some(id) {
+    if s.active_sketch == Some(id) || s.feature_edit_sketch == Some(id) {
         return true;
     }
     if !sketch_component_visible(s, id) || s.feature_folder_hidden(id, "sketches") {

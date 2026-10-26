@@ -127,7 +127,7 @@ fn listen_on_listener(listener: TcpListener, token: String, tx: Sender<ControlRe
             if OPEN.fetch_add(1, Ordering::Relaxed) >= MAX_CONNECTIONS {
                 OPEN.fetch_sub(1, Ordering::Relaxed);
                 let mut refused = stream;
-                let _ = writeln!(refused, "{}", json!({"ok": false, "error": "too many connections"}));
+                let _ = send(&mut refused, &json!({"ok": false, "error": "too many connections"}));
                 continue;
             }
             let tx = tx.clone();
@@ -174,6 +174,15 @@ fn read_line(r: &mut impl BufRead, max: usize) -> std::io::Result<Option<Vec<u8>
     }
 }
 
+/// A reply line, written to the socket at once. `writeln!` with a JSON value hands the socket each
+/// of its pieces apart, a system call for every string, number and comma: half a second for a
+/// design's component tree when it has thousands of components.
+fn send(out: &mut impl Write, reply: &Value) -> std::io::Result<()> {
+    let mut line = serde_json::to_vec(reply).map_err(std::io::Error::other)?;
+    line.push(b'\n');
+    out.write_all(&line)
+}
+
 /// The reply to a connection that didn't show the token; the connection is then closed.
 fn unauthorized() -> Value {
     json!({"ok": false, "error": "unauthorized: send the control token as \"token\" (see docs/control-protocol.md)"})
@@ -184,7 +193,7 @@ fn unauthorized() -> Value {
 /// the connection, and a reset can reach the client before it has read the refusal.
 fn refuse(out: &mut TcpStream, reader: &mut BufReader<TcpStream>) {
     use std::io::Read;
-    let _ = writeln!(out, "{}", unauthorized());
+    let _ = send(out, &unauthorized());
     let _ = out.shutdown(std::net::Shutdown::Write);
     let _ = reader.get_ref().set_read_timeout(Some(Duration::from_millis(500)));
     let _ = std::io::copy(&mut reader.by_ref().take(64 * 1024), &mut std::io::sink());
@@ -381,7 +390,7 @@ fn serve_with(
             Ok(Some(l)) => String::from_utf8_lossy(&l).into_owned(),
             Ok(None) => break,
             Err(e) => {
-                let _ = writeln!(out, "{}", json!({"ok": false, "error": e.to_string()}));
+                let _ = send(&mut out, &json!({"ok": false, "error": e.to_string()}));
                 break;
             }
         };
@@ -463,7 +472,7 @@ fn serve_with(
                 json!({"ok": false, "error": format!("bad JSON: {e}")})
             }
         };
-        if writeln!(out, "{reply}").is_err() {
+        if send(&mut out, &reply).is_err() {
             break;
         }
         if bad >= MAX_BAD_LINES {
@@ -749,5 +758,32 @@ mod tests {
         // The same line against a smaller cap is refused.
         let mut r = BufReader::with_capacity(64, text.as_slice());
         assert!(read_line(&mut r, 1000).is_err());
+    }
+
+    /// A large reply reaches the socket in one write, not one per JSON piece (a component tree of
+    /// thousands of components took half a second to send), and reads back as it was.
+    #[test]
+    fn a_large_reply_is_written_at_once() {
+        struct Counted {
+            writes: usize,
+            bytes: Vec<u8>,
+        }
+        impl Write for Counted {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.writes += 1;
+                self.bytes.extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let components: Vec<Value> = (0..2000).map(|i| json!({"id": i, "name": format!("Part {i}"), "bodies": ["a", "b"], "parent": 0})).collect();
+        let reply = json!({"ok": true, "id": 7, "result": {"components": components}});
+        let mut out = Counted { writes: 0, bytes: Vec::new() };
+        send(&mut out, &reply).unwrap();
+        assert_eq!(out.writes, 1);
+        assert_eq!(out.bytes.last(), Some(&b'\n'));
+        assert_eq!(serde_json::from_slice::<Value>(&out.bytes).unwrap(), reply);
     }
 }

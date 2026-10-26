@@ -187,6 +187,9 @@ fn inch_live_lengths_use_design_units_and_typed_four_digits_commit_in_inches() {
     type_value(&mut h, "1.2345");
     tab(&mut h, false);
     type_value(&mut h, "0.500");
+    let tool = h.app.tool.as_ref().unwrap();
+    assert!((crate::sketch_dims::locked_value(&h.app, tool, "Width").unwrap() - 31.3563).abs() < 1e-6);
+    assert!((crate::sketch_dims::locked_value(&h.app, tool, "Height").unwrap() - 12.7).abs() < 1e-6);
     h.step(&json!({"key":"Enter"})).unwrap();
     let st = h.app.session.world_state();
     let sk = &st.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;

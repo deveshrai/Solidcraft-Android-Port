@@ -29,6 +29,8 @@ preferences, manager cards, prompts, context menus and the sketch palette. Impor
   pinned actions, compute status and keyboard routing. `wide()` uses three card
   widths. `feature_frame` and `palette_frame` retain docked/floating surfaces.
   `FeatureOptions::apply_label` adds Apply; `Panel::actions` supplies custom labels.
+  `body_rows` caps a manager's scrolling body independently of its position; short
+  viewports still keep the header and actions visible.
 - `Window` composes the shared Panel frame with a 40 pt icon/title/close header,
   padded content and optional 48 pt footer. `show_with_left` pins a left action beside
   the right-aligned buttons. `show_pages` accepts declarative `WindowPage` entries
@@ -99,7 +101,7 @@ table. Panel/Window/Confirm compositions also have dedicated geometry and intera
 | `text_area` | Bounded multiline JSON/data editor | field tokens |
 | `dropdown`, `dropdown_menu` | Indexed choices or caller-supplied menu controls | `control_height`, `text_dim`, form tokens |
 | `searchable_dropdown`, `SearchOption` | Filtered choices, custom-value action and pending message | dropdown tokens |
-| `selection_field`, `Selection` | Selection chip with explicit `active` and `filled` state | `selected_bg/ink`, `accent`, `control_*`, `form_inset`, `space_8/24` |
+| `selection_field`, `Selection` | Selection chip with explicit `active` and `filled` state, in three looks: the active input (where the next pick goes) has a `form_primary` border and `selected_bg` tint; a filled inactive one a quiet neutral tint, a stronger neutral border and its count in `form_ink`; an empty inactive one the plain control with a dim prompt | `selected_bg/ink`, `form_primary/ink/dim`, `control_*`, `form_inset`, `space_2/8/24` |
 | `value_pair` | Paired captions/expressions; optional independent field names | row/field tokens, `space_8` |
 | `fraction_field`, `scalar_field` | Locale-aware bounded dimensionless values; scalar fields fill their control column | form control/font tokens |
 | `number_field` | Integer/decimal field with caller range, drag speed and suffix | form control/font tokens |

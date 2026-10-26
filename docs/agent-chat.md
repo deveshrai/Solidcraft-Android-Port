@@ -57,7 +57,11 @@ clicks and scrolling over the panel stay in the chat. The docked layout retains 
   model list, or an endpoint's `/models`), a model drop-down shows the one in use and changes it;
   SolidCraft remembers the last choice for each agent and puts it back on the next session. An
   endpoint's agent also keeps it as its default model. An agent that reports no models shows no
-  drop-down.
+  drop-down. When the models come from more than one provider (Hermes and OpenCode name each
+  model `Provider · model`, or say `Provider: …` in its description), a provider drop-down comes
+  first and the model drop-down lists only that provider's models, without the provider in front.
+  It opens on the provider of the model in use; picking another provider changes nothing until one
+  of its models is chosen. Models with no provider named are listed under *Other*.
 
 Messages use right-aligned user bubbles and plain assistant text. Consecutive tool calls share
 an activity group: click a row to inspect its output; failed calls have an error tint. Approval
@@ -107,6 +111,12 @@ files go with it, at most eight; the rest are named in the chat and not sent. **
 clears the files waiting on the chips too.
 
 ## Typing while the agent works
+
+Each design tab has its own conversation, agent session, draft, attachments and queued messages.
+A new tab starts with an empty chat. Switching away stops the current turn and keeps its
+completed changes in that design's undo history. Returning restores the conversation; queued
+messages wait for **Send**. Closing a design closes its conversation. Conversations are kept
+only while the tabs remain open.
 
 The input stays enabled during a turn. **Enter** queues the message: it shows in the conversation
 as a **Queued** bubble that you can **Edit** or remove (×) until it is sent. Several queued
@@ -199,7 +209,7 @@ Grok Build also supports `XAI_API_KEY` for users who choose API authentication.
 - **Custom command:** any other program that speaks ACP on stdin and stdout, such as
   `my-agent --acp`. SolidCraft starts it directly, not through a shell.
 - **OpenAI-compatible API:** a preset (Ollama `http://localhost:11434/v1`, LM Studio
-  `http://localhost:1234/v1`, OpenAI) or a custom URL, the model name, and an optional key.
+  `http://localhost:1234/v1`, OpenAI, Mammouth AI `https://api.mammouth.ai/v1`) or a custom URL, the model name, and an optional key.
 - **Anthropic-compatible API:** a preset (Anthropic) or a custom URL, for an endpoint that
   speaks the Anthropic Messages API (`{base}/v1/messages`). This covers Anthropic itself and
   providers that offer an Anthropic-compatible endpoint, such as DeepSeek and Qwen.
@@ -208,7 +218,27 @@ Grok Build also supports `XAI_API_KEY` for users who choose API authentication.
   OpenAI-compatible endpoint for its models; an Anthropic-compatible one gets a short message,
   because not every such endpoint lists models (Qwen's has no model list). For these agents
   SolidCraft runs the conversation itself, with the same tools, limits and questions as for a
-  coding agent, and at most 24 model requests per message.
+  coding agent, and no cap on model requests per message (Stop ends it). **Request timeout** is how long one model request may
+  take: 300 s by default, from 30 s to an hour. A slow local model (a large model on modest
+  hardware, or a long message with many tool results) may need more; raise it here or in the
+  endpoint's entry under **Agents**, where a change applies from the next request. A request that
+  runs out of time ends the message with the limit it hit and where to raise it.
+
+### An agent inside WSL (Windows)
+
+An agent installed inside WSL keeps its own settings, skills and sign-in there. Add it as a
+**Custom command** that starts it through `wsl.exe`, for example:
+
+```
+wsl.exe -d Ubuntu -e bash -lc claude-agent-acp
+```
+
+`bash -lc` runs your login shell's setup, so the agent is found where your `PATH` puts it (npm,
+nvm, Volta). When the command's program is `wsl` or `wsl.exe`, SolidCraft gives the agent its
+working folder and the `solidcraft-app` server's program as WSL shows them (`C:\Users\…` becomes
+`/mnt/c/Users/…`). The server itself still runs on Windows and reaches the app at `127.0.0.1`, so
+this works with WSL's default networking. If you moved WSL's drive mounts away from `/mnt`
+(`automount.root` in `/etc/wsl.conf`), those paths won't match and the agent can't start the server.
 
 ## Signing in
 
@@ -298,9 +328,10 @@ saves, opens or inserts. A sweep's or pattern's `path` (curve ids) and an occurr
   everything that's waiting, and a question nobody answers is declined after four minutes. The
   [MCP server's folder limits](mcp.md) still apply after you allow: the design's folder, the
   recovery folder and the server's own scratch folder.
-- **A limit per message.** The agent may make 24 changes per message by default; you can set
-  the number on the AI page. Reading the design doesn't count. When it reaches the limit, it's
-  told to stop and report what's left; send another message to let it carry on.
+- **An optional limit per message.** There's none by default. Untick **Unlimited** on the AI
+  page to cap the changes the agent may make per message (it starts at 24). Reading the design
+  doesn't count. At the limit, it's told to stop and report what's left; send another message to
+  let it carry on. **Stop** always works.
 - **No crash reports,** whatever the permissions. Crash reports can hold other designs and file
   paths.
 - **Not the rest of the app.** It can't click the interface, change settings, quit, or drive the

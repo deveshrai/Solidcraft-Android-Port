@@ -29,6 +29,10 @@ pub trait Backend {
     fn in_process(&self) -> bool {
         false
     }
+    /// A line every tool result carries (a session that is not what the user expects).
+    fn notice(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Longest reply line accepted from the app.
@@ -562,5 +566,76 @@ impl Backend for Headless {
     }
     fn in_process(&self) -> bool {
         true
+    }
+}
+
+/// `solidcraft-cli mcp` with no `--connect`: a headless session while no app runs, which gives
+/// way to the app the moment one is found, as long as the session has no work of its own yet.
+/// Once it has, it stays headless (the work is not carried over) and every tool result says so.
+pub struct Auto {
+    headless: Option<Headless>,
+    remote: Option<Remote>,
+    /// The port of the running app, when there is one.
+    discover: Box<dyn FnMut() -> Option<u16>>,
+    token: Option<String>,
+}
+
+impl Auto {
+    pub fn new(headless: Headless, discover: Box<dyn FnMut() -> Option<u16>>, token: Option<&str>) -> Self {
+        Auto { headless: Some(headless), remote: None, discover, token: token.map(str::to_owned) }
+    }
+
+    /// Switch to the app when the session is still empty and one is running.
+    fn look_for_app(&mut self) {
+        let empty = self.headless.as_ref().is_some_and(|h| h.session.doc.features.is_empty());
+        if !empty {
+            return;
+        }
+        if let Some(port) = (self.discover)() {
+            eprintln!("solidcraft mcp: the SolidCraft app is running now; bridged to 127.0.0.1:{port}");
+            self.remote = Some(Remote::new(&format!("127.0.0.1:{port}"), self.token.as_deref()));
+            self.headless = None;
+        }
+    }
+}
+
+impl Backend for Auto {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        if self.remote.is_none() {
+            self.look_for_app();
+        }
+        match (&mut self.remote, &mut self.headless) {
+            (Some(r), _) => r.call(method, params),
+            (None, Some(h)) => h.call(method, params),
+            (None, None) => Err("no session".into()),
+        }
+    }
+    fn has_ui(&self) -> bool {
+        self.remote.is_some()
+    }
+    fn describe(&self) -> String {
+        match (&self.remote, &self.headless) {
+            (Some(r), _) => r.describe(),
+            (None, Some(h)) => format!(
+                "{}, because the SolidCraft app was not running when this server started; if it starts before any design work \
+                 is done here, the next call is bridged to it",
+                h.describe()
+            ),
+            (None, None) => String::new(),
+        }
+    }
+    fn design_path(&self) -> Option<String> {
+        self.headless.as_ref().and_then(Headless::design_path)
+    }
+    fn in_process(&self) -> bool {
+        self.remote.is_none()
+    }
+    fn notice(&self) -> Option<String> {
+        self.headless.as_ref().map(|_| {
+            "Note: this is a headless session because the SolidCraft app was not found; the user cannot see this work. \
+             Ask them to start SolidCraft. While this session has no features, the next call connects to the app; once it \
+             has work, it stays here."
+                .to_owned()
+        })
     }
 }

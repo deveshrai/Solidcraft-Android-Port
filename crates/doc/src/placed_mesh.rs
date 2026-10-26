@@ -87,6 +87,7 @@ impl PlacedMesh {
             positions: source.positions.iter().map(|p| crate::apply_point(&self.transform, *p)).collect(),
             normals: source.normals.iter().map(|n| crate::apply_vector(&self.transform, *n)).collect(),
             edges: source.edges.iter().map(|edge| edge.iter().map(|p| crate::apply_point(&self.transform, *p)).collect()).collect(),
+            display_only_edges: source.display_only_edges,
             triangles: source.triangles.clone(),
             tri_face: source.tri_face.clone(),
             edge_faces: source.edge_faces.clone(),
@@ -115,7 +116,51 @@ pub(super) fn definition_plan(
 }
 
 pub(super) fn reference_mesh(body: &Body, mesh: &OnceLock<Arc<Mesh>>, tolerance: f64) -> Arc<Mesh> {
-    mesh.get_or_init(|| Arc::new(body.reference_display_mesh_angular(tolerance, kernel::DISPLAY_ANGLE).unwrap_or_default())).clone()
+    mesh.get_or_init(|| {
+        let mut mesh = body.reference_display_mesh_angular(tolerance, kernel::DISPLAY_ANGLE).unwrap_or_default();
+        if let Some((positions, triangles)) = body.triangle_mesh() {
+            mesh.edges = mesh_outlines(positions, triangles);
+            mesh.display_only_edges = true;
+        }
+        Arc::new(mesh)
+    })
+    .clone()
+}
+
+/// Display lines for an imported triangle mesh: open boundaries, non-manifold sides and
+/// creases of at least 30 degrees. The shared vertex indices come from the existing mesh body;
+/// the geometry, winding and triangle topology are left to the importer.
+fn mesh_outlines(positions: &[Vec3], triangles: &[[u32; 3]]) -> Vec<Vec<Vec3>> {
+    let normal = |index: usize| {
+        let t = triangles.get(index)?;
+        let (a, b, c) = (positions.get(t[0] as usize)?, positions.get(t[1] as usize)?, positions.get(t[2] as usize)?);
+        (*b - *a).cross(*c - *a).normalized()
+    };
+    // One compact record per side, sorted for deterministic output, instead of a map of
+    // separately allocated adjacency lists. Mesh imports already cap the triangle count.
+    let mut sides = Vec::with_capacity(triangles.len().saturating_mul(3));
+    for (i, t) in triangles.iter().enumerate() {
+        let Ok(triangle) = u32::try_from(i) else { continue };
+        if normal(i).is_some() {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                sides.push((a.min(b), a.max(b), triangle));
+            }
+        }
+    }
+    sides.sort_unstable();
+    let cos = 30f64.to_radians().cos();
+    let mut edges = Vec::new();
+    for side in sides.chunk_by(|a, b| (a.0, a.1) == (b.0, b.1)) {
+        let Some(&(a, b, _)) = side.first() else { continue };
+        let visible = match side {
+            [(_, _, i), (_, _, j)] => normal(*i as usize).zip(normal(*j as usize)).is_some_and(|(n, m)| n.dot(m) <= cos),
+            _ => true,
+        };
+        if visible && let (Some(&a), Some(&b)) = (positions.get(a as usize), positions.get(b as usize)) {
+            edges.push(vec![a, b]);
+        }
+    }
+    edges
 }
 
 /// Only proper rotations and translations preserve triangle winding, normal lengths and the
@@ -134,6 +179,45 @@ fn proper_rigid(m: &crate::Mat) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mesh_outlines_keep_boundaries_and_creases_without_smooth_facet_lines() {
+        for (degrees, expected) in [(0.0f64, 4), (15.0, 4), (30.0, 5), (45.0, 5), (90.0, 5)] {
+            let angle = degrees.to_radians();
+            let p = [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(0., -angle.cos(), angle.sin())];
+            let triangles = [[0, 1, 2], [1, 0, 3]];
+            let edges = mesh_outlines(&p, &triangles);
+            assert_eq!(edges.len(), expected, "hinge angle {degrees}");
+            assert_eq!(edges.iter().any(|e| e == &[Vec3::ZERO, Vec3::X]), degrees >= 30.);
+            assert_eq!(edges, mesh_outlines(&p, &triangles), "deterministic order");
+        }
+        // A third triangle makes the common side non-manifold: keep it once, even if coplanar.
+        let p = [Vec3::ZERO, Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Y * 2.];
+        let edges = mesh_outlines(&p, &[[0, 1, 2], [1, 0, 3], [0, 1, 4]]);
+        assert_eq!(edges.len(), 7);
+        assert_eq!(edges.iter().filter(|e| **e == [Vec3::ZERO, Vec3::X]).count(), 1);
+        // The rings of an open faceted cylinder stay visible, but its smooth wall has no
+        // diagonals or longitudinal facet lines.
+        let n = 36u32;
+        let mut p = Vec::new();
+        for z in [0., 10.] {
+            p.extend((0..n).map(|i| {
+                let a = f64::from(i) * std::f64::consts::TAU / f64::from(n);
+                Vec3::new(a.cos(), a.sin(), z)
+            }));
+        }
+        let triangles: Vec<_> = (0..n)
+            .flat_map(|i| {
+                let j = (i + 1) % n;
+                [[i, j, j + n], [i, j + n, i + n]]
+            })
+            .collect();
+        let edges = mesh_outlines(&p, &triangles);
+        assert_eq!(edges.len(), 2 * n as usize);
+        assert!(edges.iter().all(|e| e[0].z == e[1].z));
+        // Bad indices and zero-area facets do not invent outlines or panic.
+        assert!(mesh_outlines(&[Vec3::ZERO, Vec3::X, Vec3::X * 2.], &[[0, 1, 99], [0, 1, 2]]).is_empty());
+    }
 
     #[test]
     fn placed_mesh_is_lazy_and_composes_from_one_immutable_source() {
@@ -296,6 +380,33 @@ mod tests {
         assert!(state.bodies[0].cached_mesh().is_some(), "changed geometry warms its new definition cache");
         assert_ne!(new.bounds(), moved.bodies[0].mesh().bounds());
         assert!(Arc::ptr_eq(&old, &before.bodies[0].mesh()), "editing does not mutate older snapshots");
+    }
+
+    #[test]
+    fn placements_taken_as_before_and_placed_again_keep_their_order() {
+        let mut doc = crate::Document::new("instances");
+        let component = doc.add_component(Some("Part"), 0).unwrap();
+        doc.body_components.insert("Pin".into(), component);
+        doc.occurrences[0].transform = crate::rigid(Vec3::new(10., 0., 0.), Vec3::ZERO, Vec3::Y, 0.3);
+        let second = doc.add_occurrence(component, 0, crate::rigid(Vec3::new(0., 20., 0.), Vec3::ZERO, Vec3::X, 0.6)).unwrap();
+        doc.add_occurrence(component, 0, crate::rigid(Vec3::new(0., -20., 5.), Vec3::ZERO, Vec3::Z, 1.1)).unwrap();
+        let mut state = crate::ModelState::default();
+        state.bodies.push(ModelBody::new("Pin".into(), kernel::cylinder(Vec3::ZERO, Vec3::Z, 2., 8.).unwrap(), 1));
+        let mut cache = super::super::PlacedBodies::default();
+        let before = super::super::world_state_reusing(&doc, &state, &mut cache);
+        let meshes: Vec<_> = before.bodies.iter().map(|b| b.mesh()).collect();
+        // The middle placement moves: the other two are taken as they were, it is placed again.
+        doc.occurrences.iter_mut().find(|o| o.id == second).unwrap().transform = crate::rigid(Vec3::new(0., 40., 0.), Vec3::ZERO, Vec3::X, 0.2);
+        let after = super::super::world_state_reusing(&doc, &state, &mut cache);
+        let fresh = super::super::world_state_reusing(&doc, &state, &mut super::super::PlacedBodies::default());
+        let names = |st: &crate::ModelState| st.bodies.iter().map(|b| b.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&after), names(&fresh));
+        assert_eq!(names(&after), names(&before));
+        for (i, (a, f)) in after.bodies.iter().zip(&fresh.bodies).enumerate() {
+            assert_eq!(a.mesh().bounds(), f.mesh().bounds(), "body {i} is where a fresh placement puts it");
+        }
+        assert!(Arc::ptr_eq(&after.bodies[0].mesh(), &meshes[0]) && Arc::ptr_eq(&after.bodies[2].mesh(), &meshes[2]));
+        assert!(!Arc::ptr_eq(&after.bodies[1].mesh(), &meshes[1]), "the moved placement is placed again");
     }
     #[test]
     fn only_proper_rigid_affine_matrices_reuse_reference_meshes() {

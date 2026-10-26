@@ -8,6 +8,7 @@
 
 pub mod catalog;
 mod design;
+pub mod design_lock;
 mod design_metadata;
 mod dxf;
 mod dxf_out;
@@ -351,9 +352,46 @@ impl Format {
     }
 }
 
+/// How closely an exported mesh follows curved faces: its chord tolerance as a share of each
+/// body's size. Standard is what every mesh export used; Fine and Finest give the small round
+/// features of a large part more sides (#4747).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MeshQuality {
+    #[default]
+    Standard,
+    Fine,
+    Finest,
+}
+
+impl MeshQuality {
+    /// By the name commands take: `standard`, `fine` or `finest`.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "standard" => Some(Self::Standard),
+            "fine" => Some(Self::Fine),
+            "finest" => Some(Self::Finest),
+            _ => None,
+        }
+    }
+
+    /// The chord tolerance as a share of the body's size.
+    fn share(self) -> f64 {
+        match self {
+            Self::Standard => 2e-4,
+            Self::Fine => 5e-5,
+            Self::Finest => 1e-5,
+        }
+    }
+}
+
 /// Fine export mesh for a body (chord tolerance 2e-4 of its size).
 pub fn export_mesh(b: &solidcraft_kernel::Body) -> Result<Mesh> {
-    Ok(b.tessellate((b.size() * 2e-4).max(1e-3))?)
+    export_mesh_at(b, MeshQuality::Standard)
+}
+
+/// [`export_mesh`] at `quality` (never finer than 1 µm).
+pub fn export_mesh_at(b: &solidcraft_kernel::Body, quality: MeshQuality) -> Result<Mesh> {
+    Ok(b.tessellate((b.size() * quality.share()).max(1e-3))?)
 }
 
 /// Distance within which an exported mesh's vertices are welded (STL and 3MF alike).
@@ -403,23 +441,55 @@ pub fn stl_ascii(meshes: &[Mesh], name: &str) -> String {
     s
 }
 
-/// Wavefront OBJ, one object per body.
+/// Wavefront OBJ, one object per body. Positions and normals are each written once per
+/// distinct value, so a face's vertices are shared while the normals keep edges between
+/// faces sharp. Names are written as they are (OBJ takes the rest of the line).
 pub fn obj(meshes: &[(String, Mesh)]) -> String {
+    use std::collections::HashMap;
     let mut s = String::from("# SolidCraft OBJ export (mm)\n");
-    let mut base = 1usize;
+    let (mut vbase, mut nbase) = (1usize, 1usize);
     for (name, m) in meshes {
-        s += &format!("o {}\n", name.replace(char::is_whitespace, "_"));
-        for p in &m.positions {
-            s += &format!("v {} {} {}\n", p.x, p.y, p.z);
-        }
-        for n in &m.normals {
-            s += &format!("vn {} {} {}\n", n.x, n.y, n.z);
-        }
+        let name: String = name.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+        s += &format!("o {name}\n");
+        // `+ 0.0` turns -0 into 0, so both merge.
+        let key = |x: f64, y: f64, z: f64| [x + 0.0, y + 0.0, z + 0.0].map(f64::to_bits);
+        let mut vmap: HashMap<[u64; 3], usize> = HashMap::new();
+        let mut nmap: HashMap<[u64; 3], usize> = HashMap::new();
+        let vi: Vec<usize> = m
+            .positions
+            .iter()
+            .map(|p| {
+                let next = vmap.len();
+                *vmap.entry(key(p.x, p.y, p.z)).or_insert_with(|| {
+                    s += &format!("v {} {} {}\n", p.x, p.y, p.z);
+                    next
+                })
+            })
+            .collect();
+        let ni: Vec<usize> = m
+            .normals
+            .iter()
+            .map(|n| {
+                let next = nmap.len();
+                *nmap.entry(key(n.x, n.y, n.z)).or_insert_with(|| {
+                    s += &format!("vn {} {} {}\n", n.x, n.y, n.z);
+                    next
+                })
+            })
+            .collect();
         for t in &m.triangles {
-            let [a, b, c] = t.map(|i| i as usize + base);
-            s += &format!("f {a}//{a} {b}//{b} {c}//{c}\n");
+            let (Some(a), Some(b), Some(c)) = (vi.get(t[0] as usize), vi.get(t[1] as usize), vi.get(t[2] as usize)) else { continue };
+            let (a, b, c) = (a + vbase, b + vbase, c + vbase);
+            match (ni.get(t[0] as usize), ni.get(t[1] as usize), ni.get(t[2] as usize)) {
+                (Some(na), Some(nb), Some(nc)) => {
+                    let (na, nb, nc) = (na + nbase, nb + nbase, nc + nbase);
+                    s += &format!("f {a}//{na} {b}//{nb} {c}//{nc}\n");
+                }
+                _ => s += &format!("f {a} {b} {c}\n"),
+            }
         }
-        base += m.positions.len();
+        vbase += vmap.len();
+        nbase += nmap.len();
     }
     s
 }
@@ -459,6 +529,18 @@ fn threemf_metadata(meta: &Metadata) -> Vec<(&'static str, &str)> {
 /// STEP and IGES headers (author, organization; STEP also the description) and 3MF model
 /// metadata (project as the title, author as the designer, description, licence).
 pub fn export_with_metadata(state: &ModelState, bodies: &[String], format: Format, name: &str, meta: &Metadata) -> Result<Vec<u8>> {
+    export_with_quality(state, bodies, format, name, meta, MeshQuality::Standard)
+}
+
+/// [`export_with_metadata`], meshing STL, OBJ and 3MF at `quality`.
+pub fn export_with_quality(
+    state: &ModelState,
+    bodies: &[String],
+    format: Format,
+    name: &str,
+    meta: &Metadata,
+    quality: MeshQuality,
+) -> Result<Vec<u8>> {
     let sel: Vec<&solidcraft_doc::ModelBody> = state.bodies.iter().filter(|b| bodies.is_empty() || bodies.contains(&b.name)).collect();
     if sel.is_empty() {
         return Err(IoError::Empty);
@@ -470,7 +552,7 @@ pub fn export_with_metadata(state: &ModelState, bodies: &[String], format: Forma
             let meshes: Vec<Mesh> = sel
                 .iter()
                 .map(|b| {
-                    let m = export_mesh(&b.body)?;
+                    let m = export_mesh_at(&b.body, quality)?;
                     let (positions, triangles) = weld(&m.positions, &m.triangles, weld_eps(&b.body));
                     Ok(Mesh { positions, triangles, ..Mesh::default() })
                 })
@@ -478,7 +560,7 @@ pub fn export_with_metadata(state: &ModelState, bodies: &[String], format: Forma
             if format == Format::StlBinary { stl_binary(&meshes, name) } else { stl_ascii(&meshes, name).into_bytes() }
         }
         Format::Obj => {
-            let meshes: Vec<(String, Mesh)> = sel.iter().map(|b| Ok((b.name.clone(), export_mesh(&b.body)?))).collect::<Result<_>>()?;
+            let meshes: Vec<(String, Mesh)> = sel.iter().map(|b| Ok((b.name.clone(), export_mesh_at(&b.body, quality)?))).collect::<Result<_>>()?;
             obj(&meshes).into_bytes()
         }
         Format::Step => {
@@ -492,7 +574,7 @@ pub fn export_with_metadata(state: &ModelState, bodies: &[String], format: Forma
             solidcraft_kernel::iges_export_bodies(&bs, &step_header(format!("{name}.igs"), meta))?.into_bytes()
         }
         Format::ThreeMf | Format::ThreeMfTagged => {
-            let objs: Vec<MeshObject> = sel.iter().map(|b| mesh_object(b, format == Format::ThreeMfTagged)).collect::<Result<_>>()?;
+            let objs: Vec<MeshObject> = sel.iter().map(|b| mesh_object(b, format == Format::ThreeMfTagged, quality)).collect::<Result<_>>()?;
             write_3mf_with(&objs, &threemf_metadata(meta))?
         }
         Format::Design => return Err(IoError::Format("solidcraft (save the document instead)".into())),
@@ -502,8 +584,8 @@ pub fn export_with_metadata(state: &ModelState, bodies: &[String], format: Forma
 
 /// A body as a 3MF mesh: welded watertight (T-junctions split), coloured, and with `tagged`
 /// each triangle keeps the B-rep face it came from.
-fn mesh_object(b: &solidcraft_doc::ModelBody, tagged: bool) -> Result<MeshObject> {
-    let m = export_mesh(&b.body)?;
+fn mesh_object(b: &solidcraft_doc::ModelBody, tagged: bool, quality: MeshQuality) -> Result<MeshObject> {
+    let m = export_mesh_at(&b.body, quality)?;
     let eps = weld_eps(&b.body);
     // Faces with colours of their own tag their triangles.
     let paint = b.body.paint();
@@ -749,6 +831,24 @@ mod tests {
         assert_eq!(read_stl(&a).unwrap().len(), tris.len());
         let o = String::from_utf8(export(&m.state(), &[], Format::Obj, "t").unwrap()).unwrap();
         assert!(o.contains("o Body1") && o.contains("\nf "));
+    }
+
+    /// OBJ shares a face's vertices (a cube: 8 positions, 6 normals, not 36 of each) and keeps
+    /// the body name as written, spaces included.
+    #[test]
+    fn obj_export_is_welded_and_keeps_names() {
+        let (_, m) = model();
+        let mut st = (*m.state()).clone();
+        for b in &mut st.bodies {
+            b.name = "Red Block".into();
+        }
+        let o = String::from_utf8(export(&st, &[], Format::Obj, "t").unwrap()).unwrap();
+        let count = |p: &str| o.lines().filter(|l| l.starts_with(p)).count();
+        assert!(o.contains("\no Red Block\n"), "{o}");
+        assert_eq!((count("v "), count("vn "), count("f ")), (8, 6, 12), "{o}");
+        let ids: Vec<usize> =
+            o.lines().filter(|l| l.starts_with("f ")).flat_map(|l| l.split([' ', '/']).skip(1)).filter_map(|x| x.parse().ok()).collect();
+        assert!(ids.iter().all(|i| (1..=8).contains(i) || (1..=6).contains(i)));
     }
 
     /// The design properties land in each format's own metadata (#1015): STEP and IGES headers,

@@ -1,4 +1,4 @@
-//! Sheet metal: rules, Flange (base, edge, contour), Hem, Unfold/Refold, Convert to Sheet Metal,
+//! Sheet metal: rules, Flange (base, edge, contour), Path Flange, Hem, Unfold/Refold, Convert to Sheet Metal,
 //! the flat pattern (outline, bend lines, bend table) and its DXF export.
 
 use serde_json::{Value, json};
@@ -11,19 +11,29 @@ use solidcraft_geom::{Aabb2, Ring, Vec2, Vec3};
 
 use super::CommandSpec;
 use super::features::{add_feature, check_expr, feature_sketch, profiles, sketch_id};
-use crate::params::{bad, bool_, expr, req_expr, str_, string_list, vec3};
+use crate::params::{bad, bool_, expr, expr_problem, req_expr, str_, string_list, vec3};
 use crate::{EngineError, Result, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("sheet.flange", "Flange", flange).at("SHEET METAL", "CREATE").icon("flange").params(
         "base: sketch + profiles? (rule?, flip?) | contour: sketch + curves (open chain of lines) + distance (rule?, flip?, reverse?) | \
          edge: edges: [[x,y,z] on top/bottom edges, or {point: [x,y,z], angle?, height?} for an edge with its own angle and height] + \
-         height (to the outer face), angle? (default 90 deg), radius? (default: rule), \
-         position?: inside|outside|middle, flip?, body?, corner_relief_shape?: notch|round|rectangular|tear and corner_relief? (size across): \
+         height (along the flange, to its far edge), angle? (default 90 deg), radius? (default: rule), \
+         height_from?: outer|inner|tangent (where the height is measured from: the outer virtual sharp (default), \
+         the inner virtual sharp, or past 90 deg the line square to the flange touching the bend's outside (tangent; up to 90 deg the outer sharp)), \
+         position?: inside|outside|middle|material_outside|tangent (where the bend starts: the outer virtual sharp on the edge (default), \
+         the bend starting at the edge (bend_outside is the same), half way, the inner virtual sharp on the edge, \
+         or the bend's outer face tangent to the edge's face (below 90 deg the bend's end on that face)), flip?, body?, corner_relief_shape?: notch|round|rectangular|tear and corner_relief? (size across): \
          the relief at the corners these flanges make (default: the rule's); \
+         then?: [{angle?, height, flip?}] further bends (at most 16), each a flange on the far edge of the one before, flip: true turns that bend the other way (edge only); \
          type?: base|edge|contour (default from the inputs); name?, body_name? (the new body). \
          Thickness, K-factor and bend radius come from the rule (sheet.manage_rules); passing them here is refused, \
          and so is the corner relief on a base or contour flange",
+    ),
+    CommandSpec::new("sheet.path_flange", "Path Flange", path_flange).at("SHEET METAL", "CREATE").icon("path_flange").params(
+        "edge: [x,y,z] on a top or bottom edge of the sheet; sketch + curves: an open chain of sketch lines drawn on a plane across \
+         that edge, from the edge out (each line one flange as long as the line, to the outer face from the virtual sharp; each \
+         corner one bend, turning the way the lines turn); radius? (default: rule); body?. One feature, one body",
     ),
     CommandSpec::new("sheet.perforate", "Perforate", perforate).at("SHEET METAL", "CREATE").icon("perforate").params(
         "diameter, pitch: expr; margin?: expr (clear of edges, cut-outs and bends; default: the diameter); pattern?: staggered (60°, default) | square; body? - a perforation field over the whole flat sheet: holes in the flat pattern (perforations), the DXF (layer PERFORATION) and the measured volume, not cut into the B-rep (#732)",
@@ -57,6 +67,8 @@ pub static COMMANDS: &[CommandSpec] = &[
          gap: between flanges that meet at a corner, whose ends are closed toward each other at any angle); \
          corner_relief_shape?: notch|round|rectangular|tear (what is cut where two bends meet at a corner of the base: round and rectangular a relief \
          `corner_relief` across; tear none, each bend's end is cut straight from the corner to its flange's end; default notch); \
+         angle_display?: bend|included (how the DXF bend notes read the bend angles: the bend angle, default, or the included angle \
+         left between the bend's sides, 180° less it; the bend table gives both, and a flange's `angle` is always the bend angle); \
          active?: bool; delete?: bool",
     ),
     CommandSpec::new("sheet.rules", "List Sheet Metal Rules", list_rules).icon("sheet_rules").noundo().doc_only().params("→ rules with their expressions and values, and the active one"),
@@ -72,14 +84,17 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params(
             "body?, path?, curves?: exact|arcs (default exact: an ellipse as ELLIPSE, splines, text outlines and other Béziers as SPLINE; arcs: tangent arcs and lines within 0.001 mm, for machines that read only those), \
              text?: cut|etch (default cut: letters that text cut through the sheet are cut contours on layer TEXT; etch: single contours on layer ETCH and the sheet keeps its material there; text machined to a depth is always on ETCH), \
-             bend_notes?: bool (default false: a note beside each bend line on layer BEND_NOTES, `B1 UP 90%%d R1`), note_height?: mm (default 3), \
+             bend_notes?: bool (default false: a note beside each bend line on layer BEND_NOTES, `B1 UP 90%%d R1`, its angle the included angle \
+              when the body's rule has angle_display: included), note_height?: mm (default 3), \
+             bend_lines?: bool (default true; false leaves BEND_UP and BEND_DOWN out, for a cutter that would cut them), \
+             layers?: roles|single (default roles, the layers below; single: every entity on layer 0), \
              per_body?: bool (a file for every sheet body, `<path>-<body>.dxf`, or their DXF texts without a path → files: [{body, path | dxf, bends}]; not with `body`) \
              → DXF (AutoCAD 2000, mm): layers OUTLINE (the outer contour), CUT (what is cut out inside it), TEXT or ETCH (letters), BEND_UP and BEND_DOWN (dashed centre lines), BEND_NOTES, \
              POCKET_<BOTTOM|TOP|INTERNAL>_Z<from>_TO_<to>_MM (one per side and depth) and PERFORATION; inner contours come before the outline",
         ),
     CommandSpec::new("sheet.export_bend_table", "Export Bend Table", export_bend_table).icon("bendtable")
         .noundo()
-        .params("body?, format?: csv|json (default csv), path? → bend table in mm and degrees, including rule and flat centre-line coordinates; a bend that cut-outs split has a row for each piece"),
+        .params("body?, format?: csv|json (default csv), path? → bend table in mm and degrees, including rule and flat centre-line coordinates; angle_deg is the bend angle and included_angle_deg the angle left between the bend's sides (180° less it); a bend that cut-outs split has a row for each piece"),
 ];
 
 fn points(p: &Value, k: &str, cmd: &str) -> Result<Vec<Vec3>> {
@@ -94,6 +109,58 @@ fn points(p: &Value, k: &str, cmd: &str) -> Result<Vec<Vec3>> {
 
 /// The `edges` of an edge flange: points `[x, y, z]` on sheet edges, or `{point, angle?, height?}`
 /// for an edge with its own angle and height (expressions, checked like the feature's).
+/// Most bends `then` may add after an edge flange's own.
+const MAX_THEN: usize = 16;
+
+/// One further bend of an edge flange: its angle, its height and, if it has its own, which way
+/// it turns (`flip`; the flange's own otherwise).
+type ThenStep = (solidcraft_doc::Expr, solidcraft_doc::Expr, Option<bool>);
+
+/// The further bends of an edge flange (`then`): each an angle and a height, made one after
+/// the other, every one on the far edge of the flange before it.
+fn then_steps(s: &Session, p: &Value, cmd: &str) -> Result<Vec<ThenStep>> {
+    let Some(v) = p.get("then").filter(|v| !v.is_null()) else { return Ok(Vec::new()) };
+    let list = "`then` must list further bends {angle?, height, flip?}: each on the far edge of the flange before it";
+    let a = v.as_array().ok_or_else(|| bad(cmd, list))?;
+    if a.len() > MAX_THEN {
+        return Err(bad(cmd, format!("`then` may list at most {MAX_THEN} bends")));
+    }
+    let mut out = Vec::with_capacity(a.len());
+    for (i, step) in a.iter().enumerate() {
+        let o = step.as_object().ok_or_else(|| bad(cmd, format!("then[{i}]: {list}")))?;
+        if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "angle" | "height" | "flip")) {
+            return Err(bad(cmd, format!("then[{i}]: unknown key `{k}` (a bend takes angle, height and flip)")));
+        }
+        let flip = match o.get("flip").filter(|v| !v.is_null()) {
+            Some(v) => Some(v.as_bool().ok_or_else(|| bad(cmd, format!("then[{i}]: `flip` must be true or false")))?),
+            None => None,
+        };
+        let height = req_expr(cmd, step, "height").map_err(|_| bad(cmd, format!("then[{i}]: `height` is required")))?;
+        check_expr(s, &height, Kind::Length, cmd, &format!("then[{i}].height"))?;
+        let angle = expr(step, "angle").unwrap_or_else(|| "90 deg".into());
+        check_expr(s, &angle, Kind::Angle, cmd, &format!("then[{i}].angle"))?;
+        out.push((angle, height, flip));
+    }
+    Ok(out)
+}
+
+/// Where to pick the far edges of the flanges feature `id` made: a point on each, for the flanges
+/// of the next bend of a chain.
+fn far_edge_picks(s: &Session, id: u64, cmd: &str) -> Result<Vec<FlangeEdge>> {
+    let prefix = format!("F{id}.");
+    let st = s.model.state();
+    let picks: Vec<FlangeEdge> = st
+        .sheets
+        .iter()
+        .flat_map(|sh| sh.flanges.iter().enumerate().filter(|(_, f)| f.tag.starts_with(&prefix)).filter_map(|(i, _)| sh.far_edge_pick(i)))
+        .map(FlangeEdge::at)
+        .collect();
+    if picks.is_empty() {
+        return Err(bad(cmd, "the flange has no far edge to bend again"));
+    }
+    Ok(picks)
+}
+
 fn flange_edges(s: &Session, p: &Value, cmd: &str) -> Result<Vec<FlangeEdge>> {
     const KEYS: [&str; 3] = ["point", "angle", "height"];
     let list = "`edges` must list points [x, y, z] on sheet edges, or {point, angle?, height?}";
@@ -116,7 +183,7 @@ fn flange_edges(s: &Session, p: &Value, cmd: &str) -> Result<Vec<FlangeEdge>> {
             if o.get(k).is_none_or(Value::is_null) {
                 return Ok(None);
             }
-            let e = expr(v, k).ok_or_else(|| bad(cmd, format!("edges[{i}]: `{k}` must be a number or an expression")))?;
+            let e = expr(v, k).ok_or_else(|| bad(cmd, format!("edges[{i}]: `{k}` {}", expr_problem(v.get(k)))))?;
             check_expr(s, &e, kind, cmd, &format!("edges[{i}].{k}"))?;
             Ok(Some(e))
         };
@@ -160,6 +227,9 @@ fn flange(s: &mut Session, p: &Value) -> Result<Value> {
             ),
         ));
     }
+    if ty != "edge" && p.get("then").is_some_and(|v| !v.is_null()) {
+        return Err(bad(cmd, "`then` (further bends) is only for edge flanges"));
+    }
     match ty.as_str() {
         "base" => {
             let sketch = feature_sketch(s, p, cmd)?;
@@ -194,6 +264,7 @@ fn flange(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "edge" => {
             let edges = flange_edges(s, p, cmd)?;
+            let then = then_steps(s, p, cmd)?;
             let height = req_expr(cmd, p, "height")?;
             check_expr(s, &height, Kind::Length, cmd, "height")?;
             let angle = expr(p, "angle").unwrap_or_else(|| "90 deg".into());
@@ -202,10 +273,20 @@ fn flange(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(r) = &radius {
                 check_expr(s, r, Kind::Length, cmd, "radius")?;
             }
-            let position = str_(p, "position").unwrap_or("inside").to_ascii_lowercase();
-            if !matches!(position.as_str(), "inside" | "outside" | "middle") {
-                return Err(bad(cmd, "`position` must be inside, outside or middle"));
+            let mut position = str_(p, "position").unwrap_or("inside").to_ascii_lowercase();
+            if !matches!(position.as_str(), "inside" | "outside" | "bend_outside" | "middle" | "material_outside" | "tangent") {
+                return Err(bad(cmd, "`position` must be inside, outside, middle, material_outside or tangent"));
             }
+            // The bend starting at the edge is `outside`, whichever name asked for it.
+            if position == "bend_outside" {
+                position = "outside".into();
+            }
+            // Where the heights are measured from; the outer sharp (the default) is saved as nothing.
+            let height_from = match p.get("height_from").filter(|v| !v.is_null()) {
+                Some(v) => v.as_str().and_then(sheet::HeightFrom::parse).ok_or_else(|| bad(cmd, "`height_from` must be outer, inner or tangent"))?,
+                None => sheet::HeightFrom::Outer,
+            };
+            let height_from = (height_from != sheet::HeightFrom::Outer).then(|| height_from.name().to_string());
             if s.model.state().sheets.is_empty() {
                 return Err(no_sheet_body(cmd));
             }
@@ -224,21 +305,45 @@ fn flange(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(c) = &corner_relief {
                 check_expr(s, c, Kind::Length, cmd, "corner_relief")?;
             }
-            add_feature(
+            let flip = bool_(p, "flip").unwrap_or(false);
+            let mut made = add_feature(
                 s,
                 p,
                 FeatureKind::SheetFlange {
                     edges,
                     height,
                     angle,
-                    radius,
-                    position,
-                    flip: bool_(p, "flip").unwrap_or(false),
-                    body: body.map(BodyName),
+                    radius: radius.clone(),
+                    position: position.clone(),
+                    flip,
+                    body: body.clone().map(BodyName),
                     corner_relief_shape,
                     corner_relief,
+                    height_from: height_from.clone(),
                 },
-            )
+            )?;
+            // Each further bend stands on the far edge of the flange before it.
+            for (angle, height, own_flip) in then {
+                let id = made.get("feature").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "no feature to bend again"))?;
+                let edges = far_edge_picks(s, id, cmd)?;
+                made = add_feature(
+                    s,
+                    &json!({}),
+                    FeatureKind::SheetFlange {
+                        edges,
+                        height,
+                        angle,
+                        radius: radius.clone(),
+                        position: position.clone(),
+                        flip: own_flip.unwrap_or(flip),
+                        body: body.clone().map(BodyName),
+                        corner_relief_shape: None,
+                        corner_relief: None,
+                        height_from: height_from.clone(),
+                    },
+                )?;
+            }
+            Ok(made)
         }
         other => Err(bad(cmd, format!("unknown flange type `{other}` (base, edge or contour)"))),
     }
@@ -355,6 +460,25 @@ fn fold(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
+fn path_flange(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "sheet.path_flange";
+    let edge = p.get("edge").and_then(vec3).ok_or_else(|| bad(cmd, "`edge` must be a point [x, y, z] on a sheet edge"))?;
+    let sketch = sketch_id(s, p.get("sketch"), cmd, "sketch")?;
+    let curves = string_list(p, "curves");
+    if curves.is_empty() || curves.len() > sheet::MAX_PATH_LINES {
+        return Err(bad(cmd, format!("`curves` must list the path's lines (1…{})", sheet::MAX_PATH_LINES)));
+    }
+    let radius = expr(p, "radius");
+    if let Some(r) = &radius {
+        check_expr(s, r, Kind::Length, cmd, "radius")?;
+    }
+    add_feature(
+        s,
+        p,
+        FeatureKind::SheetPath { edge: Position(edge), sketch: SketchId(sketch), curves, radius, body: str_(p, "body").map(BodyName::from) },
+    )
+}
+
 fn unfold(s: &mut Session, p: &Value) -> Result<Value> {
     add_feature(s, p, FeatureKind::SheetUnfold { body: str_(p, "body").map(BodyName::from), refold: false })
 }
@@ -414,6 +538,10 @@ fn rules(s: &mut Session, p: &Value) -> Result<Value> {
         let shape = shape.as_str().and_then(solidcraft_doc::sheet::ReliefShape::parse);
         rule.corner_relief_shape = shape.ok_or_else(|| bad(cmd, "`corner_relief_shape` must be notch, round, rectangular or tear"))?.name().into();
     }
+    if let Some(display) = p.get("angle_display").filter(|v| !v.is_null()) {
+        let display = display.as_str().and_then(sheet::AngleDisplay::parse);
+        rule.angle_display = display.ok_or_else(|| bad(cmd, "`angle_display` must be bend or included"))?.name().into();
+    }
     let (vals, _) = s.doc.param_values();
     let values = s.doc.rule_values(&vals, &rule).map_err(|e| bad(cmd, e.to_string()))?;
     let doc = s.doc_mut();
@@ -431,7 +559,17 @@ fn rules(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.refresh();
     let errors: Vec<Value> = s.model.results.iter().filter_map(|r| r.error.as_ref().map(|e| json!({"feature": r.name, "error": e}))).collect();
-    Ok(json!({"rule": rule, "values": values, "errors": errors}))
+    Ok(json!({"rule": rule_json(&rule), "values": values, "errors": errors}))
+}
+
+/// A rule as the rule commands list it: as saved, and with its `angle_display` also while it is
+/// the `bend` a design leaves out.
+fn rule_json(r: &SheetRule) -> Value {
+    let mut v = json!(r);
+    if let Value::Object(m) = &mut v {
+        m.insert("angle_display".into(), json!(r.angle_display));
+    }
+    v
 }
 
 fn list_rules(s: &mut Session, _p: &Value) -> Result<Value> {
@@ -440,7 +578,7 @@ fn list_rules(s: &mut Session, _p: &Value) -> Result<Value> {
     if all.is_empty() {
         all.push(SheetRule::steel());
     }
-    let rules: Vec<Value> = all.iter().map(|r| json!({"rule": r, "values": s.doc.rule_values(&vals, r).ok()})).collect();
+    let rules: Vec<Value> = all.iter().map(|r| json!({"rule": rule_json(r), "values": s.doc.rule_values(&vals, r).ok()})).collect();
     let active = s.doc.sheet_rule(None).name;
     Ok(json!({"rules": rules, "active": active}))
 }
@@ -506,7 +644,7 @@ fn flat_json(sh: &SheetBody) -> Result<Value> {
         .bends()
         .iter()
         .map(|b| {
-            json!({"bend": b.index, "angle_deg": b.angle_deg, "radius": b.radius, "direction": if b.up { "up" } else { "down" },
+            json!({"bend": b.index, "angle_deg": b.angle_deg, "included_angle_deg": b.included_angle_deg(), "radius": b.radius, "direction": if b.up { "up" } else { "down" },
                 "allowance": b.allowance, "length": b.length, "start": pt(&b.start), "end": pt(&b.end)})
         })
         .collect();
@@ -590,6 +728,10 @@ pub struct DxfOptions {
     pub text: DxfText,
     /// The height (mm) of the note beside each bend line, when it is to have one.
     pub bend_notes: Option<f64>,
+    /// Leave the bend lines out (BEND_UP, BEND_DOWN), for a cutter that would cut them (#4314).
+    pub no_bend_lines: bool,
+    /// Everything on layer 0 instead of a layer for each role (#4314).
+    pub one_layer: bool,
 }
 
 /// The layer of a role: its AutoCAD colour index (1 red, 2 yellow, 3 green, 4 cyan, 5 blue,
@@ -616,10 +758,10 @@ fn compact(v: f64) -> String {
     if t.is_empty() || t == "-0" { "0".into() } else { t.into() }
 }
 
-/// The note beside a bend line, `B1 UP 90%%d R2.5` (number, direction, angle, inner radius): as
-/// high as `height`, centred half a height beside the middle of the line, parallel to it and
-/// readable from below or from the right. (`%%d` is AutoCAD's degree sign.)
-fn bend_note(b: &solidcraft_doc::sheet::BendInfo, height: f64) -> solidcraft_io::DxfShape {
+/// The note beside a bend line, `B1 UP 90%%d R2.5` (number, direction, angle as `display` reads
+/// it, inner radius): as high as `height`, centred half a height beside the middle of the line,
+/// parallel to it and readable from below or from the right. (`%%d` is AutoCAD's degree sign.)
+fn bend_note(b: &solidcraft_doc::sheet::BendInfo, height: f64, display: sheet::AngleDisplay) -> solidcraft_io::DxfShape {
     let along = (b.end - b.start).normalized().unwrap_or(Vec2::X);
     let mut angle = along.angle().to_degrees();
     if angle > 90.0 + 1e-9 {
@@ -632,7 +774,7 @@ fn bend_note(b: &solidcraft_doc::sheet::BendInfo, height: f64) -> solidcraft_io:
         at: (b.start + b.end) * 0.5 + beside * (height * 0.5),
         height,
         angle_deg: angle,
-        text: format!("B{} {} {}%%d R{}", b.index, if b.up { "UP" } else { "DOWN" }, compact(b.angle_deg), compact(b.radius)),
+        text: format!("B{} {} {}%%d R{}", b.index, if b.up { "UP" } else { "DOWN" }, compact(display.of(b.angle_deg)), compact(b.radius)),
     }
 }
 
@@ -732,19 +874,28 @@ pub fn flat_dxf(sh: &SheetBody, o: &DxfOptions) -> Result<String> {
         entities.extend(solidcraft_io::loop_shapes(h).into_iter().map(|shape| DxfEntity { layer: layer.clone(), shape }));
     }
     for b in sh.bends() {
-        entities.push(DxfEntity { layer: if b.up { "BEND_UP" } else { "BEND_DOWN" }.into(), shape: DxfShape::Line(b.start, b.end) });
+        if !o.no_bend_lines {
+            entities.push(DxfEntity { layer: if b.up { "BEND_UP" } else { "BEND_DOWN" }.into(), shape: DxfShape::Line(b.start, b.end) });
+        }
         if let Some(height) = o.bend_notes {
-            entities.push(DxfEntity { layer: "BEND_NOTES".into(), shape: bend_note(&b, height) });
+            entities.push(DxfEntity { layer: "BEND_NOTES".into(), shape: bend_note(&b, height, sh.angle_display) });
         }
     }
     for (c, r) in perforation {
         entities.push(DxfEntity { layer: "PERFORATION".into(), shape: DxfShape::Circle { c, r } });
     }
+    // One layer: every entity on layer 0, which every drawing has.
+    if o.one_layer {
+        for e in &mut entities {
+            e.layer = "0".into();
+        }
+        return Ok(solidcraft_io::write_dxf_drawing(&[], &entities)?);
+    }
     // The four layers of every flat pattern, and those the rest is on.
     let mut names: std::collections::BTreeSet<String> = ["OUTLINE", "CUT", "BEND_UP", "BEND_DOWN"].map(String::from).into();
     names.extend(entities.iter().map(|e| e.layer.clone()));
     let layers: Vec<_> = names.iter().map(|name| dxf_layer(name)).collect();
-    Ok(solidcraft_io::write_dxf_drawing(&layers, &entities))
+    Ok(solidcraft_io::write_dxf_drawing(&layers, &entities)?)
 }
 
 /// What a `sheet.export_dxf` call asks for; a value it cannot use is refused.
@@ -773,7 +924,20 @@ fn dxf_options(p: &Value, cmd: &str) -> Result<DxfOptions> {
         Some(Value::Bool(true)) => Some(height),
         Some(_) => return Err(bad(cmd, "`bend_notes` must be true or false")),
     };
-    Ok(DxfOptions { curves, text, bend_notes })
+    let no_bend_lines = match p.get("bend_lines").filter(|v| !v.is_null()) {
+        None | Some(Value::Bool(true)) => false,
+        Some(Value::Bool(false)) => true,
+        Some(_) => return Err(bad(cmd, "`bend_lines` must be true or false")),
+    };
+    let one_layer = match p.get("layers").filter(|v| !v.is_null()) {
+        None => false,
+        Some(v) => match v.as_str().map(str::to_ascii_lowercase).as_deref() {
+            Some("roles") => false,
+            Some("single") => true,
+            _ => return Err(bad(cmd, "`layers` must be roles or single")),
+        },
+    };
+    Ok(DxfOptions { curves, text, bend_notes, no_bend_lines, one_layer })
 }
 
 /// The files of an export of every sheet body: `path` with `-<body>` before its extension
@@ -865,11 +1029,11 @@ fn export_bend_table(s: &mut Session, p: &Value) -> Result<Value> {
         // Always quote text fields: body/rule names may include commas, quotes or newlines.
         let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
         let mut csv =
-            "body,rule,thickness_mm,k_factor,bend,angle_deg,direction,radius_mm,allowance_mm,length_mm,start_x_mm,start_y_mm,end_x_mm,end_y_mm\r\n"
+            "body,rule,thickness_mm,k_factor,bend,angle_deg,direction,radius_mm,allowance_mm,length_mm,start_x_mm,start_y_mm,end_x_mm,end_y_mm,included_angle_deg\r\n"
                 .to_string();
         for b in sh.bends() {
             csv.push_str(&format!(
-                "{},{},{:.9},{:.9},{},{:.9},{},{:.9},{:.9},{:.9},{:.9},{:.9},{:.9},{:.9}\r\n",
+                "{},{},{:.9},{:.9},{},{:.9},{},{:.9},{:.9},{:.9},{:.9},{:.9},{:.9},{:.9},{:.9}\r\n",
                 quote(&sh.body),
                 quote(&sh.rule),
                 sh.t,
@@ -883,7 +1047,8 @@ fn export_bend_table(s: &mut Session, p: &Value) -> Result<Value> {
                 b.start.x,
                 b.start.y,
                 b.end.x,
-                b.end.y
+                b.end.y,
+                b.included_angle_deg()
             ));
         }
         csv
