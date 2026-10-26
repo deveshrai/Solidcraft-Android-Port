@@ -125,6 +125,28 @@ screenshots and released as the next letter (0.23.0a, b, c…).
 | "Open with" from other apps | Planned |
 | The app moving above the on-screen keyboard | Planned |
 
+### Candidates from upstream's requests
+
+Open, unclaimed feature requests on upstream that would most help the port's users, chosen from
+the ~390 open requests on 2026-10-26. These are candidates, not commitments; one that gets picked
+moves to the table above.
+
+| | Candidate | Upstream request | Why |
+|---|---|---|---|
+| 1 | **Pen support**: hover highlights, the barrel button right-clicks, the palm is ignored | [#2828](https://github.com/tangency-labs/solidcraft/issues/2828), [#4271](https://github.com/tangency-labs/solidcraft/issues/4271) | Most tablet users have a pen, and today it acts as a finger |
+| 2 | **ViewCube**: tap a face, edge or corner to turn the view | [#2124](https://github.com/tangency-labs/solidcraft/issues/2124), [#2198](https://github.com/tangency-labs/solidcraft/issues/2198), [#6064](https://github.com/tangency-labs/solidcraft/issues/6064) | The axis triad is a small target for a finger; asked for three times |
+| 3 | **Drag a value to change it** | [#6477](https://github.com/tangency-labs/solidcraft/issues/6477) | Changes numbers without the on-screen keyboard |
+| 4 | **Edit sizes on the model**: tap a hole or round, change its size in place | [#6642](https://github.com/tangency-labs/solidcraft/issues/6642) | Saves finding and opening the sketch on a small screen |
+| 5 | **Inch threads** (UNC/UNF) for the helical threads | [#6112](https://github.com/tangency-labs/solidcraft/issues/6112) | Upstream's tapped holes already have the catalogue; a small step for our threads |
+| 6 | **Clearance on Combine Cut**: a fit gap for mating parts | [#3774](https://github.com/tangency-labs/solidcraft/issues/3774) | The thread clearance idea for any two parts; the commonest reason prints don't fit |
+| 7 | **Bolts and nuts with real threads** (and print clearance) | [#2071](https://github.com/tangency-labs/solidcraft/issues/2071), [#787](https://github.com/tangency-labs/solidcraft/issues/787) | With the gears, a mechanical-parts kit no other mobile CAD has |
+| 8 | **Fillet that fits**: the largest radius the shape allows instead of a refusal | [#293](https://github.com/tangency-labs/solidcraft/issues/293) | Ends guessing smaller radii by trial and error |
+| 9 | **Hexagonal pattern** | [#2574](https://github.com/tangency-labs/solidcraft/issues/2574) | Vents, grilles and lightweighting in printed parts |
+| 10 | **Skip instances in a rectangular pattern** | [#3247](https://github.com/tangency-labs/solidcraft/issues/3247) | A grid with gaps without several patterns |
+
+Before starting one, check upstream again: someone may have claimed it since
+(`gh pr list -R tangency-labs/solidcraft --state open --search "#N"`).
+
 ## Keeping this page current
 
 On every port release:
