@@ -1783,7 +1783,13 @@ fn dropdown_row(app: &SolveApp, ui: &mut egui::Ui, c: &'static solidcraft_engine
     if resp.has_focus() && !ui.clip_rect().contains_rect(rect) {
         resp.scroll_to_me_animation(None, egui::style::ScrollAnimation::none());
     }
-    if resp.drag_started() {
+    // A finger's drag scrolls the list instead, or a touch screen could never reach the rows
+    // below the window's bottom (Android port); the pin still pins.
+    if ui.input(|i| i.any_touches()) {
+        if resp.dragged() {
+            ui.scroll_with_delta_animation(vec2(0.0, resp.drag_delta().y), egui::style::ScrollAnimation::none());
+        }
+    } else if resp.drag_started() {
         resp.dnd_set_drag_payload(ToolbarDrag { id: c.id, from_menu: true });
     }
     // The pin at the row's end (above the row, so it takes its own clicks).
@@ -2859,6 +2865,44 @@ mod dropdown_tests {
             let menu = crate::scenario::rect_of("toolbar_dropdown").unwrap();
             assert!(menu.contains(*at), "the focused last row is out of view: {at:?} in {menu:?}");
         }
+    }
+
+    /// A finger dragging a tall drop-down scrolls it rather than picking a row up to pin, so a
+    /// touch screen reaches the rows below the fold (Android port: Gear, last in Model › Create).
+    #[test]
+    fn a_finger_scrolls_a_tall_drop_down() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        h.call("ui.resize", json!({"width":1200,"height":500}));
+        h.app.ui.tab = "MODEL".into();
+        h.frames(4);
+        h.step(&json!({"click":{"handle":"panel:MODEL:CREATE"}})).unwrap();
+        h.frames(4);
+        let menu = crate::scenario::rect_of("toolbar_dropdown").expect("the drop-down is open");
+        let below = |id: &str| crate::scenario::handle_at(&format!("dropdown:{id}")).is_none_or(|p| !menu.contains(p));
+        assert!(below("gear.create"), "Gear starts below the fold");
+        let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase, pos, force: None };
+        let button =
+            |pressed, pos| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let from = crate::scenario::handle_at("dropdown:solid.revolve").unwrap();
+        for _ in 0..12 {
+            if !below("gear.create") {
+                break;
+            }
+            let to = from - egui::vec2(0.0, (from.y - menu.top()).min(200.0));
+            h.frame_with(vec![egui::Event::PointerGone]);
+            h.frame_with(vec![touch(egui::TouchPhase::Start, from), egui::Event::PointerMoved(from), button(true, from)]);
+            for k in 1..=10 {
+                let at = from + (to - from) * (k as f32 / 10.0);
+                h.frame_with(vec![touch(egui::TouchPhase::Move, at), egui::Event::PointerMoved(at)]);
+                assert!(!egui::DragAndDrop::has_any_payload(&h.ctx), "a finger's drag picked a row up");
+            }
+            h.frame_with(vec![touch(egui::TouchPhase::End, to), button(false, to), egui::Event::PointerGone]);
+            h.frames(4);
+        }
+        assert!(crate::scenario::rect_of("toolbar_dropdown").is_some(), "the drop-down stays open");
+        assert!(h.app.dialog.is_none(), "dragging started no command");
+        assert!(crate::scenario::handle_at("dropdown:gear.create").is_some_and(|p| menu.contains(p)), "Gear scrolled into view");
     }
 
     /// Every row of a drop-down is shown when the window has room, even after a shorter list was
