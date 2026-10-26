@@ -22,6 +22,7 @@ and follows upstream [tangency-labs/solidcraft](https://github.com/tangency-labs
 ## Status
 
 How the port differs from upstream, feature by feature: [android-vs-upstream.md](android-vs-upstream.md).
+What is wrong or missing, with work-arounds and what the next release fixes: [android-known-issues.md](android-known-issues.md).
 
 Tested on an Android 16 tablet emulator (Pixel Tablet, arm64, Vulkan through MoltenVK):
 
@@ -36,7 +37,7 @@ Tested on an Android 16 tablet emulator (Pixel Tablet, arm64, Vulkan through Mol
 | Threads | Port-only: modelled threads as exact helical B-rep, custom pitch on any diameter, clearance, offsets, left-handed ([android-threads.md](android-threads.md)); the faceted and cosmetic ISO threads are unchanged |
 | Rendering (0.22) | The Render workspace's live preview and CPU render work on the Fold (the GPU path tracer finds the Adreno 840) |
 | Back | Closes the open dialog, menu, tool, sketch or keyboard, as Escape; with nothing open, the app goes to the background as Home does, designs kept |
-| Tested devices | Pixel Tablet emulator (Android 16); Galaxy Z Fold (SM-F971B, Android 17, Adreno 840): inner screen, landscape and portrait; Galaxy Tab (SM-X840, Android 17, Mali-G1-Ultra): gears; Pixel 9 (Android 17, portrait): 0.23.0a gears, helical threads, Save As and Open |
+| Tested devices | Pixel Tablet emulator (Android 16); Galaxy Z Fold (SM-F971B, Android 17, Adreno 840): inner screen, landscape and portrait; 0.23.0b gears, helical threads, STEP and STL; Galaxy Tab (SM-X840, Android 17, Mali-G1-Ultra): gears; Pixel 9 (Android 17, portrait): 0.23.0a gears, helical threads, Save As and Open |
 | Files | Open, Open Recent, Save, Save As, Insert STEP/Mesh/Design, Save as mesh (STL, 3MF…), Export STEP/OBJ/DXF/URDF/JSON, from and to any documents provider (device, SD card, Drive…) |
 
 ## Building and installing

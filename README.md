@@ -3,7 +3,8 @@
 > upstream release, plus an Android app (touch, mouse and keyboard, files through Android's file
 > picker) and **modelling features upstream doesn't have yet**: exact helical B-rep threads with
 > custom pitch and clearance, and ten kinds of involute gears. How the two differ:
-> [docs/android-vs-upstream.md](docs/android-vs-upstream.md).
+> [docs/android-vs-upstream.md](docs/android-vs-upstream.md). Known issues and what the next release fixes:
+> [docs/android-known-issues.md](docs/android-known-issues.md).
 >
 > APKs: [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases) · using it:
 > [docs/android-touch.md](docs/android-touch.md) · threads: [docs/android-threads.md](docs/android-threads.md) ·

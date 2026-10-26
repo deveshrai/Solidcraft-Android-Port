@@ -4,7 +4,7 @@ How this port differs from upstream [tangency-labs/solidcraft](https://github.co
 The port is upstream plus an Android app, **plus modelling features upstream doesn't have yet**,
 built here first and kept up to date with every upstream release.
 
-Current: **port 0.23.0a**, against **upstream 0.23.0**. This page is kept up to date with each
+Current: **port 0.23.0b**, against **upstream 0.23.0**. This page is kept up to date with each
 port release ([keeping this page current](#keeping-this-page-current)).
 
 - [At a glance](#at-a-glance)
@@ -17,7 +17,7 @@ port release ([keeping this page current](#keeping-this-page-current)).
 
 ## At a glance
 
-| | Upstream 0.23.0 | Port 0.23.0a |
+| | Upstream 0.23.0 | Port 0.23.0b |
 |---|---|---|
 | Platforms | Windows, macOS, Linux, web | All of upstream's, **plus Android** (phones, tablets, foldables) |
 | Modelled threads | Cut as a faceted groove; the threaded body's curved faces become facets | Faceted as upstream, **or exact helical B-rep**: smooth helical faces, the rest of the body stays exact |
@@ -104,7 +104,8 @@ Details: [android.md, "Design files"](android.md#changes-to-upstream-code).
 
 ## Where upstream is still ahead
 
-Kept honest, so nobody is surprised:
+Kept honest, so nobody is surprised (the full list, with work-arounds and plans:
+[android-known-issues.md](android-known-issues.md)):
 
 - **Autosave recovery** isn't on Android yet: save your work.
 - **"Open with"** from other apps isn't there yet: use File › Open.
