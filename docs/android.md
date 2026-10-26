@@ -21,6 +21,8 @@ and follows upstream [tangency-labs/solidcraft](https://github.com/tangency-labs
 
 ## Status
 
+How the port differs from upstream, feature by feature: [android-vs-upstream.md](android-vs-upstream.md).
+
 Tested on an Android 16 tablet emulator (Pixel Tablet, arm64, Vulkan through MoltenVK):
 
 | Area | What works |

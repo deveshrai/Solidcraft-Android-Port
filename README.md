@@ -1,12 +1,15 @@
 > **This is the Android port of SolidCraft.** It is upstream
-> [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft) with an Android app on
-> top: the same CAD app on Android tablets and phones, with mouse and keyboard, touch, and files
-> through Android's file picker. APKs are on the
-> [releases page](https://github.com/deveshrai/Solidcraft-Android-Port/releases); how to use it:
-> [docs/android-touch.md](docs/android-touch.md); helical B-rep, custom and clearance threads:
-> [docs/android-threads.md](docs/android-threads.md); how it works and how to build it:
-> [docs/android.md](docs/android.md); how it follows upstream:
-> [docs/android-sync.md](docs/android-sync.md). Everything below is upstream's README.
+> [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with each
+> upstream release, plus an Android app (touch, mouse and keyboard, files through Android's file
+> picker) and **modelling features upstream doesn't have yet**: exact helical B-rep threads with
+> custom pitch and clearance, and ten kinds of involute gears. How the two differ:
+> [docs/android-vs-upstream.md](docs/android-vs-upstream.md).
+>
+> APKs: [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases) · using it:
+> [docs/android-touch.md](docs/android-touch.md) · threads: [docs/android-threads.md](docs/android-threads.md) ·
+> gears: [docs/android-gears.md](docs/android-gears.md) · how it works and how to build it:
+> [docs/android.md](docs/android.md) · following upstream: [docs/android-sync.md](docs/android-sync.md).
+> Everything below is upstream's README.
 
 <p align="center">
   <img src="assets/icons/app/linux/exports/hicolor/256x256/apps/ai.storyteller.solidcraft.png" width="96" height="96" alt="SolidCraft" />

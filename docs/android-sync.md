@@ -116,6 +116,9 @@ code"](android.md#changes-to-upstream-code)), so conflicts are rare and usually 
 
 Then `git add` the files, `git commit`, and `scripts/android-sync.sh --check-only`.
 
+After merging an upstream release, or landing a port-only feature, update
+[android-vs-upstream.md](android-vs-upstream.md) (its last section says what to check).
+
 Upstream's releases fold their pending design-format changes into a new `v<N>/` folder. The
 port's `crates/doc/src/format/pending/helical-threads.rs` stays pending (never fold it here):
 it is what makes upstream refuse a port design instead of losing its helical threads.
