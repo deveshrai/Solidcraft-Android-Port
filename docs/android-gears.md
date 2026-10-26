@@ -384,6 +384,19 @@ Gear from the long-press menu. The larger screen shows the whole dialog, Dimensi
 without scrolling. A helical preview takes about ten seconds; OK then applies in a second or two.
 There were no crashes or not-responding events.
 
+**On a Galaxy Z Fold (0.23.0b).** The inner screen is shorter than the tablet's, so **Model ›
+Create** runs past the bottom and Gear sits below the fold: drag the list up with a finger to
+reach it. (0.23.0a couldn't scroll that list by touch, so Gear looked missing there; 0.23.0b fixes
+it.) A helical gear with an 8 mm bore and keyway previews in a few seconds, builds without a
+not-responding prompt, reopens with a double-tap in the browser, and rebuilds with 24 teeth in
+place. It saves as `solidcraft/38` with its parameters in the component's metadata.
+
+| | |
+|---|---|
+| ![Model › Create scrolled by finger to Gear](screenshots/android/fold-01-create-menu-scrolled.jpg) | ![The Gear dialog previewing a helical gear](screenshots/android/fold-02-gear-helical-preview.jpg) |
+| ![Bore and keyway in the preview](screenshots/android/fold-03-gear-bore-keyway.jpg) | ![The helical gear built as its own component](screenshots/android/fold-04-gear-built.jpg) |
+| ![Edit Gear from a double-tap in the browser](screenshots/android/fold-05-edit-gear.jpg) | ![Rebuilt with 24 teeth](screenshots/android/fold-06-gear-24-teeth.jpg) |
+
 **The taskbar.** Samsung tablets and other large screens show a taskbar along the bottom, and it
 took the touches there, including a tall dialog's **OK** and **Cancel**. The app now hides the
 system bars while it is in front, as its fullscreen theme intends. Swipe up from the bottom edge to

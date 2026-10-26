@@ -29,6 +29,7 @@ Galaxy Tab running 0.22.0 with the gears.
 | Two-finger drag | Pan the view with the fingers |
 | Pinch | Zoom about the point between the fingers |
 | Drag a dialog's arrow | Change its value (Extrude distance, Fillet radius…) |
+| Drag a menu or dialog up or down | Scroll it: a ribbon menu taller than the screen (Model › Create runs past the bottom on a foldable) or a tall dialog. A mouse drags a menu row onto the ribbon to pin it instead |
 | Home button by the axis triad | Return to the home view |
 
 Once two fingers are down the touch stays a pan or pinch until every finger lifts, so lifting
@@ -162,6 +163,14 @@ and go to the device, an SD card, Google Drive or any storage app.
 - **Insert STEP / Insert Mesh** brings a part in as a component next to what is there.
 
 ![A STEP part and an STL mesh inserted](screenshots/android/14-step-and-stl-inserted.jpg)
+
+- **Open** names the tab after the design's own name, the one it was saved under. A design saved by
+  0.22.0a may carry "Untitled (n)" from that release's Save As; **Save As** it once to rename it.
+- On Samsung devices the window handle sits at the top centre, over the tab strip, and a tap there
+  can open Samsung's window menu instead of the **+** tab button. **Ctrl+N** or **File › New
+  Design** always opens a new tab.
+
+![A STEP bracket inserted next to a helical M20, on a Galaxy Z Fold](screenshots/android/fold-10-step-inserted.jpg)
 
 ## Back, Home and rotation
 

@@ -84,6 +84,19 @@ The dialog opens on **Type: ISO metric** with the size that fits the face, as be
 
 ![The Thread dialog as it opens](screenshots/android/threads-03-dialog-iso-default.jpg)
 
+**Where the helical thread is.** The dialog opens as upstream's does, so the port's options are
+one step in: tick **Modeled**, then set **Geometry** to **Helical B-rep**. The **Helical B-rep**
+section (depth, clearance, offsets, left-handed, and the Turns / Groove / Crest readouts) appears
+below; drag the dialog up with a finger to reach it on a shorter screen. **Type** lists
+**Custom** next to ISO metric. On a Galaxy Z Fold (0.23.0b), an M20 on a 20 mm cylinder:
+
+| | | |
+|---|---|---|
+| ![Modeled ticked, Geometry: Helical B-rep](screenshots/android/fold-07-thread-helical-preview.jpg) | ![The Helical B-rep options](screenshots/android/fold-08-thread-helical-options.jpg) | ![The helical M20](screenshots/android/fold-09-helical-m20.jpg) |
+
+Exported as STEP, that M20 is one exact solid of 8 faces, its helical flanks B-spline surfaces,
+with no triangles.
+
 ## ISO metric threads
 
 1. Tick **Modeled**. A **Geometry** row appears: **Faceted** (the original method) or
