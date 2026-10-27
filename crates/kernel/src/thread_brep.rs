@@ -377,7 +377,7 @@ pub fn helical_thread(body: &Body, at: Vec3, cyl: &CylinderFace, t: &HelicalThre
         .collect::<Result<_>>()?;
     // Before and after measured alike, so the difference is the groove's alone.
     let measure_tol = (size * 1e-3).max(1e-3).min(t.pitch * 0.02);
-    let volume_before = body.tessellate(measure_tol)?.measure().volume;
+    let volume_before = planned_volume(body, measure_tol)?;
     // Pappus: the groove's section times the path of its centroid.
     let area = s.deep * (s.mouth + s.root) / 2.0;
     let centroid = r + into * s.deep * (s.mouth + 2.0 * s.root) / (3.0 * (s.mouth + s.root));
@@ -500,7 +500,7 @@ pub fn helical_thread(body: &Body, at: Vec3, cyl: &CylinderFace, t: &HelicalThre
                 last = bad.join("; ");
                 continue;
             }
-            let after = b.tessellate(measure_tol)?.measure().volume;
+            let after = planned_volume(&b, measure_tol)?;
             let cut = volume_before - after;
             if (cut - removed).abs() > 0.05 * removed + 1e-6 * volume_before.abs() {
                 last = format!("the groove removes {cut:.4} mm³, not {removed:.4}");
@@ -510,4 +510,16 @@ pub fn helical_thread(body: &Body, at: Vec3, cyl: &CylinderFace, t: &HelicalThre
         }
         Err(fail(&last))
     })
+}
+
+/// A body's volume from its display plan, the way a threaded body is meshed (a face trimmed by
+/// a helix of several turns can't be meshed the reference way). Before and after a thread are
+/// measured alike: the two ways differ by more than a small groove on a large hollow body (a
+/// tapped boss under a cassette shell's ceiling: 0.14 mm³ against a 1.2 mm³ M2 groove). The
+/// reference way when there is no plan.
+fn planned_volume(body: &Body, tol: f64) -> Result<f64> {
+    match guard("tessellate", || crate::tess::plan(&body.solid, tol, None, body.boundary_tol)) {
+        Ok((plan, _)) => Ok(plan.evaluate().measure().volume),
+        Err(_) => Ok(body.tessellate(tol)?.measure().volume),
+    }
 }

@@ -864,3 +864,20 @@ fn iso_helical_threads_and_their_refusals() {
     }
     assert!(s.execute("solid.thread", &json!({"face": [5, 0, 8], "clearance": "0.1 mm"})).is_err(), "clearance needs a helical thread");
 }
+
+/// An M2 helical thread tapped into a boss that hangs from a hollow shell's ceiling (a cassette
+/// half): refused before, because the volume check measured the body before the thread one way and
+/// after it another, which differ by more than the tiny groove on a large hollow body.
+#[test]
+fn helical_thread_in_a_boss_under_a_hollow_shells_ceiling() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 100.4, "width": 63.8, "height": 4.35, "corner": [-50.2, 0, 4.35], "body_name": "Top"}));
+    run(&mut s, "solid.box", json!({"length": 98, "width": 61.4, "height": 3.4, "corner": [-49, 1.2, 4.1], "operation": "cut", "targets": ["Top"]}));
+    run(&mut s, "solid.cylinder", json!({"diameter": 4.4, "height": 3.15, "base": [-46.2, 4.0, 4.35], "operation": "join", "targets": ["Top"]}));
+    run(&mut s, "solid.hole", json!({"position": [-46.2, 4.0, 4.35], "direction": [0, 0, 1], "diameter": 1.6, "depth": 2.9, "targets": ["Top"]}));
+    let before = volume(&mut s, "Top");
+    run(&mut s, "solid.thread", json!({"face": [-45.4, 4.0, 5.8], "designation": "M2", "helical": true}));
+    let removed = before - volume(&mut s, "Top");
+    assert!((removed - 1.21).abs() < 0.1, "removed {removed} mm³");
+    assert!(s.model.state().body("Top").unwrap().body.validity().is_empty());
+}
