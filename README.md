@@ -1,3 +1,11 @@
+> [!WARNING]
+> **Stale branch, kept for reference.** `gears` is based on upstream SolidCraft 0.22.0, and its work
+> (Gears (gear.create, gear.edit, gear.info)) was merged into `main` and released in port 0.23.0a. `main` has moved far ahead since
+> (upstream fixes, later features, newer releases), so build from **`main`** or download a
+> [release](https://github.com/deveshrai/Solidcraft-Android-Port/releases) instead. This branch still
+> builds as it was, and is not updated or deleted. Current guide:
+> [docs/android-gears.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/main/docs/android-gears.md).
+
 > **This is the Android port of SolidCraft.** It is upstream
 > [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft) with an Android app on
 > top: the same CAD app on Android tablets and phones, with mouse and keyboard, touch, and files
