@@ -303,6 +303,8 @@ feature whose preview fails.
 | *the shaft is hollow under this thread* / *the wall around the hole is too thin for this thread* | The groove would break through: less depth, or a thicker wall |
 | *a helical M8 thread needs a 8 mm shaft (this one is 10 mm)…* | Use Faceted (turns the shaft down), or Custom on the shaft as it is |
 | *this … mm hole is too wide for an M8 thread…* | Drill the tap size, or use Custom |
+| *with a 0.05 mm clearance an M2 thread leaves no crest in a 1.6 mm hole, and a shallower thread would not take the bolt: drill 1.85 mm…* | Drill the size it names (a printed or clearance-fit tap drill is larger than the standard one), or less clearance. Before 0.24.0a the groove was made shallower without a word, too shallow for the bolt |
+| *something else of the body meets the thread* when the part is already in its mating hole | The face is picked by a point, and the point is on both parts: thread the part before putting it in place |
 | *not supported yet: a helical thread on a body of several shells* | The body has an inside void or is in several pieces: use Faceted |
 | *a thread is limited to 400 turns* | Shorter, or a coarser pitch |
 

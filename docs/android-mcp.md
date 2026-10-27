@@ -30,7 +30,7 @@ something outside the phone's app sandbox can reach them.
    Termux on this device, or a terminal on the computer.
 5. Ask for a part: *"Make a 40 × 30 × 10 mm block with 3 mm fillets on its vertical edges."*
 
-![Settings › MCP server, for Termux on this device](screenshots/android/mcp-01-settings-this-device.jpg)
+![Settings › MCP server on a Galaxy Z Fold: on, This device, Another computer, Copy](screenshots/android/mcp-settings-fold.gif)
 
 The command starts Claude Code with SolidCraft's server for that session only. It looks like this,
 with your device's address and token:
@@ -47,6 +47,12 @@ Claude Code in Termux: install Node.js and Claude Code with `pkg install nodejs`
 *Built by Claude Code from one sentence. It sketched a 40 × 30 rectangle, extruded it 10 mm,
 filleted the four vertical edges, then took a screenshot through the server and described it.*
 
+**A bigger test, on a Galaxy Z Fold over Wi-Fi:** a cassette housing in two halves with five M2 screws on
+helical threads, built and checked to fit through the server: 121 operations in 105 s, none failed, with
+the time of every operation ([android-mcp-live-test.md](android-mcp-live-test.md)).
+
+![A cassette housing built over the MCP server on a Galaxy Z Fold](screenshots/android/mcp-cassette-fold.gif)
+
 ## The settings page
 
 | Setting | What it does |
@@ -58,7 +64,7 @@ filleted the four vertical edges, then took a screenshot through the server and 
 | **Start Claude Code with it** | One command that starts Claude Code connected to SolidCraft, with **Copy**. |
 | Status line | *Listening: waiting for Claude Code to connect*, or *Connected: n session(s), last request … ago*. A red line counts requests refused for a wrong or missing token. |
 
-![For a computer on the same Wi-Fi](screenshots/android/mcp-02-settings-another-computer.jpg)
+![For a computer on the same Wi-Fi (Galaxy Z Fold)](screenshots/android/fold-mcp-settings-another-computer.jpg)
 
 **Advanced**:
 

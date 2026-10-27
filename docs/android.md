@@ -9,7 +9,9 @@ touch, and opening, saving, importing and exporting through Android's document p
 **Threads** (helical B-rep, custom threads, clearance): [android-threads.md](android-threads.md).
 
 **Claude Code and other AI agents** (Settings › MCP server, from Termux or a computer):
-[android-mcp.md](android-mcp.md).
+[android-mcp.md](android-mcp.md), and a live test on a Galaxy Z Fold: [android-mcp-live-test.md](android-mcp-live-test.md).
+
+**What's new in each release:** [android-whats-new.md](android-whats-new.md).
 
 This port lives in [deveshrai/Solidcraft-Android-Port](https://github.com/deveshrai/Solidcraft-Android-Port)
 and follows upstream [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft);
@@ -40,7 +42,7 @@ Tested on an Android 16 tablet emulator (Pixel Tablet, arm64, Vulkan through Mol
 | Threads | Port-only: modelled threads as exact helical B-rep, custom pitch on any diameter, clearance, offsets; left-handed through upstream's Thread direction ([android-threads.md](android-threads.md)); the faceted and cosmetic ISO threads are unchanged |
 | Rendering (0.22) | The Render workspace's live preview and CPU render work on the Fold (the GPU path tracer finds the Adreno 840) |
 | Back | Closes the open dialog, menu, tool, sketch or keyboard, as Escape; with nothing open, the app goes to the background as Home does, designs kept |
-| Tested devices | Pixel Tablet emulator (Android 16); Galaxy Z Fold (SM-F971B, Android 17, Adreno 840): inner screen, landscape and portrait; 0.23.0b gears, helical threads, STEP and STL; Galaxy Tab (SM-X840, Android 17, Mali-G1-Ultra): gears; Pixel 9 (Android 17, portrait): 0.23.0a gears, helical threads, Save As and Open |
+| Tested devices | Pixel Tablet emulator (Android 16); Galaxy Z Fold (SM-F971B, Android 17, Adreno 840): inner screen, landscape and portrait; 0.23.0b gears, helical threads, STEP and STL; 0.24.0a the MCP server over Wi-Fi ([a cassette housing built through it](android-mcp-live-test.md)); Galaxy Tab (SM-X840, Android 17, Mali-G1-Ultra): gears; Pixel 9 (Android 17, portrait): 0.23.0a gears, helical threads, Save As and Open |
 | AI agents | Port-only: Settings › MCP server lets Claude Code in Termux on the device, or on a computer on the same Wi-Fi, drive the app through upstream's MCP tools ([android-mcp.md](android-mcp.md)); tested on the emulator with Claude Code from a Mac (0.24.0a) |
 | Files | Open, Open Recent, Save, Save As, Insert STEP/Mesh/Design, Save as mesh (STL, 3MF…), Export STEP/OBJ/DXF/URDF/JSON, from and to any documents provider (device, SD card, Drive…) |
 

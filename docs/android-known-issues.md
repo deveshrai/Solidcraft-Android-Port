@@ -32,6 +32,9 @@ doesn't, and the reverse.
 | **The on-screen keyboard covers the lower half of the screen**; the app doesn't move above it, so a field low in a dialog is typed into blind. | Hide the keyboard with its ⌄ key to see the result; a hardware keyboard avoids it | Resize the window above the keyboard |
 | **No autosave recovery.** If Android ends the app in the background, unsaved work is lost. | Save often (Ctrl+S on a design opened from a file writes back to it) | Upstream's recovery folder on Android, offered at the next start |
 | **No "Open with".** Opening a `.solidcraft`, STEP or STL from a file manager or a mail doesn't offer SolidCraft. | **File › Open** inside the app | Register the file types and take the shared file as an Open |
+| **Checks between large bodies are slow.** Interference and clearance between the two halves of the [cassette test](android-mcp-live-test.md) take about 38 s and 35 s on a Galaxy Z Fold (about 1 s each before its tape-path blocks were added). | Check the pairs that matter (`bodies`, `against`) | Find what makes those pairs slow |
+| **A thread's face can't name its body.** `solid.thread` picks the face by a point; with a screw already in its tapped hole the point is on both, and the wrong one is threaded ("something else of the body meets the thread"). | Thread the part before putting it in place | A `body` parameter, as other commands have |
+| **Helical threads against helical threads aren't intersected.** Interference and clearance list such pairs as not checked. | Check a thread fit on meshes ([how](android-mcp-live-test.md#how-the-fit-was-checked)) | Upstream's kernel |
 | **MCP: nothing on the device says Claude Code is waiting.** With SolidCraft in the background, an agent's call waits 15 s and then tells the agent to ask you to bring SolidCraft back; nothing on the phone itself says so. | Keep SolidCraft on screen next to Termux: split screen or a pop-up window ([android-mcp.md](android-mcp.md#keep-solidcraft-on-screen)) | A notification while a call waits, tapping it brings SolidCraft back |
 | **The phone layout is cramped.** It works in portrait and landscape, but the ribbon and dialogs are tight. | A tablet, or a foldable's inner screen | Larger touch targets and a compact ribbon on narrow screens |
 
@@ -53,6 +56,8 @@ reported or left to upstream, not patched in the port, so merges stay clean.
   upstream's (38 against 37) for the helical thread fields, so upstream asks to be updated rather
   than silently rebuilding helical threads as faceted ones. Export STEP to share
   ([android-vs-upstream.md](android-vs-upstream.md#design-files-and-compatibility)).
+- **Split Body nudges its plane** (by micrometres) when the exact split fails, and later cuts across that
+  seam can fail. Upstream's kernel; build the two sides as separate solids instead.
 - **The MCP server runs the agent's calls only while SolidCraft is on screen.** Android pauses an
   app in the background, so no app can run them then; the call says so rather than hang
   ([android-mcp.md](android-mcp.md#keep-solidcraft-on-screen)).
@@ -67,6 +72,8 @@ reported or left to upstream, not patched in the port, so merges stay clean.
 | Issue | Fixed in |
 |---|---|
 | Back with Settings open sent the app to the background instead of closing Settings | 0.24.0a |
+| A helical thread tapped into a boss under a hollow shell was refused ("the groove removes … mm³") | 0.24.0a |
+| An internal ISO thread with a clearance in too small a hole came out too shallow for its bolt, silently; it now names the drill | 0.24.0a |
 | Ribbon menus taller than the screen couldn't be scrolled by touch, so on a foldable's inner screen **Model › Create** stopped at Web and **Gear**, Boss, Lip, Snap Fit, Rest and Frame Member couldn't be reached from it | 0.23.0b |
 | Save As kept the tab named "Untitled" instead of the name typed in the picker | 0.23.0a |
 

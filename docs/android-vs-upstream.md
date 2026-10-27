@@ -4,7 +4,9 @@ How this port differs from upstream [tangency-labs/solidcraft](https://github.co
 The port is upstream plus an Android app, **plus modelling features upstream doesn't have yet**,
 built here first and kept up to date with every upstream release.
 
-Current: **port 0.24.0a**, against **upstream 0.24.0**. This page is kept up to date with each
+![The port and upstream](screenshots/android/hero-port-vs-upstream.png)
+
+Current: **port 0.24.0a**, against **upstream 0.24.0** ([what's new](android-whats-new.md)). This page is kept up to date with each
 port release ([keeping this page current](#keeping-this-page-current)).
 
 - [At a glance](#at-a-glance)
@@ -78,6 +80,9 @@ transport (MCP Streamable HTTP with a bearer token), the page, and what Android 
 must be on screen, so a call made while it is in the background says so instead of hanging).
 Upstream's MCP server runs over stdio on the same computer, which an Android app's sandbox can't
 offer.
+
+Tested live on a Galaxy Z Fold over Wi-Fi, building a cassette housing with five threaded screws:
+[android-mcp-live-test.md](android-mcp-live-test.md).
 
 Guide: [android-mcp.md](android-mcp.md). Code: `apps/solidcraft-android/src/mcp_http.rs`,
 `apps/solidcraft-android/src/mcp_host.rs`, `crates/ui-egui/src/prefs/mcp_server.rs`.

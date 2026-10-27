@@ -1,17 +1,33 @@
-> **This is the Android port of SolidCraft.** It is upstream
-> [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with each
-> upstream release, plus an Android app (touch, mouse and keyboard, files through Android's file
-> picker) and **modelling features upstream doesn't have yet**: exact helical B-rep threads with
-> custom pitch and clearance, and ten kinds of involute gears. **Claude Code can drive the app**
-> from Termux on the device or from a computer on the same Wi-Fi (Settings › MCP server:
-> [docs/android-mcp.md](docs/android-mcp.md)). How the two differ:
-> [docs/android-vs-upstream.md](docs/android-vs-upstream.md). Known issues and what the next release fixes:
-> [docs/android-known-issues.md](docs/android-known-issues.md).
->
-> APKs: [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases) · using it:
-> [docs/android-touch.md](docs/android-touch.md) · threads: [docs/android-threads.md](docs/android-threads.md) ·
-> gears: [docs/android-gears.md](docs/android-gears.md) · how it works and how to build it:
-> [docs/android.md](docs/android.md) · following upstream: [docs/android-sync.md](docs/android-sync.md).
+# SolidCraft for Android
+
+![SolidCraft for Android: upstream SolidCraft plus an Android app, helical B-rep threads, gears and an MCP server on the network](docs/screenshots/android/hero-port-vs-upstream.png)
+
+**This is the Android port of SolidCraft.** It is upstream
+[tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with every
+upstream release (now 0.24.0), plus an Android app and **features upstream doesn't have yet**. Current
+release: **0.24.0a** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
+
+| Added in this port | What it gives you | Guide |
+|---|---|---|
+| **Android app** | Phones, tablets and foldables: one finger orbits, two pan, a pinch zooms; a mouse and keyboard work as on a desktop; files through Android's picker (device, SD card, Drive) | [Using it](docs/android-touch.md) |
+| **Helical B-rep threads** | Exact, smooth threads instead of faceted ones; any pitch on any diameter; clearance for printed parts that screw together | [Threads](docs/android-threads.md) |
+| **Involute gears** | Ten types (spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel, crossed helical), bore, keyway and hub, editable after | [Gears](docs/android-gears.md) |
+| **MCP server on the network** | One switch in Settings: Claude Code in Termux on the device, or on a computer on the same Wi-Fi, models in the app while you watch | [MCP server](docs/android-mcp.md) |
+
+**See it work:** an agent modelling through the MCP server on a Galaxy Z Fold, over Wi-Fi: a
+cassette housing in two halves with five M2 screws on real threads, checked to fit, in 121 operations and
+105 seconds ([the whole test](docs/android-mcp-live-test.md)).
+
+![A cassette housing built over the MCP server on a Galaxy Z Fold](docs/screenshots/android/mcp-cassette-fold.gif)
+
+How the port differs from upstream, feature by feature: [android-vs-upstream](docs/android-vs-upstream.md) ·
+what's new in each release: [android-whats-new](docs/android-whats-new.md) ·
+known issues: [android-known-issues](docs/android-known-issues.md) ·
+how it works and how to build it: [android](docs/android.md) ·
+following upstream: [android-sync](docs/android-sync.md).
+
+---
+
 > Everything below is upstream's README.
 
 <p align="center">
