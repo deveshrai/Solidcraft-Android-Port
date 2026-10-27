@@ -1,3 +1,11 @@
+> [!WARNING]
+> **Stale branch, kept for reference.** `threads-helical-brep` is based on upstream SolidCraft 0.21.0, and its work
+> (Helical B-rep threads) was merged into `main` and released in port 0.22.0a. `main` has moved far ahead since
+> (upstream fixes, later features, newer releases), so build from **`main`** or download a
+> [release](https://github.com/deveshrai/Solidcraft-Android-Port/releases) instead. This branch still
+> builds as it was, and is not updated or deleted. Current guide:
+> [docs/android-threads.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/main/docs/android-threads.md).
+
 > **This is the Android port of SolidCraft.** It is upstream
 > [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft) with an Android app on
 > top: the same CAD app on Android tablets and phones, with mouse and keyboard, touch, and files
