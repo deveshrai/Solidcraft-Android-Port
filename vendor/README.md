@@ -318,6 +318,10 @@ SolidCraft changes:
   submits nothing (`DeviceLost::probe`), so a device the driver lost is found by that
   submission rather than by the first queue write, which panicked inside wgpu-core
   (`PendingWrites::activate`, #4172).
+- `src/lib.rs`: creation of the egui renderer uses validation, internal and out-of-memory
+  error scopes, awaiting every result before returning it. A refused UI pipeline (D3D12
+  `egui_pipeline` shader compilation, #6648) returns `WgpuError::CreateRendererError` through
+  eframe so startup can retry another backend instead of invoking wgpu's panic handler.
 
 ## winit 0.30.13 (Apache-2.0, the winit contributors, https://github.com/rust-windowing/winit)
 

@@ -141,3 +141,57 @@ fn hovering_a_collapsed_nested_placement_walks_its_subtree_once() {
     h.call("ui.move", json!({"x":at.x,"y":at.y + 1.0}));
     assert_eq!(h.app.viewport.hover_bodies.len(), 7);
 }
+
+/// An open curve turned round is a surface body and the Bodies folder shows it as one; a closed
+/// profile turned all the way round, and a box, are solids.
+#[test]
+fn bodies_folder_tells_surfaces_from_solids() {
+    let mut h = crate::scenario::Harness::new();
+    let mut run = |id: &str, p: serde_json::Value| {
+        h.app.run(id, p).unwrap();
+    };
+    run("sketch.create", json!({"plane":"XY", "name":"S"}));
+    run("sketch.line", json!({"points":[[3, 0], [3, 4]], "ids":["side"]}));
+    run("sketch.rectangle.two_point", json!({"p0":[5, 0], "p1":[7, 3]}));
+    run("sketch.finish", json!({}));
+    run("surface.revolve", json!({"sketch":"S", "curves":["side"], "axis":"y", "body_name":"Tube"}));
+    run("surface.revolve", json!({"sketch":"S", "profiles":[0], "axis":"y", "body_name":"Ring"}));
+    run("solid.box", json!({"length":2, "width":2, "height":2, "corner":[20, 0, 0]}));
+    super::prepare_model(&mut h.app);
+    let icons: Vec<(String, &str)> = super::entries(&h.app, 0, "bodies").into_iter().map(|e| (e.key, e.icon)).collect();
+    assert_eq!(icons.len(), 3, "{icons:?}");
+    assert_eq!(icons[..2], [("Tube".to_string(), "surface"), ("Ring".to_string(), "body")]);
+    assert_eq!(icons[2].1, "body", "the box is a solid");
+}
+
+#[test]
+fn construction_rows_include_points_and_axes() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("construct.point.vertex", json!({"point":{"point":[20,15,10]},"name":"Point1"})).unwrap();
+    h.app.run("construct.axis.two_points", json!({"a":{"point":[0,0,0]},"b":{"point":[0,0,30]},"name":"Axis1"})).unwrap();
+    for cached in [false, true] {
+        if cached {
+            super::prepare_model(&mut h.app);
+        }
+        let rows = super::entries(&h.app, 0, "construction");
+        assert_eq!(rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["Point1", "Axis1"]);
+        for row in &rows {
+            assert!(row.visible && row.sel.is_some() && row.target.is_some());
+        }
+    }
+    let rows = super::entries(&h.app, 0, "construction");
+    for row in &rows {
+        super::pick_from_browser(&mut h.app, row.sel.clone().unwrap());
+        assert!(super::entries(&h.app, 0, "construction").iter().find(|r| r.label == row.label).unwrap().selected);
+        let items = crate::context_menu::items(&h.app, row.target.as_ref().unwrap());
+        for id in ["ui.rename", "ui.delete", "ui.editFeature", "ui.originPart"] {
+            assert!(items.iter().any(|i| i.id == id), "{} lacks {id}", row.label);
+        }
+        assert!(!items.iter().any(|i| i.id == "sketch.create"));
+    }
+    h.app.session.visibility.hidden_origin.push("Point1".into());
+    assert!(!super::entries(&h.app, 0, "construction")[0].visible);
+    h.app.run("selection.delete", json!({"items": rows.iter().map(|r| r.sel.clone().unwrap()).collect::<Vec<_>>()})).unwrap();
+    super::prepare_model(&mut h.app);
+    assert!(super::entries(&h.app, 0, "construction").is_empty());
+}

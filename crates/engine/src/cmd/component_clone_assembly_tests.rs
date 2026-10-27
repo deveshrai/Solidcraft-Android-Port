@@ -250,7 +250,13 @@ fn an_edge_origin_is_copied_onto_the_copys_edges() {
         name: "Corner".into(),
         origin: JointOrigin {
             occurrence: 1,
-            snap: Snap::Edge { pick: Vec3::new(1.0, 2.0, 3.0), edge: edge("F1:top|F1:side"), face: edge("F1:top"), corner: edge("F1:top|F10:end") },
+            snap: Snap::Edge {
+                pick: Vec3::new(1.0, 2.0, 3.0),
+                edge: edge("F1:top|F1:side"),
+                face: edge("F1:top"),
+                corner: edge("F1:top|F10:end"),
+                axis: None,
+            },
         },
     }];
     destination.assembly.origins.clear();

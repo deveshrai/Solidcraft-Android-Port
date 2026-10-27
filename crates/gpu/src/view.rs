@@ -17,7 +17,11 @@ use wgpu::util::DeviceExt;
 use crate::pbr;
 
 mod ao;
+#[cfg(not(target_arch = "wasm32"))]
+mod msaa_check;
 mod oit;
+#[cfg(not(target_arch = "wasm32"))]
+pub use msaa_check::MsaaCheck;
 
 /// Triangle vertex: position (3 × f32), normal (3 × f32), sRGB colour (4 × u8).
 pub const TRI_SIZE: usize = 28;
@@ -1195,6 +1199,20 @@ impl Batches {
     }
 }
 
+/// The section's pipelines (see `Renderer::tri_cut`).
+struct Cut {
+    /// Draws the faces and marks the stencil by their true depth: 1 where a back face (the cap)
+    /// is the visible surface. Unpushed: `FACE_BIAS`'s slope part would let a front face win a
+    /// band along its edge with a back face seen through the cut, and the cap would skip it (#6328).
+    mark: wgpu::RenderPipeline,
+    /// The faces' depth again, pushed back by `FACE_BIAS` as unsectioned faces are (after
+    /// `Renderer::section_reset`), so their edges draw over them (#1434). No colour, no stencil.
+    push: wgpu::RenderPipeline,
+    /// The cap again, only where marked, at the section plane's depth: depth only, as the mark
+    /// drew the cap's colour (#6728).
+    cap: wgpu::RenderPipeline,
+}
+
 /// The viewport's pipelines and the scenes uploaded to one device, for one kind of target.
 pub struct Renderer {
     /// What the last frame drew ([`Renderer::stats`]).
@@ -1208,24 +1226,24 @@ pub struct Renderer {
     /// `tri` and `tri_cut` for planned bodies (positions and normals from the GPU evaluation,
     /// colours per vertex, indexed).
     tri_planned: wgpu::RenderPipeline,
-    tri_cut_planned: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline)>,
+    tri_cut_planned: Option<Cut>,
     /// `tri` and `tri_cut` for instanced meshes (shared triangles, a move and colour per
     /// placement).
     tri_instanced: wgpu::RenderPipeline,
-    tri_cut_instanced: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline)>,
+    tri_cut_instanced: Option<Cut>,
     /// `tri_instanced` and `tri_cut_instanced` for flat triangles.
     tri_instanced_flat: wgpu::RenderPipeline,
     /// `glass_far`, `glass_near` and `trans` for instanced meshes, smooth and flat.
     glass_far_instanced: (wgpu::RenderPipeline, wgpu::RenderPipeline),
     glass_near_instanced: (wgpu::RenderPipeline, wgpu::RenderPipeline),
     trans_instanced: (wgpu::RenderPipeline, wgpu::RenderPipeline),
-    tri_cut_instanced_flat: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline)>,
+    tri_cut_instanced_flat: Option<Cut>,
     /// The tessellation compute pipeline, where the device runs compute shaders.
     tess: Option<crate::TessGpu>,
-    /// While a section is shown (when the depth buffer has a stencil): `tri` marking where the
-    /// cap shows, the back faces marking it again where they lie within the faces' push of what
-    /// is in front of them, then the cap again at the section plane's depth, so it hides the inside.
-    tri_cut: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline)>,
+    /// While a section is shown (when the depth buffer has a stencil), in place of `tri`: the
+    /// faces marking where the cap shows, their depth pushed back, then the cap again at the
+    /// section plane's depth, so it hides the inside ([`Cut`]).
+    tri_cut: Option<Cut>,
     /// Highlight triangles over the model (depth test ≤, no depth write).
     tri_hl: wgpu::RenderPipeline,
     /// Whole highlighted bodies, redrawn from the model's planned chunks in the hover and the
@@ -1309,16 +1327,19 @@ pub struct Renderer {
     /// Reversed depth drawn into the window's pass: egui clears its depth to 1, which is the near
     /// plane then, so the viewport first sets its rectangle to the far plane (0).
     depth_reset: Option<wgpu::RenderPipeline>,
+    /// The scene target's depth back to the far plane between the section's marking and push
+    /// passes ([`Cut`]); stencil and colour untouched.
+    section_reset: Option<wgpu::RenderPipeline>,
 }
 
-/// A triangle over the whole viewport at depth 0 (the far plane of reversed depth), writing no
-/// colour: [`Renderer::depth_reset`].
+/// A triangle over the whole viewport at the far plane's depth (`FAR`), writing no colour:
+/// [`depth_reset_pipeline`].
 const DEPTH_RESET_SHADER: &str = r#"
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     let x = f32((i << 1u) & 2u);
     let y = f32(i & 2u);
-    return vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+    return vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, FAR, 1.0);
 }
 @fragment
 fn fs() -> @location(0) vec4<f32> {
@@ -1819,7 +1840,7 @@ impl Renderer {
         // While a section is shown: the stencil marking and the cap (see `Renderer::tri_cut`).
         let cut = |source: TriSource| {
             t.depth.filter(|f| f.has_stencil_aspect()).map(|format| {
-                // The visible surface marks the stencil: 1 where it is a back face (the cap).
+                // The visible surface, by its true depth, marks the stencil: 1 where it is a back face (the cap).
                 use wgpu::StencilOperation::{Keep, Replace, Zero};
                 let face = |pass_op| wgpu::StencilFaceState { compare: wgpu::CompareFunction::Always, fail_op: Keep, depth_fail_op: Keep, pass_op };
                 let mark = wgpu::DepthStencilState {
@@ -1827,18 +1848,7 @@ impl Renderer {
                     depth_write_enabled: Some(true),
                     depth_compare: Some(depth_compare(reversed, wgpu::CompareFunction::Less)),
                     stencil: wgpu::StencilState { front: face(Zero), back: face(Replace), read_mask: 0xff, write_mask: 0xff },
-                    bias: depth_bias(reversed, FACE_BIAS),
-                };
-                // The back faces again, pulled as far forward as the faces are pushed back: where
-                // one meets a front face (a pocket's wall and its floor, a fillet and the face it
-                // runs into) the push decides which is nearer along their shared edge, and a front
-                // face winning there left the cap out, so edges behind the cut showed through it.
-                let mark_back = wgpu::DepthStencilState {
-                    format,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(depth_compare(reversed, wgpu::CompareFunction::LessEqual)),
-                    stencil: wgpu::StencilState { front: face(Keep), back: face(Replace), read_mask: 0xff, write_mask: 0xff },
-                    bias: depth_bias(reversed, CAP_MARK_BIAS),
+                    bias: Default::default(),
                 };
                 // Then the cap's back faces again, only there, at the section plane's depth.
                 let only = wgpu::StencilFaceState { compare: wgpu::CompareFunction::Equal, ..face(Keep) };
@@ -1849,15 +1859,15 @@ impl Renderer {
                     stencil: wgpu::StencilState { front: only, back: only, read_mask: 0xff, write_mask: 0 },
                     bias: Default::default(),
                 };
-                (
-                    solid("sc_tris_mark", "fs_solid", None, Some(mark), source),
-                    solid("sc_tris_mark_back", "fs_solid", Some(wgpu::Face::Front), Some(mark_back), source),
+                Cut {
+                    mark: solid("sc_tris_mark", "fs_solid", None, Some(mark), source),
+                    push: solid_writes("sc_tris_push", "fs_solid", None, pushed(wgpu::CompareFunction::Less, true, FACE_BIAS), source, false),
                     // Depth only: every back face behind a marked pixel draws here, so writing
                     // colour let the last one drawn paint the cut, other bodies behind it
                     // included (their colours and outlines showed through it, #6328). The
-                    // marking passes already drew the nearest back face's colour.
-                    solid_writes("sc_tris_cap", "fs_solid_cut", Some(wgpu::Face::Front), Some(cap), source, false),
-                )
+                    // marking pass already drew the nearest back face's colour.
+                    cap: solid_writes("sc_tris_cap", "fs_solid_cut", Some(wgpu::Face::Front), Some(cap), source, false),
+                }
             })
         };
         let access_bind = access_texture(device, None, &access_bgl, 1, &[]);
@@ -1924,42 +1934,11 @@ impl Renderer {
         // Into the cached picture's own texture: no depth, one sample.
         let ss_filter = blit("fs", 1, None);
         let oit = oit::Pipelines::new(device, &module, &layout, t.format, t.depth, t.samples);
-        let depth_reset = window.depth.filter(|_| window.reversed_depth()).map(|format| {
-            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("sc_depth_reset"),
-                source: wgpu::ShaderSource::Wgsl(DEPTH_RESET_SHADER.into()),
-            });
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("sc_depth_reset"),
-                bind_group_layouts: &[],
-                immediate_size: 0,
-            });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("sc_depth_reset"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
-                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Always),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: wgpu::MultisampleState { count: window.samples.max(1), mask: !0, alpha_to_coverage_enabled: false },
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: Some("fs"),
-                    targets: &[Some(wgpu::ColorTargetState { format: window.format, blend: None, write_mask: wgpu::ColorWrites::empty() })],
-                    compilation_options: Default::default(),
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        });
+        let depth_reset = window.reversed_depth().then(|| depth_reset_pipeline(device, window)).flatten();
         Renderer {
             ao,
             depth_reset,
+            section_reset: t.depth.filter(|f| f.has_stencil_aspect()).and_then(|_| depth_reset_pipeline(device, t)),
             target: t,
             window,
             max_texture: device.limits().max_texture_dimension_2d,
@@ -2069,13 +2048,44 @@ pub const FACE_STEPS: i32 = 8;
 /// 3.5 px) may lose its outer edge on one side where it lies on a steep face. The section cap,
 /// which writes its own depth, adds the same in the shader.
 pub const FACE_SLOPE: f32 = 1.0;
-/// The section's second marking of back faces (`Renderer::tri_cut`): pulled toward the eye as far
-/// as [`FACE_BIAS`] pushes the faces back, so a back face that meets a front face along an edge
-/// still marks the cap there.
-const CAP_MARK_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState { constant: -FACE_STEPS, slope_scale: -FACE_SLOPE, clamp: 0.0 };
 /// The removed material of a preview, drawn translucent: behind the faces it shares with the new
 /// shape, so twice [`FACE_BIAS`].
 const GHOST_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState { constant: 2 * FACE_STEPS, slope_scale: 2.0 * FACE_SLOPE, clamp: 0.0 };
+
+/// A pipeline that sets the depth of the viewport in a pass of `t`'s kind back to the far plane,
+/// leaving colour and stencil as they are. None without a depth buffer.
+fn depth_reset_pipeline(device: &wgpu::Device, t: GpuTarget) -> Option<wgpu::RenderPipeline> {
+    let format = t.depth?;
+    let far = if t.reversed_depth() { "0.0" } else { "1.0" };
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("sc_depth_reset"),
+        source: wgpu::ShaderSource::Wgsl(DEPTH_RESET_SHADER.replace("FAR", far).into()),
+    });
+    let layout =
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("sc_depth_reset"), bind_group_layouts: &[], immediate_size: 0 });
+    Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("sc_depth_reset"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
+        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: wgpu::MultisampleState { count: t.samples.max(1), mask: !0, alpha_to_coverage_enabled: false },
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs"),
+            targets: &[Some(wgpu::ColorTargetState { format: t.format, blend: None, write_mask: wgpu::ColorWrites::empty() })],
+            compilation_options: Default::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    }))
+}
 
 fn upload(device: &wgpu::Device, label: &str, bytes: &[u8], stride: usize) -> Option<Batch> {
     upload_with(device, label, bytes, stride, wgpu::BufferUsages::VERTEX)
@@ -2491,26 +2501,22 @@ impl Renderer {
             res.tri_cut_planned.as_ref(),
             res.tri_cut_instanced.as_ref(),
             res.tri_cut_instanced_flat.as_ref(),
+            res.section_reset.as_ref(),
         ) {
-            (
-                Some((mark, back, cap)),
-                Some((mark_planned, back_planned, cap_planned)),
-                Some((mark_instanced, back_instanced, cap_instanced)),
-                Some((mark_flat, back_flat, cap_flat)),
-            ) => {
+            (Some(cut), Some(cut_planned), Some(cut_instanced), Some(cut_flat), Some(reset)) => {
+                let all = |pass: &mut wgpu::RenderPass<'static>, pick: fn(&Cut) -> &wgpu::RenderPipeline| {
+                    tris(pass, pick(cut), &m.tris);
+                    tris(pass, pick(cut), &pv.tris);
+                    planned(pass, pick(cut_planned));
+                    instanced(pass, pick(cut_instanced), pick(cut_flat));
+                };
                 pass.set_stencil_reference(1);
-                tris(pass, mark, &m.tris);
-                tris(pass, mark, &pv.tris);
-                planned(pass, mark_planned);
-                instanced(pass, mark_instanced, mark_flat);
-                tris(pass, back, &m.tris);
-                tris(pass, back, &pv.tris);
-                planned(pass, back_planned);
-                instanced(pass, back_instanced, back_flat);
-                tris(pass, cap, &m.tris);
-                tris(pass, cap, &pv.tris);
-                planned(pass, cap_planned);
-                instanced(pass, cap_instanced, cap_flat);
+                all(pass, |c| &c.mark);
+                pass.set_pipeline(reset);
+                pass.draw(0..3, 0..1);
+                tally.call();
+                all(pass, |c| &c.push);
+                all(pass, |c| &c.cap);
             }
             _ => {
                 tris(pass, &res.tri, &m.tris);
@@ -3479,6 +3485,38 @@ mod glass_tests {
         frame.product = true;
         let preview = middle(&render_frame(&mut r, &device, &queue, &frame, true));
         assert!(preview[2] > preview[0] + 60, "the preview shows its own blue square: {preview:?}");
+    }
+
+    #[test]
+    fn startup_msaa_check_passes_and_detects_a_blank_resolve() {
+        let (adapter, device, queue) = crate::open_headless().expect("software adapter required for the startup check");
+        let depth = crate::depth_format(&device, true);
+        for format in [wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureFormat::Bgra8Unorm, wgpu::TextureFormat::Bgra8UnormSrgb] {
+            let window = GpuTarget { format, depth: None, samples: 1, tess: false };
+            for samples in [1, 4] {
+                if ![format, depth].iter().all(|f| adapter.get_texture_format_features(*f).flags.sample_count_supported(samples)) {
+                    continue;
+                }
+                let target = GpuTarget { depth: Some(depth), samples, ..window };
+                let mut renderer = Renderer::with_window_target(&device, target, window, None);
+                let start = std::time::Instant::now();
+                assert_eq!(renderer.check_msaa(&device, &queue).unwrap(), super::MsaaCheck::Passed);
+                eprintln!("startup check: {} {format:?} {samples}x: {:?}", adapter.get_info().name, start.elapsed());
+                assert!(
+                    renderer.model.key.is_none() && renderer.highlight.key.is_none() && renderer.ss.is_none(),
+                    "probe uploads must not replace the first real frame"
+                );
+                assert_eq!(renderer.target().samples, samples);
+                assert_eq!(renderer.check_msaa_with(&device, &queue, 1).unwrap(), super::MsaaCheck::FailedAtOne);
+                assert_eq!(renderer.target().samples, samples, "a blank 1x result must preserve the selected count");
+                assert_eq!(
+                    renderer.check_msaa_with(&device, &queue, 4).unwrap(),
+                    if samples > 1 { super::MsaaCheck::Fallback } else { super::MsaaCheck::Passed }
+                );
+                assert_eq!(renderer.target().samples, 1);
+                assert_eq!(renderer.check_msaa(&device, &queue).unwrap(), super::MsaaCheck::Passed);
+            }
+        }
     }
 
     /// Two see-through squares, one at z = 5 (near) and one at z = -5, in `near` and `far`

@@ -4,6 +4,9 @@ use super::*;
 pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get();
     ui_kit::settings_heading(ui, app.tr("prefs.graphics"), app.tr("prefs.graphics_note"));
+    if let Some(note) = &app.graphics_fallback {
+        ui_kit::text(ui, note, ui_kit::Text::Hint("graphics_fallback"));
+    }
     if app.services.graphics_path.is_some() {
         ui_kit::settings_section(ui, "graphics_card", app.tr("prefs.graphics_card"), |ui| {
             let adapters = &app.services.graphics_adapters;
@@ -105,6 +108,9 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             }
         });
         ui_kit::text(ui, app.tr("prefs.anti_aliasing_note"), ui_kit::Text::Hint("msaa"));
+        if app.msaa_compatibility {
+            ui_kit::text(ui, app.tr("prefs.anti_aliasing_amd_dx12"), ui_kit::Text::Hint("msaa_compatibility"));
+        }
         ui.add_space(t.space_6);
         ui_kit::text(ui, app.tr("ui.supersampling"), ui_kit::Text::Heading("supersampling"));
         ui.horizontal_wrapped(|ui| {

@@ -22,6 +22,7 @@ fn schemas_and_the_key_check_agree() {
             "direction",
             "distance",
             "distance2",
+            "exact_regions",
             "extent",
             "face",
             "face_body",

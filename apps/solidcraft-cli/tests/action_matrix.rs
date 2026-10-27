@@ -395,8 +395,10 @@ fn actions(s: &Session) -> Vec<Action> {
             let r = round3((shortest * 0.1).max(0.01));
             let mut add = |action, act| out.push(Action { entity: entity.clone(), action, act });
             if !smooth(e, mid) {
-                add("edge.fillet", Act::Run("solid.fillet", json!({"edges": [pt(mid)], "radius": r})));
-                add("edge.chamfer", Act::Run("solid.chamfer", json!({"edges": [pt(mid)], "distance": r})));
+                // The midpoint is interior to this edge, but other bodies (including component
+                // copies in their local frames) can have coincident edges. Retain the picked body.
+                add("edge.fillet", Act::Run("solid.fillet", json!({"body": world, "edges": [pt(mid)], "radius": r})));
+                add("edge.chamfer", Act::Run("solid.chamfer", json!({"body": world, "edges": [pt(mid)], "distance": r})));
             }
             let dir = straight(pts);
             if dir.is_some() {
@@ -1276,6 +1278,41 @@ fn rectangle(plane: Value, p0: [f64; 2], p1: [f64; 2]) -> [Value; 3] {
         json!({"command": "sketch.rectangle.two_point", "params": {"p0": p0, "p1": p1}}),
         json!({"command": "sketch.finish", "params": {}}),
     ]
+}
+
+#[test]
+fn edge_round_actions_keep_the_picked_body() {
+    for (corner, length) in [([10, 0, 20], 4), ([0, 0, 0], 20)] {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length": 20, "width": 20, "height": 20, "body_name": "Plate"})).unwrap();
+        s.execute(
+            "solid.box",
+            &json!({"corner": corner, "length": length, "width": length, "height": length, "body_name": "Block", "operation": "new"}),
+        )
+        .unwrap();
+        let mut tried = 0;
+        for a in actions(&s) {
+            if !a.entity.starts_with("Plate/") || !matches!(a.action, "edge.chamfer" | "edge.fillet") {
+                continue;
+            }
+            let Act::Run(id, ref p) = a.act else { continue };
+            let q = &p["edges"][0];
+            let x = q[0].as_f64().unwrap();
+            if q[1] != 0.0 || q[2] != 20.0 || !(0.0..20.0).contains(&x) {
+                continue;
+            }
+            // Block either meets this midpoint or coincides with the whole edge.
+            assert_eq!(p["body"], "Plate", "{}: {p}", a.action);
+            assert_eq!(q, &json!([10.0, 0.0, 20.0]));
+            let mut unscoped = p.clone();
+            unscoped.as_object_mut().unwrap().remove("body");
+            let err = s.scratch().execute(id, &unscoped).unwrap_err().to_string();
+            assert!(err.contains("edges meet"), "{err}");
+            perform(&mut s.scratch(), &a.act, &errors(&s)).unwrap();
+            tried += 1;
+        }
+        assert_eq!(tried, 2);
+    }
 }
 
 #[test]

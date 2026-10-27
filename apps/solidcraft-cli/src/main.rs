@@ -262,8 +262,7 @@ fn load_checked(path: &str, check: solidcraft_engine::schema::ParamCheck) -> Res
     let bytes = solidcraft_engine::io::vfs::read(path, solidcraft_engine::io::MAX_DESIGN_BYTES).map_err(|e| format!("{path}: {e}"))?;
     if solidcraft_engine::io::is_design_container(&bytes) {
         let doc = solidcraft_engine::io::read_design(&bytes).map_err(|e| format!("{path}: {e}"))?;
-        let mut session = Session::new(doc);
-        session.path = Some(path.to_owned());
+        let mut session = Session::opened_at(doc, None, Some(path));
         session.param_check = check;
         return Ok(session);
     }
@@ -340,6 +339,7 @@ fn print_json(v: &Value, file: Option<&str>) -> Result<(), String> {
 fn cmd_run(args: &[String]) -> Result<(), String> {
     install_renderer();
     let json_out = json_out(args)?;
+    known_args("run", args, &["--in", "--out", "--save", "--json-out"], &["--quiet", "--results", "--timings", "--profile", "--allow-errors"], true)?;
     let base = flag(args, "--in");
     let path = positional(args);
     if path.is_none() && base.is_none() {
@@ -444,6 +444,7 @@ fn timeline_ok(s: &Session) -> Result<(), String> {
 
 fn cmd_eval(args: &[String]) -> Result<(), String> {
     let json_out = json_out(args)?;
+    known_args("eval", args, &["--in", "--json-out"], &[], true)?;
     let path = flag(args, "--in").or_else(|| positional(args).map(String::as_str)).ok_or_else(usage)?;
     let mut s = load(path)?;
     let m = s.execute("inspect.measure", &json!({})).map_err(|e| e.to_string())?;
@@ -843,7 +844,7 @@ pub(crate) fn cmd_bench_open(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
     let t = std::time::Instant::now();
-    let s = Session::opened(doc, saved.as_ref());
+    let s = Session::opened_at(doc, saved.as_ref(), (!step).then_some(path.as_str()));
     drop(read);
     // Taken from the file: nothing evaluated (SOLIDCRAFT_NO_MODEL_CACHE evaluates anyway), or
     // only the features whose state a thinned file left out.

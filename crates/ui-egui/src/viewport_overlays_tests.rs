@@ -557,3 +557,53 @@ fn left_history_sidebar_leaves_bottom_readouts_at_the_bottom() {
         assert!((readout.bottom() - (viewport.bottom() - 12.0)).abs() < 0.01, "{name}: {readout:?} in {viewport:?}");
     }
 }
+
+/// The frame-rate readout and its details sit just left of a pane over the view's bottom-right
+/// corner (the Assistant), follow it as it opens, changes width and closes, and stay in the
+/// visible view; with the pane on the left they keep the corner (#6755).
+#[test]
+fn frame_rate_readout_stays_beside_a_right_pane() {
+    use crate::scenario::{handle_at, rect_of};
+    for mode in [LayoutMode::Floating, LayoutMode::Docked] {
+        let mut h = Harness::new();
+        h.app.home.open = false;
+        h.call("ui.set", json!({"layout": mode}));
+        h.app.preferences.show_frame_rate = true;
+        h.app.preferences.frame_rate_details = true;
+        h.app.preferences.agent_chat_side = "right".into();
+        h.frames(3);
+        let in_corner = |h: &Harness| {
+            let viewport = h.app.viewport.layout.as_ref().unwrap().viewport;
+            let readout = rect_of("viewport:frame_rate").expect("the readout is drawn");
+            assert!((readout.right() - (viewport.right() - 12.0)).abs() < 0.01, "{mode:?}: {readout:?} in {viewport:?}");
+        };
+        in_corner(&h);
+        // The Assistant's narrowest, a middle and its widest width.
+        for width in [280.0, 480.0, 760.0] {
+            h.call("ui.agent_chat", json!({"open": true, "picker": false, "side": "right", "width": width}));
+            h.frames(3);
+            let viewport = h.app.viewport.layout.as_ref().unwrap().viewport;
+            let pane = rect_of("agent_chat:panel").expect("the Assistant is drawn");
+            let readout = rect_of("viewport:frame_rate").expect("the readout is drawn");
+            assert!(viewport.contains_rect(readout), "{mode:?}, {width}: {readout:?} outside {viewport:?}");
+            assert!(readout.right() <= pane.left() - 12.0 + 0.01, "{mode:?}, {width}: {readout:?} under {pane:?}");
+            if mode == LayoutMode::Floating {
+                assert!((readout.right() - (pane.left() - 12.0)).abs() < 0.01, "{width}: {readout:?} not just left of {pane:?}");
+            }
+            for covered in crate::shell::covered_rects(&h.app) {
+                assert!(!readout.intersects(covered), "{mode:?}, {width}: {readout:?} under {covered:?}");
+            }
+            let details = handle_at("viewport:frame_details").expect("the details are drawn");
+            assert!(viewport.contains(details) && details.x < pane.left(), "{mode:?}, {width}: details at {details:?}, pane {pane:?}");
+        }
+        h.call("ui.agent_chat", json!({"open": false}));
+        h.frames(3);
+        assert!(rect_of("agent_chat:panel").is_none());
+        in_corner(&h);
+        // On the left the pane leaves the corner free.
+        h.call("ui.agent_chat", json!({"open": true, "side": "left"}));
+        h.frames(3);
+        assert!(rect_of("agent_chat:panel").is_some());
+        in_corner(&h);
+    }
+}

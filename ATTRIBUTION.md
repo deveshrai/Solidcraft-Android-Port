@@ -174,6 +174,10 @@ Editable drawing code, native projects and shipped exports are collected under `
 | assets/platforms/linux/ai.storyteller.solidcraft.desktop | PhotoCraft / SolidCraft contributors | PhotoCraft packaging templates (https://github.com/storytold/photocraft), adapted for SolidCraft | Apache-2.0 |
 | assets/platforms/linux/ai.storyteller.solidcraft.metainfo.xml.in | PhotoCraft / SolidCraft contributors | PhotoCraft packaging templates (https://github.com/storytold/photocraft), adapted for SolidCraft | Apache-2.0 |
 | assets/platforms/linux/ai.storyteller.solidcraft.mime.xml | PhotoCraft / SolidCraft contributors | PhotoCraft packaging templates (https://github.com/storytold/photocraft), adapted for SolidCraft | Apache-2.0 |
+| assets/platforms/macos/dmg/background.tiff | SolidCraft contributors | original disk image window background (blueprint sheet: grid, double border, circles, centre lines, leader arrow, title block) drawn by assets/platforms/macos/dmg/make_background.py in IBM Plex Sans/Mono; 1x and 2x representations | MIT OR Apache-2.0 |
+| assets/platforms/macos/dmg/make_background.py | SolidCraft contributors | authoring script that draws the disk image background (Pillow); not part of any build | MIT OR Apache-2.0 |
+| assets/platforms/macos/dmg/layout.json | SolidCraft contributors | disk image window size, icon size and icon positions shared by the background script and settings.py | MIT OR Apache-2.0 |
+| assets/platforms/macos/dmg/settings.py | SolidCraft contributors | dmgbuild settings (MIT, https://github.com/dmgbuild/dmgbuild) for the SolidCraft disk image; original settings, no dmgbuild code copied | MIT OR Apache-2.0 |
 | assets/platforms/macos/Info.plist.in | PhotoCraft / SolidCraft contributors | PhotoCraft packaging templates (https://github.com/storytold/photocraft), adapted for SolidCraft | Apache-2.0 |
 | assets/platforms/macos/README.txt | PhotoCraft / SolidCraft contributors | PhotoCraft packaging templates (https://github.com/storytold/photocraft), adapted for SolidCraft | Apache-2.0 |
 | assets/platforms/windows/solidcraft.en-us.wxl | PhotoCraft / SolidCraft contributors | PhotoCraft packaging templates (https://github.com/storytold/photocraft), adapted for SolidCraft | Apache-2.0 |
@@ -284,6 +288,8 @@ Editable drawing code, native projects and shipped exports are collected under `
 | assets/icons/ui/design/svg/model/circle_tt.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/circle_ttt.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/coil.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/model/colored_components.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/model/colored_components_off.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/combine.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/component.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/compute.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
@@ -517,6 +523,10 @@ Editable drawing code, native projects and shipped exports are collected under `
 | docs/book/src/og.png | SolidCraft contributors | copy of assets/branding/web/source/og.png staged by cargo xtask book (gitignored) | MIT OR Apache-2.0 |
 | docs/sponsors/blacksmith-ci-powered.png | Blacksmith (blacksmith.sh) | "CI powered by Blacksmith" sponsor banner supplied by Blacksmith for the sponsorship credit; used only to credit the sponsor, not part of the application | © Blacksmith, used with permission |
 | assets/icons/ui/design/svg/model/path_flange.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| docs/book/src/generated/hem.png | SolidCraft contributors | rendered by `cargo xtask book` (`solidcraft-cli snapshot docs/book/scripts/hem.json`; gitignored), original sheet metal demonstration | MIT OR Apache-2.0 |
+| docs/book/scripts/hem.json | SolidCraft contributors | original parametric recipe for an 80 × 50 mm sheet with an 8 mm returned edge, authored for the command guide | MIT OR Apache-2.0 |
+| assets/styles/ui/themes/clay.json | SolidCraft contributors | original SolidCraft theme file (Clay, light): warm paper palette chosen for SolidCraft | MIT OR Apache-2.0 |
+| assets/styles/ui/themes/clay-dark.json | SolidCraft contributors | original SolidCraft theme file (Clay Dark): warm charcoal palette chosen for SolidCraft | MIT OR Apache-2.0 |
 
 ## Code adapted from sibling projects
 

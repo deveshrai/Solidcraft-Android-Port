@@ -21,6 +21,19 @@ Setting `SOLIDCRAFT_SAFE_MODE=1` does the same. From 0.10.2, if two launches in 
 before the window opens, the next one starts in safe mode by itself. `SOLIDCRAFT_RENDERER=cpu`
 uses only the software renderer and keeps your settings.
 
+## A design won't open or hangs while opening
+
+- **Open the previous save.** Every save keeps the version it replaced next to it as
+  `<file>.bak` (see [Files](files.md)). Copy it to a new name ending in `.solidcraft`, for
+  example `bracket-previous.solidcraft`, and open that. Work saved after the previous save is
+  not in it.
+- **Check the crash reports.** If SolidCraft crashed while the design was open, the newest report
+  in the `crashes` folder (see the table below) usually holds a `design.solidcraft` with the
+  design as it was. `solidcraft-cli crashes` lists the reports.
+- **Unsaved designs** are in the `recovery` folder, not next to the file.
+- **Report it.** GitHub doesn't accept `.solidcraft` attachments, so zip the file
+  (`design.solidcraft.zip`) and attach it to an issue, with the crash report if there is one.
+
 ## Reset the settings
 
 SolidCraft keeps its settings and its data in the folders below. All installed versions share
@@ -55,7 +68,15 @@ SolidCraft needs Direct3D 12 or Vulkan on Windows, Metal on macOS, and Vulkan or
 Linux. Without a graphics driver it falls back to the system's software renderer (WARP on
 Windows, llvmpipe or lavapipe on Linux), which is slow but works. From 0.10.2, if no window can
 be opened at all, SolidCraft tries the software renderer once and otherwise shows a message
-saying what failed (earlier versions closed without a word). Things to try:
+saying what failed (earlier versions closed without a word).
+
+On Windows, if the graphics API cannot create the window's renderer, SolidCraft tries the
+remaining APIs in order: Direct3D 12 → Vulkan → OpenGL, then software rendering. The status
+message and **Preferences › Graphics** say which API failed and why. The saved graphics
+preference stays unchanged. With an explicit `WGPU_BACKEND`, a failed start shows the error
+and exits without switching; change or remove that variable to try another API.
+
+Things to try:
 
 - Install the graphics driver from the GPU maker (Intel, AMD, NVIDIA) rather than Windows Update.
 - In a virtual machine, turn on 3D acceleration. Over Remote Desktop, try it on the machine itself.
@@ -72,6 +93,29 @@ Some graphics drivers hang on the shader SolidCraft uses to build bodies on the 
 system then resets the GPU. SolidCraft already builds bodies on the CPU on the AMD FirePro
 D300/D500/D700 (Mac Pro 2013). On another GPU that does this, start SolidCraft with
 `SOLIDCRAFT_CPU_TESS=1` set to build bodies on the CPU, and open an issue with the GPU's name.
+
+## The interface looks blurry on Linux with display scaling
+
+On Linux, SolidCraft runs through XWayland whenever an X display is available, because file
+drag and drop from a file manager only works there (niri is the exception and stays on native
+Wayland). A compositor that doesn't let X11 apps scale themselves draws an XWayland window at
+100 % and stretches it to the monitor's scale, so text and icons look soft. That happens with
+fractional scaling (125 %, 140 %), and on GNOME 47 (RHEL and Rocky Linux 10) at any scale,
+200 % included. The diagnostics in a bug report show it as about 1 physical pixel per point at
+a scale of 200 %.
+
+Run SolidCraft on native Wayland instead: Preferences › Graphics › **Window system** ›
+Wayland, which applies at the next start. Versions without that setting (0.21.0 and earlier)
+take `SOLIDCRAFT_WAYLAND=1` in the environment:
+
+```
+SOLIDCRAFT_WAYLAND=1 solidcraft
+```
+
+On native Wayland, dropping files onto the window doesn't work; use File > Open or pass the file
+on the command line.
+[Wayland, XWayland and niri](https://github.com/tangency-labs/solidcraft/blob/main/docs/nix.md#wayland-xwayland-and-niri)
+has the details.
 
 ## SolidCraft closes right away on Windows
 
@@ -115,3 +159,13 @@ Updating the graphics driver from the GPU maker usually stops the resets.
 Designs saved by a newer SolidCraft use a newer file format. Older versions refuse them with
 "this design was saved by a newer SolidCraft" and don't change the file. Open them with the
 current version.
+
+## Save As says the file can't be found (Windows)
+
+If saving into *Documents* (or *Pictures*, *Desktop* and other protected folders) fails with a
+"File not found" message from the Windows save dialog and nothing is saved, Windows Security's
+*Controlled folder access* is probably blocking SolidCraft. Windows usually also shows an
+"Unauthorized changes blocked" notification. Either save to a folder that isn't protected, or
+allow SolidCraft: *Windows Security › Virus & threat protection › Ransomware protection ›
+Controlled folder access › Allow an app through Controlled folder access*, then add
+`solidcraft.exe`.

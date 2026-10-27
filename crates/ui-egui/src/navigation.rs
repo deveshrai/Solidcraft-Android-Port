@@ -6,7 +6,7 @@
 //! view and moves `app.cam` the way Preferences › Navigation says: the navigation preset (Fusion,
 //! SolidWorks, Blender, Touchpad…), Orbit around, zoom to the cursor, the middle double-click and
 //! orbit snapping. The 3D mouse's motion goes through [`device`] too, with the page's
-//! [`NavCaps`]. The view keys and the navigators act on `app.cam` independently of the page. New
+//! [`NavCaps`], and so does a device app's over the navigation bridge. The view keys and the navigators act on `app.cam` independently of the page. New
 //! canvases must call `navigation::handle` rather than reading drags or the wheel themselves;
 //! `hand_rolled_camera_input_is_rejected` fails when they do.
 
@@ -17,7 +17,7 @@ use solidcraft_engine::render::Camera;
 
 use crate::SolveApp;
 use crate::prefs::{OrbitAround, pivot_under};
-use crate::space_mouse::Motion;
+use crate::space_mouse::{BridgeMotion, Motion};
 use crate::viewport::{Hit, NavMode, axis_rect, nearest_quarter_turn, pick, pick_cached, projection};
 
 /// What a page's camera may do.
@@ -700,14 +700,63 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
 }
 
 /// The 3D mouse's motion this frame (#1336), on a page `rect` whose camera may do `caps`: the cap
-/// pans and zooms every page, and turns the view only where the page may orbit and no sketch is
-/// being edited (a sketch keeps its view square to it). [`handle`] calls it for its page; the 3D
+/// pans and zooms every page, and turns the view where the page may orbit. In a sketch, turning
+/// stays off while the camera is in its initial sketch orientation. [`handle`] calls it for its page; the 3D
 /// mouse only reads the device and queues the motion ([`crate::space_mouse::navigate_frame`]).
 pub(crate) fn device(app: &mut SolveApp, rect: Rect, caps: NavCaps) {
-    let Some(queued) = app.viewport.device_motion.take() else { return };
-    let turn = caps.orbit && app.session.active_sketch.is_none();
+    if app.viewport.device_motion.is_none() && app.viewport.bridge_motion.is_none() {
+        return;
+    }
+    let sketch_view_is_initial = solidcraft_engine::view::open_sketch_plane(&app.session).is_some_and(|plane| {
+        let normal = plane.normal();
+        let mut initial = app.cam.looking_from(normal);
+        if normal.z.abs() > 0.999 {
+            initial.yaw = if normal.z > 0.0 { (-plane.x.y).atan2(plane.x.x) } else { plane.x.y.atan2(plane.x.x) };
+        }
+        let (right, up, back) = app.cam.basis();
+        let (initial_right, initial_up, initial_back) = initial.basis();
+        right.dot(initial_right) > 0.999 && up.dot(initial_up) > 0.999 && back.dot(initial_back) > 0.999
+    });
+    let turn = caps.orbit && !sketch_view_is_initial;
     let height = f64::from(rect.height().max(1.0));
-    device_camera(&mut app.cam, queued.motion, queued.seconds, height, turn, app.preferences.zoom_reverse, app.preferences.free_orbit);
+    if let Some(queued) = app.viewport.device_motion.take() {
+        device_camera(&mut app.cam, queued.motion, queued.seconds, height, turn, app.preferences.zoom_reverse, app.preferences.free_orbit);
+    }
+    // A device app's motion (the navigation bridge), on the same terms.
+    if let Some(queued) = app.viewport.bridge_motion.take() {
+        bridge_camera(&mut app.cam, queued, height, turn, app.preferences.zoom_reverse, app.preferences.free_orbit);
+    }
+}
+
+/// How far one zoom step of a device app (a click of its ring or wheel) moves the camera: this
+/// share of its distance, compounded, so zooming in and back out returns where it was.
+const BRIDGE_ZOOM_PER_STEP: f64 = 0.08;
+
+/// A device app's `motion` (`space_mouse::bridge_frame`) on `cam`, in a view `height` points
+/// tall: orbit and pan as a pointer drag of that many points, zoom by steps. With `turn` off (a
+/// flat page, a sketch being edited) the view keeps its orientation and the orbit motion pans
+/// instead, so the device still moves the view.
+pub(crate) fn bridge_camera(cam: &mut Camera, motion: BridgeMotion, height: f64, turn: bool, reverse_zoom: bool, free_orbit: bool) {
+    let motion = BridgeMotion::default().plus(motion);
+    let [mut px, mut py] = motion.pan;
+    let [ox, oy] = motion.orbit;
+    if turn {
+        if free_orbit {
+            cam.rotate_in_view(Vec3::new(-oy * 0.008, -ox * 0.008, 0.0));
+        } else {
+            cam.orbit(ox, oy);
+        }
+    } else {
+        px += ox;
+        py += oy;
+    }
+    if px != 0.0 || py != 0.0 {
+        cam.pan(px, py, height);
+    }
+    if motion.zoom != 0.0 {
+        let zoom_sign = if reverse_zoom { -1.0 } else { 1.0 };
+        cam.zoom_at((-motion.zoom * zoom_sign * BRIDGE_ZOOM_PER_STEP).exp(), None);
+    }
 }
 
 /// `seconds` of 3D mouse `motion` on `cam`, in a view `height` points tall. A full deflection
@@ -1434,14 +1483,47 @@ mod tests {
         }
     }
 
-    /// While a sketch is edited the cap pans and zooms, and the view stays square to the sketch.
+    /// A device app's orbit turns pages that orbit and pans the others (a flat page, a sketch seen
+    /// square-on), so the device still moves the view there without turning it.
     #[test]
-    fn the_3d_mouse_never_turns_a_sketch_being_edited() {
+    fn a_device_apps_orbit_pans_where_the_view_may_not_turn() {
+        use crate::space_mouse::BridgeMotion;
+        let orbit = BridgeMotion { orbit: [30.0, 20.0], ..Default::default() };
+        let page = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let flat = super::NavCaps { orbit: false, pick: false };
+        let mut sketching = solidcraft_engine::Session::default();
+        sketching.execute("sketch.create", &serde_json::json!({"plane": "XY"})).unwrap();
+        for (session, caps, turns) in [
+            (solidcraft_engine::Session::default(), super::NavCaps::MODEL, true),
+            (solidcraft_engine::Session::default(), flat, false),
+            (sketching, super::NavCaps::MODEL, false),
+        ] {
+            let mut app = crate::SolveApp::new(session, crate::Services::default());
+            if app.session.active_sketch.is_some() {
+                // Square to the sketch, as a sketch opens.
+                app.cam = solidcraft_engine::render::Camera { yaw: 0.0, pitch: std::f64::consts::FRAC_PI_2, ..Default::default() };
+            }
+            let before = app.cam;
+            app.viewport.bridge_motion = Some(orbit);
+            super::device(&mut app, page, caps);
+            assert!(app.viewport.bridge_motion.is_none(), "{caps:?}: the page takes the motion");
+            let turned = (app.cam.yaw, app.cam.pitch, app.cam.roll) != (before.yaw, before.pitch, before.roll);
+            assert_eq!(turned, turns, "{caps:?}");
+            assert_eq!(app.cam.target != before.target, !turns, "{caps:?}: pans where it doesn't turn");
+        }
+    }
+
+    /// While a sketch is edited the cap pans and zooms without turning a square-on view; after the
+    /// view is tilted away from the sketch, the cap can turn it again.
+    #[test]
+    fn the_3d_mouse_turns_a_sketch_only_after_the_view_is_tilted() {
         use crate::space_mouse::{DeviceMotion, Motion};
+        use solidcraft_engine::render::Camera;
         let mut s = solidcraft_engine::Session::default();
         s.execute("sketch.create", &serde_json::json!({"plane": "XY"})).unwrap();
         let mut app = crate::SolveApp::new(s, crate::Services::default());
         assert!(app.session.active_sketch.is_some());
+        app.cam = Camera { yaw: 0.0, pitch: std::f64::consts::FRAC_PI_2, ..Camera::default() };
         let before = app.cam;
         app.viewport.device_motion = Some(DeviceMotion { motion: Motion { translation: [1.0; 3], rotation: [1.0; 3] }, seconds: 0.05 });
         let page = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
@@ -1449,6 +1531,19 @@ mod tests {
         assert_eq!((app.cam.yaw, app.cam.pitch, app.cam.roll), (before.yaw, before.pitch, before.roll));
         assert_ne!(app.cam.target, before.target);
         assert!(app.cam.distance < before.distance);
+
+        app.cam.roll = 0.1;
+        let tilted = app.cam;
+        app.viewport.device_motion = Some(DeviceMotion { motion: Motion { translation: [0.0; 3], rotation: [0.0, 0.0, 0.1] }, seconds: 0.05 });
+        super::device(&mut app, page, super::NavCaps::MODEL);
+        assert_ne!((app.cam.yaw, app.cam.pitch, app.cam.roll), (tilted.yaw, tilted.pitch, tilted.roll));
+
+        app.cam.pitch = 1.2;
+        let tilted = app.cam;
+        app.viewport.device_motion = Some(DeviceMotion { motion: Motion { translation: [0.0; 3], rotation: [0.0, 0.1, 0.0] }, seconds: 0.05 });
+        super::device(&mut app, page, super::NavCaps::MODEL);
+        assert_ne!((app.cam.yaw, app.cam.pitch, app.cam.roll), (tilted.yaw, tilted.pitch, tilted.roll));
+
         // Nothing queued, nothing moves.
         let still = app.cam;
         super::device(&mut app, page, super::NavCaps::MODEL);

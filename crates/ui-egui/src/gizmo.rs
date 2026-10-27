@@ -141,7 +141,7 @@ fn in_quad(p: Pos2, q: &Ring<Pos2>) -> bool {
 }
 
 /// Where the view ray through `pos` meets the plane through `o` with normal `n`.
-fn on_plane(proj: &Proj, pos: Pos2, o: Vec3, n: Vec3) -> Option<Vec3> {
+pub(crate) fn on_plane(proj: &Proj, pos: Pos2, o: Vec3, n: Vec3) -> Option<Vec3> {
     let (ro, rd) = proj.ray(pos);
     let den = rd.dot(n);
     if den.abs() < 1e-9 {
@@ -226,6 +226,11 @@ fn mm_per_px(proj: &Proj, c: Vec3) -> Option<f64> {
     let (a, b) = (proj.to_screen(c)?, proj.to_screen(c + u)?);
     let px = f64::from(a.distance(b));
     (px > 1e-9).then(|| 1.0 / px)
+}
+
+/// Radius shared by the triad rings and the selected-axis Rotate handle.
+pub(crate) fn ring_radius(proj: &Proj, centre: Vec3) -> Option<f64> {
+    Some(mm_per_px(proj, centre)? * LEN_PX * RING)
 }
 
 fn snap(v: f64, step: f64, free: bool) -> f64 {

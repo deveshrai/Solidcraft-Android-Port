@@ -518,9 +518,14 @@ fn move_many(s: &mut Session, p: &Value) -> Result<Value> {
     sort_group_features(&mut next);
     let slot = num(p, "position").map(|x| x.max(0.0) as usize).ok_or_else(|| bad(cmd, "`position` must be a number"))?;
     let active = active_param(p, cmd)?;
-    let (mut next, ordered, _) = reorder_features(s, next, &moving, slot, false, cmd)?;
+    let (mut next, ordered, _, checked) = reorder_features(s, next, &moving, slot, false, cmd)?;
+    let marker = next.marker;
     place_marker(s, &mut next, &moving, active, cmd)?;
+    let checked = checked.filter(|_| next.marker == marker);
     if next != *s.doc {
+        if let Some(model) = checked {
+            s.model = model;
+        }
         *s.doc_mut() = next;
     }
     Ok(json!({"features": ordered, "groups": groups, "group": target, "position": slot}))
@@ -627,7 +632,7 @@ fn suppress(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = s.doc_mut();
     for (id, made) in &keep {
         if let Some(f) = doc.feature_mut(*id) {
-            f.body_names.clone_from(made);
+            f.pin_body_names(made);
         }
     }
     for id in &ids {
@@ -1065,7 +1070,7 @@ fn edit_feature(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Profiles picked by index or point are kept by their curves, as when the feature was made.
     if nf.kind.clone().profile_sels_mut() != f.kind.clone().profile_sels_mut() {
-        super::features::stable_profiles(s, &mut nf.kind)?;
+        super::features::stable_profiles(s, &mut nf.kind, false)?;
     }
     // New face points: their faces' names now.
     if nf.kind.face_points() != f.kind.face_points() {
@@ -1175,8 +1180,15 @@ fn reorder(s: &mut Session, p: &Value) -> Result<Value> {
         let list: Vec<String> = broken.iter().map(|(n, e)| format!("{n} ({e})")).collect();
         return Err(bad(cmd, format!("moving {name} there breaks {}", list.join("; "))));
     }
+    let marker = next.marker;
     place_marker(s, &mut next, &[id], active, cmd)?;
     if next != *s.doc {
+        // The check evaluated the new order: keep its results, so setting the design doesn't
+        // evaluate the moved part of the timeline a second time (#6186). Placing the marker
+        // elsewhere makes them stale.
+        if next.marker == marker {
+            s.model = after;
+        }
         *s.doc_mut() = next;
     }
     let mut out = json!({"feature": id, "position": to});
@@ -1232,9 +1244,15 @@ fn reorder_many(s: &mut Session, p: &Value) -> Result<Value> {
     let slot = num(p, "position").map(|x| x.max(0.0) as usize).ok_or_else(|| bad(cmd, "`position` must be a number"))?;
     let active = active_param(p, cmd)?;
     let allow = allow_errors(p, cmd)?;
-    let (mut next, ordered, broken) = reorder_features(s, (*s.doc).clone(), &ids, slot, allow, cmd)?;
+    let (mut next, ordered, broken, checked) = reorder_features(s, (*s.doc).clone(), &ids, slot, allow, cmd)?;
+    let marker = next.marker;
     place_marker(s, &mut next, &ordered, active, cmd)?;
+    // The checked results stand only when placing the marker left the design as they were made for.
+    let checked = checked.filter(|_| next.marker == marker);
     if next != *s.doc {
+        if let Some(model) = checked {
+            s.model = model;
+        }
         *s.doc_mut() = next;
     }
     let mut out = json!({"features": ordered, "position": slot.min(s.doc.features.len())});
@@ -1244,6 +1262,8 @@ fn reorder_many(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+/// The reordered design, the moved features in order, and the model the move was checked on
+/// (none when the order didn't change), for the caller to keep (#6186).
 fn reorder_features(
     s: &Session,
     mut next: solidcraft_doc::Document,
@@ -1251,7 +1271,7 @@ fn reorder_features(
     slot: usize,
     allow_errors: bool,
     cmd: &str,
-) -> Result<(solidcraft_doc::Document, Vec<u64>, Vec<(String, String)>)> {
+) -> Result<(solidcraft_doc::Document, Vec<u64>, Vec<(String, String)>, Option<solidcraft_doc::Model>)> {
     let n = next.features.len();
     let slot = slot.min(n);
     let selected: std::collections::BTreeSet<u64> = ids.iter().copied().collect();
@@ -1276,17 +1296,19 @@ fn reorder_features(
     next.features.splice(insert_at..insert_at, moving);
     sort_group_features(&mut next);
     require_contiguous_groups(&next, cmd)?;
-    let mut broken = Vec::new();
-    if !unchanged {
-        let mut after = solidcraft_doc::Model::new();
-        after.evaluate(&next);
-        broken = newly_broken(&s.model, &after);
-        if !broken.is_empty() && !allow_errors {
-            let list: Vec<String> = broken.iter().map(|(name, error)| format!("{name} ({error})")).collect();
-            return Err(bad(cmd, format!("moving the selected features there breaks {}", list.join("; "))));
-        }
+    if unchanged {
+        return Ok((next, ordered, Vec::new(), None));
     }
-    Ok((next, ordered, broken))
+    // From the session's own results: the features before the first one moved are kept, not
+    // evaluated again from an empty model (#6186).
+    let mut after = s.model.clone();
+    after.evaluate(&next);
+    let broken = newly_broken(&s.model, &after);
+    if !broken.is_empty() && !allow_errors {
+        let list: Vec<String> = broken.iter().map(|(name, error)| format!("{name} ({error})")).collect();
+        return Err(bad(cmd, format!("moving the selected features there breaks {}", list.join("; "))));
+    }
+    Ok((next, ordered, broken, Some(after)))
 }
 
 fn input_keys(kind: &FeatureKind) -> Vec<(String, solidcraft_doc::expr::Kind)> {

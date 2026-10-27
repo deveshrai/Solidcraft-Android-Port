@@ -448,7 +448,9 @@ pub fn compute(s: &Session, cmds: &[(String, Value)], colors: Colors) -> Job {
 /// error. Other features: their whole preview ([`compute`]).
 fn compute_tool(s: &Session, cmds: &[(String, Value)], colors: Colors) -> Job {
     let Some((alt, op)) = as_new_body(cmds) else { return compute(s, cmds, colors) };
-    let tool = match s.preview(&alt) {
+    // Where the view shows it: in a component placed away from its own frame (an imported
+    // part stood upright) the model's frame would draw the tool at right angles to the face.
+    let tool = match s.preview_world(&alt) {
         Ok(t) => t,
         Err(e) => return Err(s.preview(cmds).err().map_or_else(|| e.to_string(), |r| r.to_string())),
     };
@@ -1102,6 +1104,23 @@ mod tests {
         }
     }
 
+    /// A plate in its own component, stood up by its placement (an imported part set upright)
+    /// and edited with that component active: the extrusion's tool is drawn where the plate is
+    /// shown, on its top face, not at right angles to it in the component's own frame.
+    #[test]
+    fn a_tool_on_a_turned_component_previews_where_it_is_shown() {
+        let mut s = Session::default();
+        let made = s.execute("component.create", &json!({"name": "Plate", "grounded": false})).unwrap();
+        s.execute("solid.box", &json!({"length": 20, "width": 8, "height": 30, "corner": [0, 0, -30], "body_name": "Plate"})).unwrap();
+        s.execute("occurrence.move", &json!({"occurrence": made["occurrence"], "axis": [1, 0, 0], "angle": "90 deg"})).unwrap();
+        s.execute("component.activate", &json!({"component": made["component"], "occurrence": made["occurrence"], "path": [made["occurrence"]]}))
+            .unwrap();
+        // Shown lying flat: 20 × 30, 8 high. Its top face pulled up 10.
+        let cmd = ("solid.extrude".to_string(), json!({"face": [10, 15, 8], "face_body": "Plate", "distance": "10 mm", "operation": "join"}));
+        let b = compute_tool(&s, &[cmd], colors()).unwrap().bounds;
+        assert!((b.max.z - 18.0).abs() < 1e-6 && (b.max.y - 30.0).abs() < 1e-6, "on top, not at right angles: {b:?}");
+    }
+
     fn count(bytes: &[u8], stride: usize, col: [u8; 4]) -> usize {
         bytes.chunks(stride).filter(|v| v.get(24..28) == Some(&col[..])).count()
     }
@@ -1172,17 +1191,75 @@ mod tests {
         assert!(SurfaceIndex::new(&Mesh::default()).is_none());
     }
 
-    /// Thousands of faces (a modeled thread's) are classified at once, not face by face against
-    /// every triangle: filleting beside a thread froze the app for minutes.
-    #[test]
-    fn many_faces_are_classified_quickly() {
-        let started = std::time::Instant::now();
-        let n = 120;
+    /// How long the faces of a sheet of `n × n` squares take to classify against an old sheet of
+    /// the same size. The meshes are built before the clock starts and the faces are collected
+    /// before it stops: only the classification, the work that used to freeze the app, is measured.
+    fn classify_sheet(n: usize) -> std::time::Duration {
         let (old, same, lifted) = (sheet(n, 0.0), sheet(n, 0.0), sheet(n, 5.0));
         let nf = n * n;
-        assert!(new_faces(&same, nf, &old).iter().all(|new| !new), "faces on the old surface are not new");
-        assert!(new_faces(&lifted, nf, &old).iter().all(|new| *new), "faces off the old surface are new");
-        assert!(started.elapsed().as_secs() < 10, "took {:?}", started.elapsed());
+        let started = std::time::Instant::now();
+        let on = new_faces(&same, nf, &old);
+        let off = new_faces(&lifted, nf, &old);
+        let took = started.elapsed();
+        assert!(on.iter().all(|new| !new), "faces on the old surface are not new");
+        assert!(off.iter().all(|new| *new), "faces off the old surface are new");
+        took
+    }
+
+    /// Whether a job four times the size took at most about twice linear: `pair` times the small job,
+    /// then the big one. Linear is 4x, the quadratic that the bug cost 16x or more, so eight times the
+    /// small time is the limit. The load of the other test binaries can rise between the two runs, so a
+    /// pair that misses is measured again, up to three times. Load only ever slows a run, so each size
+    /// keeps its fastest time and the ratio is taken of those: a retry cannot pass a regression on a
+    /// small run that a spike happened to slow, once an earlier small run was fast.
+    ///
+    /// `slack` is the room the noise of a busy machine gets, on top of the ratio.
+    fn scales_linearly(mut pair: impl FnMut() -> (std::time::Duration, std::time::Duration), slack: std::time::Duration) -> Result<(), String> {
+        let limit = |small: f64| 8.0 * small + slack.as_secs_f64();
+        let (mut small, mut big) = (f64::INFINITY, f64::INFINITY);
+        let mut runs = Vec::new();
+        for _ in 0..3 {
+            let (s, b) = pair();
+            small = small.min(s.as_secs_f64());
+            big = big.min(b.as_secs_f64());
+            runs.push(format!("{s:?} then {b:?}"));
+            if big < limit(small) {
+                return Ok(());
+            }
+        }
+        Err(format!("{}; fastest {small:.3} s and {big:.3} s, limit {:.3} s", runs.join(", "), limit(small)))
+    }
+
+    #[test]
+    fn scales_linearly_keeps_each_sizes_fastest_run() {
+        let pairs = |p: Vec<(u64, u64)>| {
+            let mut p = p.into_iter().map(|(s, b)| (std::time::Duration::from_millis(s), std::time::Duration::from_millis(b)));
+            move || p.next().unwrap_or((std::time::Duration::from_secs(1), std::time::Duration::from_secs(1)))
+        };
+        let slack = std::time::Duration::from_millis(0);
+        // Linear: four times the work, four times the time.
+        assert!(scales_linearly(pairs(vec![(5, 20)]), slack).is_ok());
+        // A big run slowed by load, then a quiet pair.
+        assert!(scales_linearly(pairs(vec![(5, 80), (5, 20)]), slack).is_ok());
+        // A quadratic cost (16x) whose later small runs a spike slowed: the fast first one still counts.
+        let r = scales_linearly(pairs(vec![(5, 80), (15, 80), (15, 80)]), slack);
+        assert!(r.as_ref().is_err_and(|e| e.contains("fastest 0.005 s and 0.080 s, limit 0.040 s")), "{r:?}");
+    }
+
+    /// Thousands of faces (a modeled thread's) are classified at once, not face by face against
+    /// every triangle: filleting beside a thread froze the app for minutes.
+    ///
+    /// A ratio and not a limit: a test must not depend on wall-clock timing (CONTRIBUTING.md), the
+    /// machine is busy. 900 faces are classified, then 3 600, four times as many: linear is 4x, the
+    /// face-against-triangle cost 16x or more.
+    #[test]
+    fn many_faces_are_classified_quickly() {
+        /// The room the noise of a run on a busy machine gets, on top of the ratio: the 900 faces
+        /// take a fraction of a second, so this is the noise of one run and not a change of scale.
+        const SLACK: std::time::Duration = std::time::Duration::from_millis(20);
+        if let Err(missed) = scales_linearly(|| (classify_sheet(30), classify_sheet(60)), SLACK) {
+            panic!("the faces do not scale linearly: {missed}");
+        }
     }
 
     /// A fillet preview stands in for the body: the round face is new, the rest is kept, and the

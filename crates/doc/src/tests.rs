@@ -103,6 +103,40 @@ fn set_back_reports_restored_features() {
     assert_eq!((m.last_recomputed, m.last_restored), (0, 0));
 }
 
+/// Setting a parameter back restores every feature on a design whose states are large next to
+/// the cache's budget: each cached state shares the bodies it did not change with the states
+/// before it, so it is charged only for what it made, not for the whole model again.
+#[test]
+fn set_back_restores_everything_when_states_share_bodies() {
+    let mut doc = Document::new("blocks");
+    doc.set_param("h", "10 mm", Some("mm"), None).unwrap();
+    for i in 0..30 {
+        let height = if i == 0 { "h" } else { "10" };
+        doc.add_feature(
+            FeatureKind::Box {
+                corner: point_expr(Vec3::new(20.0 * i as f64, 0.0, 0.0)),
+                length: "10".into(),
+                width: "10".into(),
+                height: height.into(),
+                operation: Operation::NewBody,
+            },
+            None,
+        )
+        .unwrap();
+    }
+    let mut m = Model::new();
+    m.evaluate(&doc);
+    // Room for a few whole models: enough for both timelines' new bodies, not for every state
+    // charged as a whole model.
+    m.cache.lock().unwrap().budget = 3 * m.state().retained_bytes();
+    doc.set_param("h", "12 mm", None, None).unwrap();
+    m.evaluate(&doc);
+    assert_eq!(m.last_recomputed, 30);
+    doc.set_param("h", "10 mm", None, None).unwrap();
+    m.evaluate(&doc);
+    assert_eq!((m.last_recomputed, m.last_restored), (0, 30));
+}
+
 /// #1989: what an evaluation ahead on a copy of the model computed is kept for the run that
 /// follows on the model itself, which finds it there even once the evaluation cache has dropped
 /// it (the cache keeps only a few states of a design with large bodies). Copies keep nothing.
@@ -123,6 +157,97 @@ fn results_kept_ahead_outlive_the_cache() {
     m.evaluate(&doc);
     assert_eq!((m.last_recomputed, m.last_restored), (0, 2), "nothing computed again");
     assert!(rel(measure(&m.state().bodies[0].body).unwrap().volume, 30000.0) < 1e-9);
+}
+
+/// Rolling the marker back must not discard unchanged results just because the bounded cache
+/// evicted them. Opening an earlier feature and returning to the end otherwise rebuilds it all.
+#[test]
+fn rolling_the_marker_back_keeps_results_after_cache_eviction() {
+    for reopen in [false, true] {
+        let (mut doc, _) = plate_doc();
+        let mut m = Model::new();
+        m.evaluate(&doc);
+        if reopen {
+            m = Model::adopt(&doc, &m.saved(&doc).unwrap()).unwrap();
+        }
+        let finished = m.state();
+        let computed = m.recomputed;
+        // Simulate eviction by previews or the cache's byte limit, without a large/slow fixture.
+        *m.cache.lock().unwrap() = Default::default();
+        for marker in [Some(1), Some(0), Some(1), None] {
+            doc.marker = marker;
+            m.evaluate(&doc);
+            assert_eq!(m.recomputed, computed, "reopen {reopen}, marker {marker:?}: unchanged features must be reused");
+            assert_eq!(m.state().bodies.len(), usize::from(marker.is_none()));
+        }
+        assert!(std::sync::Arc::ptr_eq(&m.state(), &finished), "return to the original evaluated state");
+    }
+}
+
+#[test]
+fn rolling_a_large_unchanged_timeline_forward_reuses_its_geometry() {
+    let mut doc = Document::new("marker cache budget");
+    for i in 0..80 {
+        doc.add_feature(
+            FeatureKind::Box {
+                corner: point_expr(Vec3::new((i % 10) as f64 * 15.0, (i / 10) as f64 * 15.0, 0.0)),
+                length: "10".into(),
+                width: "10".into(),
+                height: "10".into(),
+                operation: Operation::NewBody,
+            },
+            None,
+        )
+        .unwrap();
+    }
+    let mut m = Model::new();
+    m.evaluate(&doc);
+    assert!(m.results.iter().all(|r| r.error.is_none()));
+    // Exceed the actual byte budget without manually clearing the cache.
+    assert!(m.results.iter().map(|r| r.state.retained_bytes()).sum::<usize>() > 64 << 20);
+    let finished = m.state();
+    doc.marker = Some(1);
+    m.evaluate(&doc);
+    assert_eq!(m.state().bodies.len(), 1);
+    doc.marker = None;
+    m.evaluate(&doc);
+    assert_eq!(m.last_recomputed, 0, "returning to the end must not rebuild unchanged boxes");
+    assert_eq!(m.state().bodies.len(), 80);
+    assert!(std::sync::Arc::ptr_eq(&m.state(), &finished));
+}
+
+#[test]
+fn rolled_results_never_mask_edits_or_disabled_reuse() {
+    for change in ["parameter", "feature", "suppressed", "units", "no_cache"] {
+        let (mut doc, _) = plate_doc();
+        let mut m = Model::new();
+        m.evaluate(&doc);
+        doc.marker = Some(0);
+        m.evaluate(&doc);
+        *m.cache.lock().unwrap() = Default::default();
+        match change {
+            "parameter" => doc.set_param("width", "50 mm", None, None).unwrap(),
+            "feature" => {
+                let FeatureKind::Extrude { extent, .. } = &mut doc.features[1].kind else { panic!("extrude") };
+                extent.distance = "25".into();
+            }
+            "suppressed" => doc.features[1].suppressed = true,
+            "units" => doc.units = "in".into(),
+            "no_cache" => m.no_cache = true,
+            _ => panic!("unknown edit case"),
+        }
+        doc.marker = None;
+        m.evaluate(&doc);
+        let mut fresh = Model::new();
+        fresh.evaluate(&doc);
+        let volume = |model: &Model| model.state().bodies.iter().map(|b| measure(&b.body).unwrap().volume).sum::<f64>();
+        assert_eq!(m.state().bodies.len(), fresh.state().bodies.len(), "{change}");
+        assert!((volume(&m) - volume(&fresh)).abs() < 1e-6, "{change}: retained geometry must match a fresh evaluation");
+        assert_eq!(m.results.iter().map(|r| &r.error).collect::<Vec<_>>(), fresh.results.iter().map(|r| &r.error).collect::<Vec<_>>(), "{change}");
+        if matches!(change, "parameter" | "feature" | "units" | "no_cache") {
+            assert!(m.last_recomputed > 0, "{change}: changed inputs must rebuild");
+        }
+    }
 }
 
 #[test]

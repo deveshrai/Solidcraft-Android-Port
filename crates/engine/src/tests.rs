@@ -59,6 +59,26 @@ fn edge_picks_far_from_every_edge_are_refused() {
 }
 
 #[test]
+fn edge_picks_at_a_corner_are_refused() {
+    for (id, size) in [("solid.chamfer", "distance"), ("solid.fillet", "radius")] {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length": 20, "width": 20, "height": 20}));
+        let features = s.doc.features.len();
+        for edge in [json!([20, 20, 20]), json!({"point": [20, 20, 20]})] {
+            let err = s.execute(id, &json!({"edges": [edge], size: 2})).unwrap_err().to_string();
+            assert!(err.contains("[20, 20, 20]") && err.contains("3 edges") && err.contains("midpoint"), "{id}: {err}");
+            assert_eq!(s.doc.features.len(), features);
+            assert!((volume(&mut s) - 8000.0).abs() < 1e-6);
+        }
+        // 1 mm from the corner along one edge: near the other two, but on just that one.
+        run(&mut s, id, json!({"edges": [[19, 20, 20]], size: 2}));
+        assert_eq!(s.doc.features.len(), features + 1);
+        let removed = if id == "solid.chamfer" { 40.0 } else { (4.0 - PI) * 20.0 };
+        assert!(rel(volume(&mut s), 8000.0 - removed) < 2e-4);
+    }
+}
+
+#[test]
 fn fillet_as_wide_as_a_face_rounds_it_off() {
     // #199: 14 x 6 x 10 box, the four vertical edges at r = 3 (half the 6 mm end faces).
     let mut s = Session::default();
@@ -1259,7 +1279,8 @@ fn body_volume(st: &solidcraft_doc::ModelState) -> f64 {
     st.bodies.iter().map(|b| solidcraft_kernel::measure(&b.body).unwrap().volume).sum()
 }
 
-/// Deleting an inserted assembly frees its body names without leaving assembly ownership behind.
+/// Deleting an inserted assembly keeps the names of the bodies that remain, and leaves no assembly
+/// ownership behind.
 #[test]
 fn step_insert_delete_removes_assembly_and_undo_restores_it() {
     let dir = std::env::temp_dir().join(format!("solidcraft-step-delete-{}", std::process::id()));
@@ -1294,7 +1315,7 @@ fn step_insert_delete_removes_assembly_and_undo_restores_it() {
     assert!(s.doc.body_components.is_empty());
     assert!(s.doc.body_offsets.is_empty());
     let state = s.model.state();
-    let mirrored = state.body("Part (2)").unwrap();
+    let mirrored = state.body("Part (3)").unwrap();
     assert_eq!(s.doc.model_body_component(mirrored), 0);
     run(&mut s, "solid.box", json!({"length": 5, "width": 5, "height": 5, "corner": [40, 0, 0], "operation": "new", "body_name": "Other"}));
     assert_eq!(s.doc.model_body_component(s.model.state().body("Other").unwrap()), 0);
@@ -3574,6 +3595,64 @@ fn a_pick_bounded_by_a_projected_rim_takes_only_that_region() {
     // round rim as a polygon, so the volume is a little under the analytic one.
     let want = (400.0 - PI * 25.0) * 5.0;
     assert!(rel(v, want) < 5e-3, "{v} vs {want}");
+}
+
+/// A circle drawn partly past the edge of the top face its sketch is on: the face's projected
+/// outline cuts it into a lens on the face and a crescent past it. A pick that asks for exactly
+/// its region, as the dialogs do, builds that region alone (#6724); a plain pick still takes the
+/// whole drawn circle (#5302).
+#[test]
+fn an_exact_pick_of_a_region_cut_by_the_face_outline_takes_only_that_region() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 10}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.extrude", json!({"distance": 10, "body_name": "Base"}));
+    let id = run(&mut s, "sketch.create", json!({"plane": {"face": [0, 0, 10]}}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.circle.center", json!({"center": [10, 0], "radius": 6}));
+    run(&mut s, "sketch.finish", json!({}));
+    // The two circles' lens, and the rest of the drawn circle past the face.
+    let (r1, r2, d) = (10.0_f64, 6.0_f64, 10.0_f64);
+    let lens = r1 * r1 * ((d * d + r1 * r1 - r2 * r2) / (2.0 * d * r1)).acos() + r2 * r2 * ((d * d + r2 * r2 - r1 * r1) / (2.0 * d * r2)).acos()
+        - 0.5 * ((-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2)).sqrt();
+    let disc = PI * r2 * r2;
+    let crescent = disc - lens;
+    let state = s.model.state();
+    let ss = state.sketch(id).unwrap();
+    assert_eq!(ss.profiles.len(), 3, "the lens, the crescent past the face and the rest of the face");
+    let at = |x: f64| ss.profiles.iter().position(|p| p.region.contains(solidcraft_geom::Vec2::new(x, 0.0))).unwrap();
+    let (on_face, past_face) = (at(7.0), at(14.0));
+    // The volume of the new body, and how many profiles its extrude is built from.
+    let extrude = |extra: Value| -> (f64, usize) {
+        let mut s2 = Session::new((*s.doc).clone());
+        let mut p = json!({"sketch": id, "distance": 5, "operation": "new", "body_name": "Pad"});
+        if let (Some(p), Value::Object(extra)) = (p.as_object_mut(), extra) {
+            p.extend(extra);
+        }
+        run(&mut s2, "solid.extrude", p);
+        let state = s2.model.state();
+        let Some(solidcraft_doc::FeatureKind::Extrude { profiles, .. }) = s2.doc.features.last().map(|f| &f.kind) else { panic!("an extrude") };
+        let count = solidcraft_doc::profile_selection_indices(state.sketch(id).unwrap(), profiles).unwrap().len();
+        let v = state.bodies.iter().filter(|b| b.name.starts_with("Pad")).map(|b| b.body.tessellate(1e-2).unwrap().measure().volume).sum();
+        (v, count)
+    };
+    for (profiles, want, n) in [
+        (json!([on_face]), lens, 1),
+        (json!([past_face]), crescent, 1),
+        (json!([{"point": [7, 0]}]), lens, 1),
+        (json!([{"point": [14, 0]}]), crescent, 1),
+        (json!([on_face, past_face]), disc, 2),
+    ] {
+        let (v, count) = extrude(json!({"profiles": profiles.clone(), "exact_regions": true}));
+        assert!(rel(v, want * 5.0) < 5e-3, "{profiles}: {v} vs {}", want * 5.0);
+        assert_eq!(count, n, "{profiles}");
+    }
+    // Without `exact_regions`, a pick on either piece takes the whole drawn circle (#5302).
+    for profiles in [json!([on_face]), json!([{"point": [14, 0]}])] {
+        let (v, count) = extrude(json!({"profiles": profiles.clone()}));
+        assert!(rel(v, disc * 5.0) < 5e-3, "{profiles}: {v} vs {}", disc * 5.0);
+        assert_eq!(count, 2, "{profiles}");
+    }
 }
 
 /// An explicit pick of a drawn hole still fills only that hole (#5176).

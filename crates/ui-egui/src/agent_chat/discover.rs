@@ -162,7 +162,7 @@ pub enum Login {
 impl Login {
     pub fn id(self) -> &'static str {
         match self {
-            Login::LooksLoggedIn => "signed_in",
+            Login::LooksLoggedIn => "login_found",
             Login::KeyInEnvironment => "key",
             Login::NotLoggedIn => "signed_out",
             Login::Unknown => "unknown",
@@ -352,9 +352,92 @@ fn detect_in(dirs: &[PathBuf], home: Option<&Path>) -> Detection {
     d
 }
 
+/// Query only the endpoint's origin; OpenAI-compatible paths such as `/v1` are unrelated.
+#[cfg(not(target_arch = "wasm32"))]
+fn api_origin(base_url: &str) -> Option<String> {
+    let (scheme, rest) = base_url.trim().split_once("://")?;
+    if !matches!(scheme, "http" | "https") {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.is_empty() || authority.contains(['@', ' ']) || authority.len() > 2048 {
+        return None;
+    }
+    Some(format!("{scheme}://{authority}"))
+}
+
+/// Blocking, best-effort Ollama probe. Call only on a background thread, without API keys.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn ollama_tools(http: &super::backend::HttpFn, base_url: &str, model: &str, known_ollama: bool) -> Option<bool> {
+    use super::backend::HttpRequest;
+    let origin = api_origin(base_url)?;
+    let request = |method, path: &str, body| {
+        let (status, bytes) = http(&HttpRequest {
+            method,
+            url: format!("{origin}/api/{path}"),
+            headers: if method == "POST" { vec![("Content-Type".into(), "application/json".into())] } else { Vec::new() },
+            body,
+            timeout_s: 5,
+        })
+        .ok()?;
+        if !(200..300).contains(&status) || bytes.len() > 4 * 1024 * 1024 {
+            return None;
+        }
+        serde_json::from_slice::<serde_json::Value>(&bytes).ok()
+    };
+    if !known_ollama {
+        let version = request("GET", "version", None)?;
+        version.get("version")?.as_str()?;
+    }
+    let body = serde_json::to_vec(&serde_json::json!({"model": model})).ok()?;
+    tools_capability(&request("POST", "show", Some(body))?)
+}
+
+/// Tool support is unknown unless Ollama returns a capabilities list of strings.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn tools_capability(value: &serde_json::Value) -> Option<bool> {
+    let capabilities = value.get("capabilities")?.as_array()?;
+    if capabilities.iter().any(|capability| !capability.is_string()) {
+        return None;
+    }
+    Some(capabilities.iter().any(|capability| capability.as_str() == Some("tools")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ollama_capabilities_distinguish_tools_chat_and_unknown() {
+        use serde_json::json;
+        assert_eq!(tools_capability(&json!({"capabilities": ["completion", "tools"]})), Some(true));
+        assert_eq!(tools_capability(&json!({"capabilities": ["completion"]})), Some(false));
+        assert_eq!(tools_capability(&json!({"capabilities": []})), Some(false));
+        for value in [json!({}), json!({"capabilities": null}), json!({"capabilities": [false]})] {
+            assert_eq!(tools_capability(&value), None);
+        }
+        assert_eq!(api_origin("http://[::1]:11434/proxy/v1/").as_deref(), Some("http://[::1]:11434"));
+        assert_eq!(api_origin("file:///tmp/model"), None);
+        let http: super::super::backend::HttpFn = std::sync::Arc::new(|request| {
+            assert_eq!(request.timeout_s, 5);
+            match request.method {
+                "GET" => {
+                    assert_eq!(request.url, "http://localhost:11434/api/version");
+                    Ok((200, br#"{"version":"0.0"}"#.to_vec()))
+                }
+                "POST" => {
+                    assert_eq!(request.url, "http://localhost:11434/api/show");
+                    assert_eq!(serde_json::from_slice::<serde_json::Value>(request.body.as_ref().unwrap()).unwrap(), json!({"model":"chat:4b"}));
+                    Ok((200, br#"{"capabilities":["completion"]}"#.to_vec()))
+                }
+                _ => Err("unexpected HTTP method".into()),
+            }
+        });
+        assert_eq!(ollama_tools(&http, "http://localhost:11434/custom/v1", "chat:4b", false), Some(false));
+        assert_eq!(ollama_tools(&http, "http://localhost:11434/v1", "chat:4b", true), Some(false));
+        let unavailable: super::super::backend::HttpFn = std::sync::Arc::new(|_| Err("unavailable".into()));
+        assert_eq!(ollama_tools(&unavailable, "http://localhost:11434/v1", "chat:4b", false), None);
+    }
 
     #[test]
     fn a_program_is_found_in_the_first_folder_that_has_it() {

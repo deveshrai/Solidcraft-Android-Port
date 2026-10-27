@@ -245,6 +245,65 @@ fn break_link_makes_normal_geometry() {
     assert!(s.execute("sketch.break_link", &json!({"link": "j99"})).is_err());
 }
 
+/// The sketch's curves as evaluated (after its links were refreshed): (id, construction).
+fn evaluated_curves(s: &Session, id: u64) -> Vec<(String, bool)> {
+    s.model.state().sketch(id).unwrap().sketch.curves.iter().map(|c| (c.id.clone(), c.construction)).collect()
+}
+
+#[test]
+fn deleting_part_of_an_intersection_does_not_bring_it_back() {
+    // #5098: a dome, its section on XZ (arc `a1`, line `l1`) as construction, then the arc deleted.
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XZ"}));
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [10, 0]]}));
+    run(&mut s, "sketch.arc.center_point", json!({"center": [0, 0], "start": [0, -10], "end": [10, 0]}));
+    run(&mut s, "sketch.line", json!({"points": [[0, -10], [0, 0]]}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.revolve", json!({"sketch": 1, "axis": "Z"}));
+    let id = run(&mut s, "sketch.create", json!({"plane": "XZ"}))["sketch"].as_u64().unwrap();
+    let r = run(&mut s, "sketch.intersect", json!({"refs": [{"body": "Body1"}]}));
+    let mut made = ids(&r["created"]["curves"]);
+    made.sort();
+    assert_eq!(made, ["a1", "l1"], "{r}");
+    run(&mut s, "sketch.construction", json!({"curves": ["a1", "l1"], "value": true}));
+    run(&mut s, "sketch.delete", json!({"entities": ["a1"]}));
+    run(&mut s, "sketch.finish", json!({}));
+    // Evaluated, the arc stays gone and the line stays construction: nothing was rebuilt.
+    assert_eq!(evaluated_curves(&s, id), [("l1".to_string(), true)]);
+    // The line no longer follows the body; it kept its place on the section (x from -10 to 10).
+    let sk = s.doc.sketch(id).unwrap();
+    assert!(sk.links.is_empty() && sk.curves.iter().all(|c| c.link.is_none()), "{:?}", sk.links);
+    let mut xs: Vec<f64> = sk.points.iter().filter(|p| p.id != "origin").map(|p| p.pos.x).collect();
+    xs.sort_by(f64::total_cmp);
+    assert!(xs.len() == 2 && (xs[0] + 10.0).abs() < 1e-6 && (xs[1] - 10.0).abs() < 1e-6, "{xs:?}");
+    // Reopened, the same.
+    let reopened = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+    assert_eq!(evaluated_curves(&reopened, id), [("l1".to_string(), true)]);
+}
+
+#[test]
+fn deleting_one_edge_of_a_projected_face_keeps_the_others_as_they_were() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"corner": [0, 0, 0], "length": 20, "width": 20, "height": 10}));
+    let id = run(&mut s, "sketch.create", json!({"plane": "XY", "offset": 15}))["sketch"].as_u64().unwrap();
+    let r = run(&mut s, "sketch.project", json!({"refs": [{"face": [10, 10, 10]}]}));
+    let lines = ids(&r["created"]["curves"]);
+    assert_eq!(lines.len(), 4, "{r}");
+    run(&mut s, "sketch.construction", json!({"curves": lines, "value": true}));
+    run(&mut s, "sketch.delete", json!({"entities": [lines[0]]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let kept: Vec<(String, bool)> = lines[1..].iter().map(|l| (l.clone(), true)).collect();
+    assert_eq!(evaluated_curves(&s, id), kept);
+
+    // Deleting the whole link still just removes it.
+    let id = run(&mut s, "sketch.create", json!({"plane": "XY", "offset": 15}))["sketch"].as_u64().unwrap();
+    let r = run(&mut s, "sketch.project", json!({"refs": [{"face": [10, 10, 10]}]}));
+    run(&mut s, "sketch.delete", json!({"entities": ids(&r["created"]["curves"])}));
+    run(&mut s, "sketch.finish", json!({}));
+    assert!(evaluated_curves(&s, id).is_empty());
+    assert!(s.doc.sketch(id).unwrap().links.is_empty());
+}
+
 #[test]
 fn lost_reference_keeps_geometry_with_a_warning() {
     let mut s = Session::default();
@@ -736,4 +795,81 @@ fn projecting_what_the_face_sketch_already_shows_adds_no_second_copy() {
     assert_eq!(r["links"].as_array().unwrap().len(), 1, "{r}");
     assert_eq!(r["already_projected"].as_array().unwrap().len(), 1, "{r}");
     assert_eq!(shown(&mut s).0, border.0 + 1);
+}
+
+/// The curves sketch Intersect makes, on `plane`, of the first body `steps` build: each line's ends,
+/// each circle's centre and radius.
+fn intersect_curves(steps: &[(&str, Value)], plane: Value) -> std::result::Result<Vec<Value>, String> {
+    let mut s = Session::default();
+    for (cmd, p) in steps {
+        run(&mut s, cmd, p.clone());
+    }
+    run(&mut s, "sketch.create", plane);
+    let body = s.model.state().bodies[0].name.clone();
+    s.execute("sketch.intersect", &json!({"refs": [{"body": body}]})).map_err(|e| e.to_string())?;
+    Ok(linked_curves(&inspect(&mut s)))
+}
+
+fn line_ends(curves: &[Value]) -> Vec<[f64; 4]> {
+    let at = |c: &Value, k: &str, i: usize| c[k][i].as_f64().unwrap_or(f64::NAN);
+    curves
+        .iter()
+        .filter(|c| c["type"] == "line")
+        .map(|c| [at(c, "start_at", 0), at(c, "start_at", 1), at(c, "end_at", 0), at(c, "end_at", 1)])
+        .collect()
+}
+
+/// Where Intersect's cut is already exact it stays as it is: a box's outline (through it and on
+/// its bottom face), a cylinder's and a sphere's circle, a tilted cylinder's 21 segments.
+#[test]
+fn intersect_keeps_its_exact_cuts() {
+    let block = [("solid.box", json!({"length": 40, "width": 30, "height": 20}))];
+    for offset in [10, 0] {
+        let mut ends = line_ends(&intersect_curves(&block, json!({"plane": "XY", "offset": offset})).unwrap());
+        ends.iter_mut().for_each(|e| *e = e.map(|v| v.round()));
+        ends.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(ends, vec![[0.0, 0.0, 40.0, 0.0], [0.0, 30.0, 0.0, 0.0], [40.0, 0.0, 40.0, 30.0], [40.0, 30.0, 0.0, 30.0]], "offset {offset}");
+    }
+    for (steps, plane, radius) in [
+        (vec![("solid.cylinder", json!({"base": [0, 0, 0], "radius": 7, "height": 30}))], json!({"plane": "XY", "offset": 12}), 7.0),
+        (vec![("solid.sphere", json!({"center": [0, 0, 0], "radius": 10}))], json!({"plane": "XY", "offset": 4}), 84f64.sqrt()),
+    ] {
+        let c = intersect_curves(&steps, plane).unwrap();
+        assert!(c.len() == 1 && c[0]["type"] == "circle" && (c[0]["radius"].as_f64().unwrap() - radius).abs() < 1e-4, "{c:?}");
+    }
+    let tilted = [("solid.cylinder", json!({"base": [0, 0, 0], "radius": 5, "height": 40, "axis": [1, 0, 1]}))];
+    let ends = line_ends(&intersect_curves(&tilted, json!({"plane": "XY", "offset": 10})).unwrap());
+    assert_eq!(ends.len(), 21);
+    let first = [2.941, -0.2891, 3.3932, -1.7819];
+    assert!(ends[0].iter().zip(first).all(|(a, b)| (a - b).abs() < 1e-4), "{:?}", ends[0]);
+}
+
+/// A plane crossing a curved face's rim cuts it on the surface, not on the mesh's chord: a
+/// cylinder's sides lie √40 from its axis, a hole's walls its radius from its centre (they were
+/// 6.3159 and 6.3085, 25.0122 and 34.9878).
+#[test]
+fn intersect_crosses_a_curved_face_on_the_surface() {
+    let side = (40f64).sqrt();
+    let rod = [("solid.cylinder", json!({"base": [0, 0, 0], "radius": 7, "height": 30}))];
+    let xs: Vec<f64> = line_ends(&intersect_curves(&rod, json!({"plane": "XZ", "offset": 3})).unwrap()).iter().flat_map(|e| [e[0], e[2]]).collect();
+    assert!(xs.iter().all(|x| (x.abs() - side).abs() < 1e-4 || x.abs() < 1e-9), "{xs:?}");
+    assert!(xs.iter().any(|x| (x + side).abs() < 1e-4) && xs.iter().any(|x| (x - side).abs() < 1e-4), "{xs:?}");
+    let plate = [("solid.box", json!({"length": 60, "width": 40, "height": 5})), ("solid.hole", json!({"position": [30, 20, 5], "diameter": 10}))];
+    let xs: Vec<f64> =
+        line_ends(&intersect_curves(&plate, json!({"plane": "XZ", "offset": 20})).unwrap()).iter().flat_map(|e| [e[0], e[2]]).collect();
+    for wall in [25.0, 35.0] {
+        assert!(xs.iter().any(|x| (x - wall).abs() < 1e-4), "{wall}: {xs:?}");
+    }
+    assert!(xs.iter().all(|x| [0.0, 25.0, 35.0, 60.0].iter().any(|w| (x - w).abs() < 1e-4)), "{xs:?}");
+}
+
+/// A plane on a body's top face cuts it there, as one on its bottom face does (it found nothing:
+/// "projects to nothing on this sketch plane").
+#[test]
+fn intersect_on_a_top_face_gives_its_outline() {
+    let block = [("solid.box", json!({"length": 40, "width": 30, "height": 20}))];
+    let mut ends = line_ends(&intersect_curves(&block, json!({"plane": "XY", "offset": 20})).unwrap());
+    ends.iter_mut().for_each(|e| *e = e.map(|v| v.round()));
+    ends.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(ends, vec![[0.0, 0.0, 40.0, 0.0], [0.0, 30.0, 0.0, 0.0], [40.0, 0.0, 40.0, 30.0], [40.0, 30.0, 0.0, 30.0]]);
 }

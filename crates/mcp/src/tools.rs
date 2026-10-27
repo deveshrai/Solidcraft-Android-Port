@@ -75,7 +75,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "describe_command",
             "Describe a command",
-            "One command's parameter docs and, for commands with a typed contract (solid.box, solid.extrude and engine.describe so far), the \
+            "One command's parameter docs and, for commands with a typed contract (every new command, and more of the older ones as they are converted), the \
              JSON Schemas (2020-12) of its parameters (`input`) and of a successful result (`output`); null for the others.",
             obj(json!({"id": string("Command id, e.g. \"solid.extrude\"")}), &["id"]),
             Effect::ReadOnly,
@@ -790,6 +790,22 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
         }
     }
     let steps = &mapped;
+    // A step the batch would refuse at its turn refuses it now, before anything runs (#5853).
+    // Only where the commands run in this process: a running app may be another version, with
+    // commands this one lacks, and checks the batch against its own registry when it gets it.
+    if b.in_process()
+        && let Some(refusal) = solidcraft_engine::batch_preflight::check(steps, b.param_check(), &[])
+    {
+        let mut reply = refusal.reply(steps.len());
+        if let Some(o) = reply.as_object_mut() {
+            o.insert("ok".into(), Value::Bool(false));
+            o.insert("applied".into(), json!([]));
+        }
+        if let (Some(command), Some(failed)) = (refusal.command.as_deref(), reply.get_mut("failed").and_then(Value::as_object_mut)) {
+            failed.insert("error".into(), Value::String(command_error(command, refusal.error.clone())));
+        }
+        return text_result(&reply, true);
+    }
     // A `list_commands` step's catalog, filtered as the tool filters it.
     let narrow = |i: usize, v: Value| match filters.iter().find(|(j, _)| *j == i) {
         Some((_, f)) => filter_commands(v, Some(f)),
@@ -948,7 +964,8 @@ fn batch_reply(r: &Value, len: usize, rollback: bool, verbose: bool, narrow: &dy
                     "rolled_back": rolled_back,
                     "undone": r["undone"],
                     "applied": applied,
-                    "not_run": (completed + 1..len).collect::<Vec<_>>(),
+                    // An app that refused the batch before its first step says what didn't run.
+                    "not_run": r.get("not_run").filter(|v| v.is_array()).cloned().unwrap_or_else(|| json!((completed + 1..len).collect::<Vec<_>>())),
                     "results": results,
                 }),
                 true,

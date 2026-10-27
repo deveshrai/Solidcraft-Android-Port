@@ -44,6 +44,52 @@ fn act(app: &mut SolveApp, t: &Target, label: &str) {
     context_menu::run_item(app, &item, pos2(0.0, 0.0));
 }
 
+#[test]
+fn linked_component_opens_its_part_in_a_tab_and_reports_a_missing_source() {
+    let mut h = crate::scenario::Harness::new();
+    let part = h.dir.join("part.solidcraft");
+    let assembly = h.dir.join("assembly.solidcraft");
+    let mut source = Session::default();
+    source.execute("solid.box", &json!({"length": 10, "width": 20, "height": 30})).unwrap();
+    source.execute("file.save", &json!({"path": part})).unwrap();
+    let inserted = h.app.run("component.insert_design", json!({"path": part})).unwrap();
+    let component = inserted["component"].as_u64().unwrap();
+    let occurrence = inserted["occurrence"].as_u64().unwrap();
+    let other_part = h.dir.join("other-part.solidcraft");
+    let mut other_source = Session::default();
+    other_source.execute("solid.box", &json!({"length": 5, "width": 5, "height": 5})).unwrap();
+    other_source.execute("file.save", &json!({"path": other_part})).unwrap();
+    let other = h.app.run("component.insert_design", json!({"path": other_part})).unwrap();
+    let other_component = other["component"].as_u64().unwrap();
+    h.app.run("file.save", json!({"path": assembly})).unwrap();
+
+    h.app.tree.picked_components = vec![component, other_component];
+    let linked = Target::Component { id: component };
+    let row = context_menu::items(&h.app, &linked);
+    assert!(row.iter().any(|item| item.label == "Open Linked Design"));
+    let placed = context_menu::items(&h.app, &Target::Occurrence { path: vec![occurrence] });
+    assert!(placed.iter().any(|item| item.label == "Open Linked Design"));
+    assert!(!context_menu::items(&h.app, &Target::Component { id: 0 }).iter().any(|item| item.label == "Open Linked Design"));
+
+    act(&mut h.app, &linked, "Open Linked Design");
+    for _ in 0..600 {
+        if h.app.session.path.as_deref() == part.to_str() {
+            break;
+        }
+        h.frame();
+    }
+    assert_eq!(h.app.session.path.as_deref(), part.to_str());
+    assert_eq!(h.app.docs.count(), 2);
+    crate::documents::switch(&mut h.app, 0);
+    assert_eq!(h.app.session.path.as_deref(), assembly.to_str());
+
+    std::fs::remove_file(&part).unwrap();
+    act(&mut h.app, &linked, "Open Linked Design");
+    assert_eq!(h.app.docs.count(), 2);
+    assert_eq!(h.app.session.path.as_deref(), assembly.to_str());
+    assert!(h.app.status.as_ref().is_some_and(|(message, _, error)| *error && message.contains("Linked design not found")));
+}
+
 fn body(app: &SolveApp) -> String {
     app.session.model.state().bodies[0].name.clone()
 }
@@ -367,6 +413,24 @@ fn move_shortcut_respects_grounding_and_keeps_body_selection_as_a_body_move() {
     let dialog = app.dialog.as_ref().expect("body Move opens");
     assert!(matches!(dialog.kind, crate::dialogs::Kind::Move { .. }));
     assert_eq!(dialog.inputs[0].items, vec![solidcraft_engine::Sel::Body { name: "Body1".into() }]);
+}
+
+#[test]
+fn component_and_occurrence_menus_cycle_shared_identification_color() {
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    let id = app.run("component.create", json!({"name":"Part"})).unwrap()["component"].as_u64().unwrap();
+    let original = app.session.doc.component_identification_color(id);
+    assert!(app.session.colored_components.is_none());
+    act(&mut app, &Target::Component { id }, "Cycle Component Color");
+    let next = app.session.doc.component_identification_color(id);
+    assert_ne!(original, next);
+    assert!(app.session.colored_components.is_some());
+    assert!(app.dialog.is_none());
+    let occurrence = app.session.doc.occurrence_of(id).unwrap().id;
+    act(&mut app, &Target::Occurrence { path: vec![occurrence] }, "Cycle Component Color");
+    assert_ne!(app.session.doc.component_identification_color(id), next);
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(app.session.doc.component_identification_color(id), next);
 }
 
 #[test]
@@ -964,7 +1028,7 @@ fn right_click_on_a_plane_offers_a_sketch_on_it() {
         let menu = h.call("ui.menu", json!({}))["result"].clone();
         let items = menu["items"].as_array().unwrap();
         let labels: Vec<&str> = items.iter().filter_map(|i| i["label"].as_str()).filter(|l| !l.is_empty()).collect();
-        assert_eq!(labels[..3], ["Select Other…", "Create Sketch", "Pan"], "{plane}: {labels:?}");
+        assert_eq!(labels[..4], ["Select Other…", "Create Sketch", "Look At", "Pan"], "{plane}: {labels:?}");
         let sketch = items.iter().find(|i| i["label"] == "Create Sketch").unwrap();
         assert_eq!(sketch["params"], json!({"plane": plane}));
         assert!(h.app.session.selection.is_empty(), "the right-click leaves the plane unselected");
@@ -1250,6 +1314,48 @@ fn appearance_submenu_swatches_apply_to_the_clicked_body_and_keep_library_action
 }
 
 #[test]
+fn appearance_parent_click_opens_editor_after_hovering_quick_choices() {
+    use crate::scenario::{Harness, rect_of};
+    let mut h = Harness::new();
+    h.app = sample_app();
+    let name = body(&h.app);
+    h.frames(3);
+    context_menu::open_for(&mut h.app, pos2(400.0, 180.0), Target::Body { name: name.clone() });
+    h.frames(2);
+    h.step(&json!({"move":[10, 10]})).unwrap();
+    h.step(&json!({"move":{"handle":"menu:ui.appearance"}})).unwrap();
+    h.frames(2);
+    assert!(rect_of("menu:appearance.assign:Aluminum - Satin").is_some(), "hover opens quick choices");
+    assert!(h.app.dialog.is_none(), "hover must not open the editor");
+    h.step(&json!({"click":{"handle":"menu:ui.appearance"}})).unwrap();
+    assert!(h.app.viewport.context_menu.is_none(), "activation closes the context menu");
+    let dialog = h.app.dialog.as_ref().expect("parent click opens the full editor");
+    assert!(matches!(dialog.kind, crate::dialogs::Kind::Appearance(_)));
+    assert_eq!(dialog.inputs[0].items, vec![solidcraft_engine::Sel::Body { name }]);
+}
+
+#[test]
+fn appearance_hovered_quick_choice_applies_without_opening_editor() {
+    use crate::scenario::Harness;
+    let mut h = Harness::new();
+    h.app = sample_app();
+    let name = body(&h.app);
+    let rows = context_menu::items(&h.app, &Target::Body { name: name.clone() });
+    let appearance = find(&rows, "Appearance");
+    let swatch = appearance.children.iter().find(|row| row.swatch.is_some()).unwrap();
+    h.frames(3);
+    context_menu::open_for(&mut h.app, pos2(400.0, 180.0), Target::Body { name: name.clone() });
+    h.frames(2);
+    h.step(&json!({"move":[10, 10]})).unwrap();
+    h.step(&json!({"move":{"handle":"menu:ui.appearance"}})).unwrap();
+    h.frames(2);
+    h.step(&json!({"click":{"handle":format!("menu:{}:{}", swatch.id, swatch.label)}})).unwrap();
+    assert_eq!(h.app.session.doc.appearances.bodies[&name].color, swatch.swatch.unwrap());
+    assert!(h.app.dialog.is_none(), "quick choice applies directly");
+    assert!(h.app.viewport.context_menu.is_none());
+}
+
+#[test]
 fn appearance_submenu_keyboard_opens_beside_parent_and_left_returns_to_it() {
     use crate::scenario::{Harness, rect_of};
     let mut h = Harness::new();
@@ -1271,6 +1377,38 @@ fn appearance_submenu_keyboard_opens_beside_parent_and_left_returns_to_it() {
     assert!(rect_of("menu:appearance.assign:Aluminum - Satin").is_none(), "Left closes the submenu");
     h.step(&json!({"key":"Escape"})).unwrap();
     assert!(h.app.viewport.context_menu.is_none());
+}
+
+/// The Appearance flyout opened by hovering its row closes once the pointer moves to another
+/// row of the same menu (#6657).
+#[test]
+fn appearance_submenu_closes_when_the_pointer_moves_to_another_row() {
+    use crate::scenario::{Harness, rect_of};
+    let mut h = Harness::new();
+    h.app = sample_app();
+    h.frames(3);
+    let target = Target::Body { name: body(&h.app) };
+    let rows = context_menu::items(&h.app, &target);
+    context_menu::open_for(&mut h.app, pos2(400.0, 180.0), target);
+    h.frames(2);
+    let flyout = "menu:appearance.assign:Aluminum - Satin";
+    h.step(&json!({"move":[10, 10]})).unwrap();
+    h.step(&json!({"move":{"handle":"menu:ui.appearance"}})).unwrap();
+    h.frames(2);
+    assert!(rect_of(flyout).is_some(), "hovering Appearance opens its flyout");
+    let other = rows.iter().find(|i| i.enabled && i.children.is_empty()).unwrap();
+    h.step(&json!({"move":{"handle":format!("menu:{}", other.id)}})).unwrap();
+    h.frames(2);
+    assert!(rect_of(flyout).is_some(), "passing over {} on the way keeps the flyout for a moment", other.label);
+    h.frames(30);
+    assert!(rect_of(flyout).is_none(), "resting on {} closes the Appearance flyout", other.label);
+    assert!(h.app.viewport.context_menu.is_some(), "the menu itself stays open");
+    h.step(&json!({"move":{"handle":"menu:ui.appearance"}})).unwrap();
+    h.frames(2);
+    assert!(rect_of(flyout).is_some(), "hovering Appearance again reopens it");
+    h.step(&json!({"key":"Escape"})).unwrap();
+    assert!(h.app.viewport.context_menu.is_none());
+    assert!(h.app.dialog.is_none(), "closing the flyout runs nothing");
 }
 
 #[test]

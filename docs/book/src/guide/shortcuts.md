@@ -41,10 +41,18 @@ if that happens; recording is cancelled if the app loses focus.
 | Ctrl+Z | Undo | Ctrl+Y | Redo |
 | Ctrl+N | New Design | Ctrl+O | Open |
 | Ctrl+S | Save | Delete | Delete the selection |
+| Ctrl+Shift+S | Save As | | |
 | Ctrl+1 | Front View | Ctrl+2 | Back View |
 | Ctrl+3 | Left View | Ctrl+4 | Right View |
 | Ctrl+5 | Top View | Ctrl+6 | Bottom View |
 | Ctrl+7 | Isometric View | | |
+
+L, R and C start their tool family (lines, rectangles, circles) in the variant you used last, as
+the family's toolbar button does: after a Midpoint Line, L starts a Midpoint Line again. Pick
+another variant from the button's drop-down (or the Sketch Palette) and the key starts that one
+from then on. The choice is kept across designs and restarts. With **Pressing a tool's shortcut
+again switches its mode** on (Preferences › Sketch), pressing the key again before the first
+click steps to the family's next variant.
 
 Keys handled by the window itself:
 

@@ -1,4 +1,5 @@
-//! Select Other: press and hold, the viewport menu's entry, click cycling and dialog inputs.
+//! Select Other: press and hold, the viewport menu's entry, click cycling and dialog inputs; and
+//! which of overlapping sketch curves a click picks.
 
 use serde_json::{Value, json};
 use solidcraft_engine::Sel;
@@ -18,6 +19,47 @@ fn two_lines() -> (Harness, Value) {
     // Curve tests pick away from MID; the centre is a distinct point target.
     let at = h.call("ui.at", json!({"sketch":[5,10]}))["result"].clone();
     (h, at)
+}
+
+/// Two short lines of the sketch's own (`a` on x 5–15, `b` on x 25–35) drawn along a projected
+/// line (x 0–40, y 0, a box edge below the sketch plane): the ids of `a`, `b` and the projected
+/// one, and screen points on `a`, on `b` and on the projected line alone.
+struct OnProjected {
+    h: Harness,
+    a: String,
+    b: String,
+    projected: String,
+    at_a: Value,
+    at_b: Value,
+    at_projected: Value,
+}
+
+fn own_lines_on_a_projected_line() -> OnProjected {
+    let mut h = Harness::new();
+    h.app.set_origin_shown(false);
+    h.app.run("solid.box", json!({"length":40,"width":10,"height":10,"corner":[0,0,-20]})).unwrap();
+    h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+    h.app.run("sketch.project", json!({"refs":[{"edge":[20,0,-10]}]})).unwrap();
+    for (x0, x1) in [(5, 15), (25, 35)] {
+        h.app.run("sketch.line", json!({"points":[[x0,0],[x1,0]],"infer":false,"connect":false})).unwrap();
+    }
+    h.app.cam.distance = 100.0;
+    h.settle();
+    let sk = h.app.session.doc.sketch(h.app.session.active_sketch.unwrap()).unwrap();
+    let projected: Vec<String> = sk.curves.iter().filter(|c| c.link.is_some()).map(|c| c.id.clone()).collect();
+    let own: Vec<String> = sk.curves.iter().filter(|c| c.link.is_none()).map(|c| c.id.clone()).collect();
+    assert_eq!((projected.len(), own.len()), (1, 2), "{:?}", sk.curves);
+    let at = |h: &mut Harness, x: f64| h.call("ui.at", json!({"sketch":[x,0]}))["result"].clone();
+    // Away from the midpoints (10, 30 and 20), which are picks of their own.
+    let (at_a, at_b, at_projected) = (at(&mut h, 7.0), at(&mut h, 27.0), at(&mut h, 2.0));
+    OnProjected { h, a: own[0].clone(), b: own[1].clone(), projected: projected[0].clone(), at_a, at_b, at_projected }
+}
+
+fn hovered_curve(h: &Harness) -> Option<String> {
+    match &h.app.viewport.hover {
+        Some(crate::viewport::Hit::SketchCurve { id, .. }) => Some(id.clone()),
+        _ => None,
+    }
 }
 
 fn labels(h: &Harness) -> Vec<String> {
@@ -81,6 +123,45 @@ fn holding_still_lists_both_coincident_lines_and_picks_the_one_underneath() {
     let mut got = curves(&h);
     got.sort();
     assert_eq!(got, ["l1", "l2"]);
+}
+
+/// #6396: a regular line drawn on part of a construction line is the one hovered and picked
+/// first, whichever was drawn first; clicking again (or Select Other) still reaches the
+/// construction line. A construction line clearly nearer the cursor still wins.
+#[test]
+fn a_regular_line_on_a_construction_line_is_picked_before_it() {
+    for construction_first in [true, false] {
+        let mut h = Harness::new();
+        h.app.set_origin_shown(false);
+        h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+        let cons = json!({"points":[[0,10],[20,10]],"infer":false,"connect":false,"construction":true,"ids":["c"]});
+        let line = json!({"points":[[5,10],[15,10]],"infer":false,"connect":false,"ids":["r"]});
+        for p in if construction_first { [cons, line] } else { [line, cons] } {
+            h.app.run("sketch.line", p).unwrap();
+        }
+        h.app.run("sketch.line", json!({"points":[[0,14],[20,14]],"infer":false,"connect":false,"construction":true,"ids":["near"]})).unwrap();
+        h.app.cam.distance = 60.0;
+        h.settle();
+        // Away from the shared midpoint (10, 10), which is a pick of its own.
+        let at = h.call("ui.at", json!({"sketch":[7,10]}))["result"].clone();
+        h.step(&json!({"move": at})).unwrap();
+        assert!(
+            matches!(&h.app.viewport.hover, Some(crate::viewport::Hit::SketchCurve { id, .. }) if id == "r"),
+            "construction first: {construction_first}: {:?}",
+            h.app.viewport.hover
+        );
+        h.step(&json!({"click": at})).unwrap();
+        assert_eq!(curves(&h), ["r"], "construction first: {construction_first}");
+        h.frames(30);
+        h.step(&json!({"click": at})).unwrap();
+        assert_eq!(curves(&h), ["c"], "the next click reaches the construction line");
+        // On the construction line alone, it is still the one picked.
+        h.app.session.selection.clear();
+        let on_near = h.call("ui.at", json!({"sketch":[7,14]}))["result"].clone();
+        h.frames(30);
+        h.step(&json!({"click": on_near})).unwrap();
+        assert_eq!(curves(&h), ["near"]);
+    }
 }
 
 #[test]
@@ -307,4 +388,82 @@ fn select_other_opened_with_shift_adds_its_choice_to_the_selection() {
     let i = row_of(&h, "l2");
     h.step(&json!({"click": {"handle": format!("select_other:{i}")}})).unwrap();
     assert_eq!(sorted(curves(&h)), ["l1", "l2"]);
+}
+
+#[test]
+fn a_click_picks_the_sketchs_own_curve_over_a_projected_one_under_it() {
+    let OnProjected { mut h, a, b, projected, at_a, at_b, at_projected } = own_lines_on_a_projected_line();
+    h.step(&json!({"move": at_a})).unwrap();
+    assert_eq!(hovered_curve(&h).as_ref(), Some(&a), "the hover shows what a click picks");
+    h.step(&json!({"click": at_a})).unwrap();
+    assert_eq!(curves(&h), std::slice::from_ref(&a));
+    h.frames(30);
+    h.step(&json!({"click": at_b, "shift": true})).unwrap();
+    assert_eq!(sorted(curves(&h)), sorted(vec![a.clone(), b.clone()]));
+    // Where nothing of the sketch's own is, the projected line is picked.
+    h.frames(30);
+    h.step(&json!({"move": at_projected})).unwrap();
+    assert_eq!(hovered_curve(&h).as_ref(), Some(&projected));
+    h.step(&json!({"click": at_projected})).unwrap();
+    assert_eq!(curves(&h), std::slice::from_ref(&projected));
+    // Select Other lists the sketch's own line first, and the projected one under it.
+    h.frames(30);
+    h.step(&json!({"hold": at_a})).unwrap();
+    assert!(row_of(&h, &a) < row_of(&h, &projected), "{:?}", labels(&h));
+    h.step(&json!({"click": {"handle": format!("select_other:{}", row_of(&h, &projected))}})).unwrap();
+    assert_eq!(curves(&h), [projected]);
+}
+
+/// Three plates stacked along Z (made bottom, top, middle, so model order isn't depth order),
+/// the top one smallest, held over the top plate's edge from above.
+fn stacked_plates() -> Harness {
+    let mut h = Harness::new();
+    h.app.set_origin_shown(false);
+    h.app.run("solid.box", json!({"length":30,"width":30,"height":2,"corner":[-15,-15,0],"body_name":"Bottom"})).unwrap();
+    h.app.run("solid.box", json!({"length":10,"width":10,"height":2,"corner":[-5,-5,20],"body_name":"Top"})).unwrap();
+    h.app.run("solid.box", json!({"length":20,"width":20,"height":2,"corner":[-10,-10,10],"body_name":"Middle"})).unwrap();
+    h.call("ui.view", json!({"view":"top"}));
+    h.call("ui.view", json!({"view":"fit"}));
+    h
+}
+
+#[test]
+fn stacked_bodies_list_front_to_back_one_body_at_a_time() {
+    let mut h = stacked_plates();
+    h.step(&json!({"hold": {"world": [4.9, 0, 22]}})).unwrap();
+    let rows = labels(&h);
+    // Each row's body, in list order: one body at a time, the nearest first (#5345).
+    let bodies: Vec<&str> = rows.iter().filter_map(|r| r.rsplit(" · ").next()).collect();
+    let mut runs = bodies.clone();
+    runs.dedup();
+    assert_eq!(runs, ["Top", "Middle", "Bottom"], "front to back, each body's rows together: {rows:?}");
+    // Within a body: the edge under the pointer, then its face, then the body itself.
+    assert!(rows[0].starts_with("Edge ") && rows[0].ends_with("· Top"), "{rows:?}");
+    for body in ["Top", "Middle", "Bottom"] {
+        let mine: Vec<&String> = rows.iter().filter(|r| r.ends_with(&format!("· {body}"))).collect();
+        assert!(mine.iter().any(|r| r.starts_with("Face ")), "{body}: {rows:?}");
+        assert_eq!(mine.last().map(|r| r.as_str()), Some(format!("Body · {body}").as_str()), "{rows:?}");
+    }
+}
+
+#[test]
+fn an_edge_is_as_deep_as_its_point_under_the_pointer_not_its_middle() {
+    let mut h = stacked_plates();
+    h.call("ui.view", json!({"view":"iso"}));
+    h.call("ui.view", json!({"view":"fit"}));
+    h.settle();
+    // On the bottom plate's near top edge along Y (x = 15, y from -15 to 15), well off its middle.
+    let under = solidcraft_engine::geom::Vec3::new(15.0, 9.0, 2.0);
+    let at = h.call("ui.at", json!({"world": [under.x, under.y, under.z]}))["result"].clone();
+    let pos = egui::pos2(at[0].as_f64().unwrap() as f32, at[1].as_f64().unwrap() as f32);
+    let proj = crate::viewport::projection(&h.app, h.app.viewport.rect.unwrap());
+    let hits = crate::viewport::pick_all(&h.app, &proj, pos);
+    let edge = hits.iter().find(|x| matches!(x, crate::viewport::Hit::Edge { body, .. } if body == "Bottom")).expect("the edge");
+    let (o, d) = proj.ray(pos);
+    let st = crate::open_meshing::shown_world(&h.app);
+    let index = st.bodies.iter().enumerate().map(|(i, b)| (b.name.as_str(), i)).collect();
+    let t = super::hit_depth(&st, &index, o, d, edge).expect("a depth");
+    let want = (under - o).dot(d);
+    let mid = solidcraft_engine::geom::Vec3::new(15.0, 0.0, 2.0);
+    assert!((t - want).abs() < 0.5, "depth {t}, the point under the pointer {want}, its middle {}", (mid - o).dot(d));
 }

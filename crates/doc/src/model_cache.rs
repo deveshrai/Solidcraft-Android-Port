@@ -618,7 +618,7 @@ impl Model {
             }
             results.push(result);
         }
-        let mut model = Model { results, param_errors, step_digests, frame_bodies, ..Model::default() };
+        let mut model = Model { results, param_errors, step_digests, context: ctx, frame_bodies, ..Model::default() };
         let unkept = model.results.iter().filter(|r| r.unkept).count();
         if unkept > 0 {
             // The features whose state the file did not keep, each evaluated again from the state

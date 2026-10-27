@@ -523,7 +523,7 @@ fn rectangular_sections_flip_and_center_independently_and_restore_even_counts_wh
     assert_eq!(commands[0].1["alignment"], "center");
     assert_eq!(commands[0].1["alignment2"], "right");
     assert_eq!(commands[0].1["reversed2"], true);
-    assert_eq!(commands[0].1["count"], 4);
+    assert_eq!(commands[0].1["count"], "4");
     h.step(&json!({"click":{"handle":"dialog:OK"}})).unwrap();
     h.settle();
     assert!(h.app.dialog.is_none());
@@ -556,10 +556,10 @@ fn typed_counts_and_spacings_reach_the_command_with_the_second_direction() {
     assert_eq!(cmds.len(), 1);
     assert_eq!(cmds[0].0, "sketch.pattern.rectangular");
     // The click tool could only ever send a count of 3 and no second count at all.
-    assert_eq!(cmds[0].1["count"], json!(5));
-    assert_eq!(cmds[0].1["spacing"], json!(20.0));
-    assert_eq!(cmds[0].1["count2"], json!(2));
-    assert_eq!(cmds[0].1["spacing2"], json!(15.0));
+    assert_eq!(cmds[0].1["count"], json!("5"));
+    assert_eq!(cmds[0].1["spacing"], json!("20"));
+    assert_eq!(cmds[0].1["count2"], json!("2"));
+    assert_eq!(cmds[0].1["spacing2"], json!("15 mm"));
     assert!(cmds[0].1.get("dir").is_none(), "an unpicked direction leaves the command's own default");
 }
 
@@ -624,18 +624,16 @@ fn an_axis_perpendicular_to_the_sketch_is_reported_not_silently_replaced() {
     assert!(e.contains("sketch plane"), "{e}");
 }
 
-/// Upstream #218 is the same shape: `solid.pattern.circular` took expressions in its axis origin
-/// and stored `[0, 0, 0]`. Rectangular sketch patterns still read `count` with `num`, which
-/// takes a JSON number only, so the window evaluates their count fields itself.
+/// Count expressions stay linked to parameters when sent to the command.
 #[test]
-fn a_count_expression_is_evaluated_rather_than_sent_as_a_string() {
+fn a_count_expression_reaches_the_command_as_text() {
     let (mut h, id) = open("sketch.pattern.rectangular");
     h.app.run("parameters.add", json!({"name": "n", "expression": "4", "unit": ""})).unwrap();
     h.app.dialog.as_mut().unwrap().inputs[0].items = vec![Sel::SketchCurve { id, sketch: None }];
     rect(&mut h, "n", "10", "1", "10");
     let d = h.app.dialog.clone().unwrap();
     let cmds = apply_commands(&h.app, &d).unwrap();
-    assert_eq!(cmds[0].1["count"], json!(4));
+    assert_eq!(cmds[0].1["count"], json!("n"));
 }
 
 #[test]
@@ -669,6 +667,85 @@ fn the_spacing_gets_a_canvas_arrow_along_the_pattern_direction() {
     let d = h.app.dialog.clone().unwrap();
     let (_, dir) = crate::canvas::anchor(&h.app, &d).expect("an anchor on the picked curve");
     assert_eq!(dir, Some(solidcraft_engine::geom::Vec3::Y));
+}
+
+/// Dragging a spacing arrow past its start flips the direction, as typing a negative spacing does
+/// (#5497): the first direction's arrow and the second's both read a negative value.
+#[test]
+fn dragging_a_spacing_arrow_past_zero_gives_a_negative_spacing() {
+    let (mut h, id) = open("sketch.pattern.rectangular");
+    h.app.dialog.as_mut().unwrap().inputs[0].items = vec![Sel::SketchCurve { id, sketch: None }];
+    h.app.dialog.as_mut().unwrap().inputs[1].items = vec![Sel::Axis { name: "X".into() }];
+    h.app.dialog.as_mut().unwrap().inputs[2].items = vec![Sel::Axis { name: "Y".into() }];
+    rect(&mut h, "3", "20", "2", "10");
+    // From above, so both arrows lie across the screen.
+    h.step(&json!({"camera": {"yaw": 0.4, "pitch": 1.2}})).unwrap();
+    h.frames(5);
+    let spacing = |h: &crate::scenario::Harness, second: bool| {
+        let Some(Kind::SketchModify(Mod::PatternRect { spacing, spacing2, .. })) = h.app.dialog.as_ref().map(|d| &d.kind) else {
+            panic!("the pattern window")
+        };
+        h.app.session.doc.eval(if second { spacing2 } else { spacing }, solidcraft_engine::doc::expr::Kind::Length).unwrap()
+    };
+    let (at, dir) = crate::canvas::anchor(&h.app, h.app.dialog.as_ref().unwrap()).expect("an anchor");
+    let dir = dir.expect("a direction");
+    let to = at - dir * 10.0;
+    h.step(&json!({"drag": [{"handle": "arrow"}, {"world": [to.x, to.y, to.z]}], "ctrl": true})).unwrap();
+    let v = spacing(&h, false);
+    assert!((v + 10.0).abs() < 0.5, "dragging 10 mm back gave {v}");
+    h.frames(3);
+    let (at, _) = crate::canvas::anchor(&h.app, h.app.dialog.as_ref().unwrap()).expect("an anchor");
+    let dir2 = crate::sketch_modify_ui::arrow2(&h.app, h.app.dialog.as_ref().unwrap()).expect("a second direction");
+    let to = at - dir2 * 6.0;
+    h.step(&json!({"drag": [{"handle": "arrow2"}, {"world": [to.x, to.y, to.z]}], "ctrl": true})).unwrap();
+    assert!(spacing(&h, true) < 0.0, "the second arrow stayed positive: {}", spacing(&h, true));
+}
+
+/// Dragging a one-sided offset's arrow back across its curve offsets to the other side, the same
+/// as typing a negative distance (#5497). A symmetric offset uses the distance's size only, so its
+/// arrow still stops short of the curve.
+#[test]
+fn dragging_an_offset_arrow_across_its_curve_offsets_the_other_way() {
+    let made_radius = |drag: bool, symmetric: bool| {
+        let (mut h, id) = open("sketch.offset");
+        let d = h.app.dialog.as_mut().unwrap();
+        d.inputs[0].items = vec![Sel::SketchCurve { id, sketch: None }];
+        let Kind::SketchModify(Mod::Offset { distance, mode, .. }) = &mut d.kind else { panic!("the offset window") };
+        if symmetric {
+            *mode = 2;
+        }
+        if !drag {
+            *distance = "-1 mm".into();
+        }
+        h.step(&json!({"camera": {"yaw": 0.4, "pitch": 1.2}})).unwrap();
+        h.frames(5);
+        if drag {
+            let (at, dir) = crate::canvas::anchor(&h.app, h.app.dialog.as_ref().unwrap()).expect("an anchor");
+            let to = at - dir.expect("a direction") * 1.0;
+            h.step(&json!({"drag": [{"handle": "arrow"}, {"world": [to.x, to.y, to.z]}], "ctrl": true})).unwrap();
+        }
+        let Some(Kind::SketchModify(Mod::Offset { distance, .. })) = h.app.dialog.as_ref().map(|d| &d.kind) else { panic!("the offset window") };
+        let value = h.app.session.doc.eval(distance, solidcraft_engine::doc::expr::Kind::Length).unwrap();
+        h.step(&json!({"widget": "OK"})).unwrap();
+        assert!(h.app.dialog.is_none(), "{:?}", h.app.status);
+        let st = h.app.session.model.state();
+        let sk = &st.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
+        let radii: Vec<f64> = sk
+            .curves
+            .iter()
+            .filter_map(|c| if let solidcraft_engine::sketch::CurveKind::Circle { r, .. } = c.kind { Some(r) } else { None })
+            .collect();
+        (value, radii)
+    };
+    // The circle's offset to the left of its curve is inside it; the other way is outside.
+    let (dragged, radii) = made_radius(true, false);
+    assert!((dragged + 1.0).abs() < 0.05, "dragging 1 mm back across the curve gave {dragged}");
+    assert_eq!(radii.len(), 2, "{radii:?}");
+    assert!((radii[1] - (5.0 - dragged)).abs() < 1e-6, "{radii:?}");
+    let (_, typed) = made_radius(false, false);
+    assert!((typed[1] - 6.0).abs() < 1e-6 && (radii[1] - typed[1]).abs() < 0.05, "dragged {radii:?}, typed {typed:?}");
+    let (symmetric, _) = made_radius(true, true);
+    assert!(symmetric > 0.0, "a symmetric offset's arrow went past its curve: {symmetric}");
 }
 
 /// A sketch holding one circle 30 mm out and a lone point at the origin, with the circular
@@ -726,12 +803,12 @@ fn the_typed_count_and_total_angle_reach_the_command() {
     assert_eq!(cmds.len(), 1);
     assert_eq!(cmds[0].0, "sketch.pattern.circular");
     // The click flow could only ever send a count of 6, and never any angle.
-    assert_eq!(cmds[0].1["count"], json!(4));
-    assert_eq!(cmds[0].1["angle"], json!(180.0));
+    assert_eq!(cmds[0].1["count"], json!("4"));
+    assert_eq!(cmds[0].1["angle"], json!("180"));
     assert_eq!(cmds[0].1["center"], json!(centre), "the bare point id the command resolves");
     circ(&mut h, "4", "90 deg");
     let d = h.app.dialog.clone().unwrap();
-    assert_eq!(apply_commands(&h.app, &d).unwrap()[0].1["angle"], json!(90.0));
+    assert_eq!(apply_commands(&h.app, &d).unwrap()[0].1["angle"], json!("90 deg"));
 }
 
 #[test]
@@ -744,8 +821,8 @@ fn circular_flip_and_center_buttons_apply_and_reopen_the_saved_placement() {
     h.step(&json!({"click":{"handle":"dialog:Alignment:Flip direction"}})).unwrap();
     let d = h.app.dialog.clone().unwrap();
     let params = &apply_commands(&h.app, &d).unwrap()[0].1;
-    assert_eq!(params["count"], json!(6));
-    assert_eq!(params["angle"], json!(90.));
+    assert_eq!(params["count"], json!("6"));
+    assert_eq!(params["angle"], json!("90 deg"));
     assert_eq!(params["alignment"], json!("center"));
     assert_eq!(params["reversed"], json!(true));
     h.step(&json!({"click":{"handle":"dialog:OK"}})).unwrap();
@@ -769,17 +846,14 @@ fn circular_flip_and_center_buttons_apply_and_reopen_the_saved_placement() {
     assert_eq!(params["reversed"], json!(true));
 }
 
-/// The same lesson as upstream #218: `num` reads a JSON number only, and `sketch.pattern.circular`
-/// falls back to a full turn when `angle` is anything else. An expression has to be evaluated
-/// here or it disappears in silence.
+/// Angle expressions stay linked to parameters when sent to the command.
 #[test]
-fn an_angle_expression_is_evaluated_rather_than_sent_as_a_string() {
+fn an_angle_expression_reaches_the_command_as_text() {
     let (mut h, _) = open_circ();
     h.app.run("parameters.add", json!({"name": "sweep", "expression": "120", "unit": "deg"})).unwrap();
     circ(&mut h, "3", "sweep");
     let d = h.app.dialog.clone().unwrap();
-    let angle = apply_commands(&h.app, &d).unwrap()[0].1["angle"].as_f64().expect("a number, not the text `sweep`");
-    assert!((angle - 120.0).abs() < 1e-9, "{angle}");
+    assert_eq!(apply_commands(&h.app, &d).unwrap()[0].1["angle"], "sweep");
 }
 
 #[test]

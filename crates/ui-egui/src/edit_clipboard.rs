@@ -145,7 +145,12 @@ pub fn paste(app: &mut SolveApp, at: Option<Pos2>) -> bool {
     }
     if let Some(path) = app.linked_design_clipboard.clone() {
         let (parent_path, translate) = paste_placement(app, at);
-        let Ok(out) = app.run("component.insert_design", json!({"path": path, "reuse": true, "translate":translate})) else { return false };
+        // The copied design is one the user opened: its server is the user's choice.
+        let hosts: Vec<String> = solidcraft_engine::io::vfs::network_host(&path).into_iter().collect();
+        let pasted = solidcraft_engine::io::vfs::allowing_hosts(&hosts, || {
+            app.run("component.insert_design", json!({"path": path, "reuse": true, "translate":translate}))
+        });
+        let Ok(out) = pasted else { return false };
         if let Some(id) = out.get("occurrence").and_then(Value::as_u64) {
             let mut movement = crate::browser::OccMove::new(id);
             movement.path = parent_path;

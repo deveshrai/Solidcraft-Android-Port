@@ -487,18 +487,27 @@ pub fn snap_of(s: &Session, sel: &Sel) -> Option<SnapPt> {
                     let faces = m.edge_faces.get(*index).cloned().unwrap_or_default();
                     let out = faces.iter().filter_map(|f| face_normal_near(&m, *f, *point)).fold(Vec3::ZERO, |a, x| a + x);
                     let z = if out.dot(n) < 0.0 { -n } else { n };
-                    (body, SnapPt { at: c, z, kind: SnapKind::CircleCenter, param: json!({"point": pt(c), "z": pt(z)}) })
+                    // Its round end, kept by name so it follows the hole or boss as the part
+                    // changes (a point where it has none).
+                    (body, SnapPt { at: c, z, kind: SnapKind::CircleCenter, param: json!({"circle": pt(c), "z": pt(z)}) })
                 }
                 None => {
                     let mid = polyline_mid(e);
                     let z = straight_edge_axis(e)
                         .or_else(|| m.edge_faces.get(*index).and_then(|fs| fs.first()).and_then(|f| face_normal_near(&m, *f, mid)))
                         .unwrap_or(Vec3::Z);
-                    (body, SnapPt { at: mid, z, kind: SnapKind::EdgeMid, param: json!({"point": pt(mid), "z": pt(z)}) })
+                    // Its middle, kept by the edge's name.
+                    (body, SnapPt { at: mid, z, kind: SnapKind::EdgeMid, param: json!({"edge": pt(mid), "z": pt(z)}) })
                 }
             }
         }
-        Sel::Vertex { body, point } => (body, SnapPt { at: *point, z: Vec3::Z, kind: SnapKind::Vertex, param: json!({"point": pt(*point)}) }),
+        Sel::Vertex { body, point } => {
+            // The corner of the edges meeting there, kept by their names, z along the part's +Z
+            // as a point's is.
+            let z = occurrence_of_body(s, body)
+                .map_or(Vec3::Z, |o| solidcraft_engine::doc::apply_vector(&solidcraft_engine::doc::joints::occurrence_world(&s.doc, o), Vec3::Z));
+            (body, SnapPt { at: *point, z: Vec3::Z, kind: SnapKind::Vertex, param: json!({"edge": pt(*point), "corner": pt(*point), "z": pt(z)}) })
+        }
         _ => return None,
     };
     if let (Some(occ), Value::Object(m)) = (occurrence_of_body(s, body), &mut snap.param) {

@@ -165,6 +165,16 @@ pub(crate) fn floating_rect(app: &SolveApp, available: Rect) -> Rect {
     Rect::from_min_max(min, pos2((min.x + strip_width(app)).min((available.right() - gap).max(min.x)), (available.bottom() - gap).max(min.y)))
 }
 
+/// Under the browser, History is one column with it and follows its translucency.
+fn card_fill(app: &SolveApp, floating: bool) -> egui::Color32 {
+    let panel = Tokens::get().panel;
+    if floating && stacked(app) && app.ui.show_browser && app.preferences.browser_float {
+        panel.gamma_multiply(crate::browser::BROWSER_FLOAT_ALPHA)
+    } else {
+        panel
+    }
+}
+
 /// Full-height left card, or a card sharing the browser column below it.
 pub fn left_panel(app: &mut SolveApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
@@ -177,7 +187,8 @@ pub fn left_panel(app: &mut SolveApp, ui: &mut egui::Ui) {
             return;
         }
         let container = Container::new(ui.ctx(), Surface::Panel).joined(crate::ui_kit::DockEdges { left: true, top: true, ..Default::default() });
-        let frame = container.frame(ui.ctx(), t.panel, crate::frame::Side::Left).inner_margin(t.space_4);
+        let fill = card_fill(app, container.floating());
+        let frame = container.frame(ui.ctx(), fill, crate::frame::Side::Left).inner_margin(t.space_4);
         let inner = (bounds.size() - frame.total_margin().sum()).max(egui::Vec2::ZERO);
         let card = Container::new(ui.ctx(), Surface::Panel)
             .area(egui::Id::new("sc_timeline_left_card"))
@@ -632,7 +643,7 @@ fn selection_actions(app: &mut SolveApp, ui: &mut egui::Ui, groups: &[solidcraft
             ui.separator();
         }
         if crate::context_menu::button(ui, "Delete Selected Folders", "delete")
-            .on_hover_text("Keep their features and nested folders in the history")
+            .on_hover_text(crate::i18n::tr("timeline.delete_folders_tip"))
             .clicked()
         {
             let ids = app.tree.picked_timeline_groups.clone();
@@ -1082,7 +1093,7 @@ fn vertical_features(app: &mut SolveApp, ui: &mut egui::Ui, names: bool) {
         });
         if response.clicked() && on_fold {
             crate::browser::toggle(app, &pattern_key, true);
-        } else if response.clicked() {
+        } else if response.clicked() && !crate::timeline::pick_feature_into_dialog(app, *id, ui.input(|i| i.modifiers)) {
             select_item(app, ui, TimelineItem::Feature(*id), &order);
         }
         if response.double_clicked() && !on_fold {
@@ -1241,6 +1252,24 @@ fn vertical_features(app: &mut SolveApp, ui: &mut egui::Ui, names: bool) {
 mod tests {
     use super::*;
     use crate::scenario::{Harness, handle_at};
+
+    #[test]
+    fn history_folder_delete_tooltip_uses_the_language() {
+        let mut h = Harness::new();
+        h.app.preferences.timeline_left = true;
+        h.app.preferences.language = "ja".into();
+        h.app.run("timeline.group", json!({"name": "My folder"})).unwrap();
+        h.frames(4);
+        h.step(&json!({"click": {"handle": "timeline-folder:My folder"}, "button": "right"})).unwrap();
+        let label = crate::i18n::Locale::for_language("ja").label("Delete Selected Folders");
+        let [x, y] = h.widget(label).unwrap();
+        h.call("ui.move", json!({"x": x, "y": y}));
+        h.frames(90);
+        let output = egui::FullOutput { shapes: h.shapes.clone(), ..Default::default() };
+        let texts: Vec<_> = crate::test_support::text_shapes(&output).map(|t| t.galley.text()).collect();
+        assert!(texts.contains(&"フィーチャーと入れ子のフォルダーを履歴に残します"), "{texts:?}");
+        assert_eq!(h.app.session.doc.timeline_groups.len(), 1, "hovering does not delete the folder");
+    }
 
     #[test]
     fn docking_previews_match_all_three_destinations_and_stacked_collapse_shares_height() {
@@ -1650,6 +1679,28 @@ mod tests {
         harness.step(&json!({"drag": [[rail.x, rail.y], [rail.x - 40.0, rail.y]]})).unwrap();
         let narrower = harness.app.preferences.browser_width;
         assert!(narrower < wider - 20.0, "dragging it left should narrow it again: {wider} -> {narrower}");
+    }
+
+    #[test]
+    fn history_follows_the_browsers_translucency_only_under_the_browser() {
+        let opaque = Tokens::get().panel;
+        let translucent = opaque.gamma_multiply(crate::browser::BROWSER_FLOAT_ALPHA);
+        for (floating, under_browser, browser_float, expected) in [
+            (true, true, true, translucent),
+            (true, true, false, opaque),
+            (true, false, true, opaque),
+            (false, true, true, opaque),
+            (false, false, true, opaque),
+        ] {
+            let mut h = Harness::new();
+            h.app.ui.layout = if floating { crate::shell::LayoutMode::Floating } else { crate::shell::LayoutMode::Docked };
+            h.app.ui.show_timeline = true;
+            h.app.preferences.timeline_left = true;
+            h.app.preferences.timeline_under_browser = under_browser;
+            h.app.preferences.browser_float = browser_float;
+            let container = Container::for_layout(h.app.ui.layout, Surface::Panel);
+            assert_eq!(card_fill(&h.app, container.floating()), expected, "floating={floating} under_browser={under_browser} float={browser_float}");
+        }
     }
 
     #[test]

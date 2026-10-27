@@ -105,7 +105,8 @@ fn ids_names_suppression_marker_and_failures_survive() {
     run(&mut s, "parameters.favorite", json!({"name": depth}));
     // A fillet that a parameter change makes too big fails, and the design keeps it.
     run(&mut s, "parameters.add", json!({"name": "r", "expression": "1 mm"}));
-    run(&mut s, "solid.fillet", json!({"edges": [[5, 0, 10]], "radius": "r"}));
+    // Pick only the plate's edge, clear of the overlapping box's edge.
+    run(&mut s, "solid.fillet", json!({"edges": [[20, 0, 10]], "radius": "r"}));
     let fillet = s.doc.features.last().unwrap().id;
     run(&mut s, "parameters.change", json!({"name": "r", "expression": "50 mm"}));
     assert!(s.model.result(fillet).and_then(|r| r.error.clone()).is_some(), "the fillet fails");

@@ -28,6 +28,7 @@ mod native_crash;
 mod native_frame;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod nav_bridge;
 #[cfg(target_os = "macos")]
 mod open_documents;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
@@ -87,6 +88,8 @@ struct App {
     space_mouse: space_mouse::SpaceMouse,
     #[cfg(target_os = "macos")]
     native_menu: Option<native_menu::NativeMenu>,
+    /// A device's own app moving the view (Preferences › Navigation, off by default).
+    nav_bridge: nav_bridge::NavBridge,
 }
 
 impl eframe::App for App {
@@ -145,6 +148,8 @@ impl eframe::App for App {
         if !self.solve.file_picker_busy() {
             self.space_mouse.tick(&mut self.solve, ctx);
         }
+        // Every frame, so switching the bridge off reaches the reader while a picker is open too.
+        self.nav_bridge.tick(&mut self.solve, ctx);
         if self.solve.quit_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -182,6 +187,10 @@ impl eframe::App for App {
         }
         solidcraft_ui_egui::recovery_ui::close(&mut self.solve);
         solidcraft_ui_egui::open_elsewhere::close(&mut self.solve);
+        // Before a restart below starts the next instance, which would otherwise get nothing from
+        // the 3D mouse driver (`solidcraft_3dx_client::stop`).
+        #[cfg(target_os = "macos")]
+        solidcraft_3dx_client::stop();
         solidcraft_engine::crash::end_session();
         if let Some(lost_at) = self.gpu.as_ref().and_then(|g| g.lost_at) {
             device_lost::restart(self.gpu.as_ref().is_some_and(|g| g.restart_on_software), lost_at);
@@ -292,7 +301,9 @@ fn services(cc: &eframe::CreationContext<'_>) -> Services {
                 dialog = dialog.add_filter(label, &case_variants(first));
             }
             // The groups come from the format registry, so a new format joins this dialog by itself.
-            dialog = dialog.add_filter("Designs, CAD files and meshes", &case_variants(&io::formats::open_extensions(true)));
+            let mut everything = io::formats::open_extensions(true);
+            everything.extend(["dxf", "svg"]);
+            dialog = dialog.add_filter(solidcraft_ui_egui::i18n::tr("file.open.drawing_filter"), &case_variants(&everything));
             for (label, exts) in io::formats::import_filters(true) {
                 dialog = dialog.add_filter(label, &case_variants(&exts));
             }
@@ -576,13 +587,22 @@ fn scene_samples(backend: eframe::wgpu::Backend, samples: u32, supported: &[u32]
     }
 }
 
-/// Anti-aliasing samples from Preferences (4 when unset).
-fn msaa() -> u16 {
+/// Keep the default until the installed renderer's startup check proves a fallback is needed.
+fn scene_msaa_request(saved: Option<u16>) -> u16 {
+    saved.unwrap_or(MSAA)
+}
+
+/// Query the scene's colour/depth intersection, rather than the depthless window's counts.
+fn scene_sample_choices(depth_bits: u8, stencil_bits: u8, query: impl FnOnce(Option<eframe::wgpu::TextureFormat>) -> Vec<u32>) -> Vec<u32> {
+    query(eframe::egui_wgpu::depth_format_from_bits(depth_bits, stencil_bits))
+}
+
+/// An explicitly saved anti-aliasing choice, absent until Graphics changes it.
+fn msaa() -> Option<u16> {
     graphics()
         .and_then(|v| v.get("msaa").and_then(serde_json::Value::as_u64))
         .and_then(|m| u16::try_from(m).ok())
         .filter(|m| [1, 2, 4, 8].contains(m))
-        .unwrap_or(MSAA)
 }
 
 /// Windows and Linux: no OS title bar; the application bar is the title bar
@@ -621,6 +641,18 @@ fn app_viewport(custom_titlebar: bool) -> Result<egui::ViewportBuilder, eframe::
 
 /// The window's app id: it names the desktop entry, so it is the packages' reverse-DNS id.
 const APP_ID: &str = solidcraft_engine::io::APP_ID;
+
+/// Disconnects from the 3D mouse driver when dropped, as `main` returns or a panic unwinds out
+/// of it (`solidcraft_3dx_client::stop`).
+#[cfg(target_os = "macos")]
+struct DriverClient;
+
+#[cfg(target_os = "macos")]
+impl Drop for DriverClient {
+    fn drop(&mut self) {
+        solidcraft_3dx_client::stop();
+    }
+}
 
 fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
@@ -686,7 +718,13 @@ fn main() -> eframe::Result {
     if safe_mode {
         notes.push("Safe mode: default settings (yours are kept for the next normal start), no recovery offer, software rendering.".into());
     }
-    let samples = if safe_mode { MSAA } else { msaa() };
+    let fallback_note = std::env::var(startup::FALLBACK_NOTE_ENV).ok().map(|s| s.chars().take(4096).collect::<String>());
+    if let Some(note) = &fallback_note {
+        log::warn!("{note}");
+        eprintln!("SolidCraft: {note}");
+        notes.push(note.clone());
+    }
+    let saved_samples = if safe_mode { None } else { msaa() };
     let wgpu_options = wgpu_options(cpu_renderer, if safe_mode { None } else { backend_preference() }.as_deref());
     let depth_bits = if !safe_mode && startup::float_depth_everywhere(&wgpu_options) { FLOAT_DEPTH_BITS } else { DEPTH_BITS };
     // Crashes leave a report in the crash folder (solidcraft_engine::crash, docs/crash-reports.md).
@@ -764,6 +802,10 @@ fn main() -> eframe::Result {
     let created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let created_in_app = created.clone();
     let starting = settings.clone();
+    // A panic on the window's thread ends the app without `on_exit`; this disconnects from the
+    // 3D mouse driver then too.
+    #[cfg(target_os = "macos")]
+    let _driver_client = DriverClient;
     mark("run_native");
     let result = eframe::run_native(
         "SolidCraft",
@@ -794,6 +836,7 @@ fn main() -> eframe::Result {
             }
             app.integrated_titlebar = cfg!(target_os = "macos");
             app.cpu_meshing = safe_mode;
+            app.graphics_fallback = fallback_note.clone();
             if let Some(p) = cc.storage.and_then(|s| solidcraft_ui_egui::prefs::stored(|k| s.get_string(k))).filter(|_| !safe_mode) {
                 app.load_prefs(&p);
             }
@@ -816,18 +859,24 @@ fn main() -> eframe::Result {
                         (info.name.clone(), format!("{} ({:?}, {:?})", info.name, info.device_type, info.backend))
                     })
                     .collect();
-                let scene_samples = scene_samples(rs.adapter.get_info().backend, u32::from(samples), &rs.msaa_supported);
+                let info = rs.adapter.get_info();
+                let samples = scene_msaa_request(saved_samples);
+                let supported = scene_sample_choices(depth_bits, STENCIL_BITS, |depth| {
+                    eframe::egui_wgpu::supported_msaa_samples(&rs.adapter, &rs.device, rs.target_format, depth)
+                });
+                let scene_samples = scene_samples(info.backend, u32::from(samples), &supported);
                 eprintln!("SolidCraft graphics: {:?}, MSAA {scene_samples}x (requested {}x)", rs.adapter.get_info().backend, samples);
                 solidcraft_engine::crash::phase("viewport pipelines (shader compile)");
-                app.set_wgpu_split(rs, depth_bits, STENCIL_BITS, scene_samples);
+                let scene_samples = app.set_wgpu_split(rs, depth_bits, STENCIL_BITS, scene_samples);
+                app.msaa_supported = supported;
+                app.preferences.msaa = u32::from(samples);
                 solidcraft_ui_egui::gpu::install_picture_renderer(rs);
                 // The graphics driver is loaded now; it may have put its own exception filter
                 // in front of ours.
                 #[cfg(target_os = "windows")]
                 native_crash::reinstall();
-                // A saved anti-aliasing the device can't do: back to the default, with a notice.
+                // Reflect a confirmed probe fallback or an unsupported saved count in Graphics.
                 solidcraft_ui_egui::prefs::check_msaa(&mut app, u32::from(samples));
-                let info = rs.adapter.get_info();
                 solidcraft_engine::crash::set_environment(&format!(
                     "Renderer: {:?} {} ({}), MSAA {scene_samples}x",
                     info.backend, info.name, info.driver
@@ -889,8 +938,9 @@ fn main() -> eframe::Result {
             if !notes.is_empty() {
                 app.set_status(notes.join(" "), true);
             }
+            let nav_bridge = nav_bridge::NavBridge::start(&cc.egui_ctx);
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-            let space_mouse = space_mouse::SpaceMouse::start(&cc.egui_ctx);
+            let space_mouse = space_mouse::SpaceMouse::start(&cc.egui_ctx, nav_bridge.claim());
             #[cfg(target_os = "macos")]
             let native_menu = match native_menu::NativeMenu::new(&app, &cc.egui_ctx) {
                 Ok(menu) => Some(menu),
@@ -915,12 +965,13 @@ fn main() -> eframe::Result {
                 space_mouse,
                 #[cfg(target_os = "macos")]
                 native_menu,
+                nav_bridge,
             }))
         }),
     );
     control_server::remove_token_file();
     match result {
-        Err(e) if !created.load(std::sync::atomic::Ordering::SeqCst) => no_window(e, cpu_renderer, settings.as_deref()),
+        Err(e) if !created.load(std::sync::atomic::Ordering::SeqCst) => no_window(e, cpu_renderer, started, settings.as_deref()),
         r => r,
     }
 }
@@ -941,6 +992,9 @@ fn wgpu_options(cpu: bool, preference: Option<&str>) -> eframe::egui_wgpu::WgpuC
     let mut options = eframe::egui_wgpu::WgpuConfiguration::default();
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_setup {
         let env_set = std::env::var(startup::WGPU_BACKEND_ENV).is_ok_and(|v| !v.trim().is_empty());
+        // A retry applies only to this launch. WGPU_BACKEND always has priority.
+        let retry = std::env::var(startup::RETRY_BACKEND_ENV).ok();
+        let preference = if cpu { preference } else { retry.as_deref().or(preference) };
         if let Some(backends) = startup::choose_backends(cfg!(target_os = "windows"), env_set, cpu, preference, startup::has_hardware_adapter) {
             eprintln!("SolidCraft graphics: starting {backends:?}");
             setup.instance_descriptor.backends = backends;
@@ -962,24 +1016,47 @@ fn wgpu_options(cpu: bool, preference: Option<&str>) -> eframe::egui_wgpu::WgpuC
     options
 }
 
-/// The window never opened (no graphics adapter, a device that wouldn't start): once more on
-/// the software renderer, else a message box saying what failed instead of a silent exit.
-fn no_window(error: eframe::Error, tried_cpu: bool, settings: Option<&std::path::Path>) -> eframe::Result {
+/// A failed renderer returns here before app creation. A fresh process avoids reusing winit's
+/// event loop or a failed device; each retry advances through the APIs, then software once.
+fn no_window(error: eframe::Error, tried_cpu: bool, failed: eframe::wgpu::Backends, settings: Option<&std::path::Path>) -> eframe::Result {
     log::error!("the window could not open: {error}");
     eprintln!("SolidCraft: the window could not open: {error}");
-    if !tried_cpu && let Ok(exe) = std::env::current_exe() {
-        eprintln!("SolidCraft: trying again with the software renderer ({}=cpu)", startup::RENDERER_ENV);
-        match std::process::Command::new(exe).args(std::env::args_os().skip(1)).env(startup::RENDERER_ENV, "cpu").status() {
+    // This failure was handled, so neither the marker nor the journal should call it a crash.
+    if let Some(dir) = settings {
+        startup::started(dir);
+    }
+    solidcraft_engine::crash::end_session();
+    let explicit = std::env::var(startup::WGPU_BACKEND_ENV).is_ok_and(|v| !v.trim().is_empty());
+    if let Some(next) = startup::fallback_backend(cfg!(target_os = "windows"), explicit, tried_cpu, failed)
+        && let Ok(exe) = std::env::current_exe()
+    {
+        let previous = std::env::var(startup::FALLBACK_NOTE_ENV).unwrap_or_default();
+        let note = startup::fallback_note(&previous, failed, next, &error.to_string());
+        log::warn!("{note}");
+        eprintln!("SolidCraft: {note}");
+        let mut command = std::process::Command::new(exe);
+        command.args(std::env::args_os().skip(1)).env(startup::FALLBACK_NOTE_ENV, note);
+        if next == "cpu" {
+            command.env(startup::RENDERER_ENV, "cpu").env_remove(startup::RETRY_BACKEND_ENV);
+        } else {
+            command.env(startup::RETRY_BACKEND_ENV, next);
+        }
+        match command.status() {
             Ok(status) if status.success() => return Ok(()),
-            // The second try showed its own message.
+            // The final try showed its own message.
             Ok(_) => return Err(error),
-            Err(e) => log::error!("could not start again with the software renderer: {e}"),
+            Err(e) => log::error!("could not start again on {next}: {e}"),
         }
     }
+    let message = if explicit {
+        format!("SolidCraft could not open its window with WGPU_BACKEND.\n\n{error}\n\nChange or remove WGPU_BACKEND to try another graphics API.")
+    } else {
+        startup::no_window_message(&error.to_string(), settings)
+    };
     let _ = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
         .set_title("SolidCraft could not start")
-        .set_description(startup::no_window_message(&error.to_string(), settings))
+        .set_description(message)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
     Err(error)
@@ -1197,6 +1274,34 @@ mod msaa_tests {
             for backend in [Backend::Vulkan, Backend::Dx12, Backend::Metal] {
                 assert_eq!(eframe::egui_wgpu::effective_msaa_samples(backend, requested), requested);
             }
+        }
+    }
+
+    #[test]
+    fn scene_sample_choices_include_the_scene_depth_format() {
+        use eframe::wgpu::TextureFormat;
+        for (bits, expected) in [(24, TextureFormat::Depth24PlusStencil8), (32, TextureFormat::Depth32FloatStencil8)] {
+            // A synthetic colour target supports 8x, but the scene depth supports only 1x/4x.
+            let supported = super::scene_sample_choices(bits, 8, |depth| match depth {
+                Some(format) if format == expected => vec![1, 4],
+                None => vec![1, 4, 8],
+                other => panic!("unexpected scene depth: {other:?}"),
+            });
+            assert_eq!(supported, [1, 4]);
+            assert_eq!(super::scene_samples(eframe::wgpu::Backend::Dx12, 8, &supported), 4);
+        }
+    }
+
+    #[test]
+    fn scene_msaa_keeps_four_samples_by_default_and_explicit_choices() {
+        use eframe::wgpu::Backend;
+        let default = super::scene_msaa_request(None);
+        assert_eq!(default, 4);
+        for backend in [Backend::Dx12, Backend::Vulkan, Backend::Metal] {
+            assert_eq!(super::scene_samples(backend, u32::from(default), &[1, 4]), 4);
+        }
+        for saved in [1, 2, 4, 8] {
+            assert_eq!(super::scene_msaa_request(Some(saved)), saved);
         }
     }
 

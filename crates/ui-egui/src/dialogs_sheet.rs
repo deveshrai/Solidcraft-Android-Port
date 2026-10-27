@@ -486,6 +486,23 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
     enter
 }
 
+/// The ribbon exports use the same save picker as the flat-pattern panel. Keep the
+/// commands' default target (the last sheet body) and leave programmatic calls headless.
+pub fn start_export(app: &mut SolveApp, id: &str) -> bool {
+    let extension = match id {
+        "sheet.export_dxf" => "dxf",
+        "sheet.export_bend_table" => "csv",
+        _ => return false,
+    };
+    if let Some(body) = app.session.model.state().sheets.last().map(|sheet| sheet.body.clone()) {
+        export_flat(app, &body, extension);
+    } else {
+        // Let the command report its ordinary "no sheet body" error without opening a picker.
+        let _ = app.run(id, json!({}));
+    }
+    true
+}
+
 fn export_flat(app: &mut SolveApp, body: &str, extension: &str) -> String {
     let name = format!("{}-{body}.{extension}", app.session.doc.name);
     let body = body.to_string();

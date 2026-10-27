@@ -22,6 +22,7 @@ pub struct ViewportCallback(pub Frame);
 /// are meshed on the CPU. When the two targets differ, the scene is drawn offscreen and blitted.
 /// Also returns the handle to what each frame drew.
 pub fn install(rs: &egui_wgpu::RenderState, scene: GpuTarget, window: GpuTarget, gpu_meshing: bool) -> (GpuTarget, DrawStatsHandle) {
+    log_uncaptured_errors(&rs.device);
     let tess = if gpu_meshing { solidcraft_gpu::view::tessellation(&rs.adapter, &rs.device, &rs.queue, solidcraft_gpu::SHADER) } else { None };
     let scene = GpuTarget { tess: tess.is_some(), ..scene };
     let window = GpuTarget { tess: tess.is_some(), ..window };
@@ -29,6 +30,26 @@ pub fn install(rs: &egui_wgpu::RenderState, scene: GpuTarget, window: GpuTarget,
     let stats = res.stats();
     rs.renderer.write().callback_resources.insert(res);
     (scene, stats)
+}
+
+/// A GPU error no error scope caught is reported, never a panic: a device's default handler
+/// panics with "wgpu error: ...", which would close the app with the open design (#5486 reported
+/// "wgpu error: Out of Memory" from such a panic). The headless picture devices do the same
+/// (`Capturer::headless`). Errors the code expects are caught under error scopes where they
+/// happen, and those take priority over this handler. Errors before [`install`] (egui's own
+/// pipelines at startup) still reach the default handler, so a startup failure stays a crash
+/// report with its startup step.
+pub fn log_uncaptured_errors(device: &wgpu::Device) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let reported = std::sync::Arc::new(AtomicU32::new(0));
+    device.on_uncaptured_error(std::sync::Arc::new(move |e: wgpu::Error| {
+        // The first few only: an invalid resource repeats its error on every frame.
+        if reported.fetch_add(1, Ordering::Relaxed) < 8 {
+            log::error!("GPU: {e}");
+            #[cfg(not(target_arch = "wasm32"))]
+            eprintln!("SolidCraft graphics: {e}");
+        }
+    }));
 }
 
 /// Draw this process's headless pictures (`ui.render`, the agent's view image, thumbnails of

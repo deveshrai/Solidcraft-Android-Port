@@ -26,6 +26,18 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("sketch?: id|name (default active); path?: file to write (else the DXF text is returned)"),
 ];
 
+/// The sketch import command for a drawing file name, regardless of extension case.
+pub fn drawing_import_command(path: &str) -> Option<&'static str> {
+    let ext = std::path::Path::new(path).extension()?.to_str()?;
+    if ext.eq_ignore_ascii_case("dxf") {
+        Some("sketch.insert_dxf")
+    } else if ext.eq_ignore_ascii_case("svg") {
+        Some("sketch.insert_svg")
+    } else {
+        None
+    }
+}
+
 fn source_text(p: &Value, cmd: &str) -> Result<String> {
     if let Some(t) = str_(p, "text") {
         if t.len() > MAX_DRAWING_BYTES {

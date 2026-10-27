@@ -8,8 +8,9 @@
 //!   row the next launch starts in safe mode by itself.
 //! - **Safe mode** (`--safe-mode` or `SOLIDCRAFT_SAFE_MODE=1`): default settings (the saved ones
 //!   are left untouched), no recovery offer, the software renderer and CPU meshing.
-//! - **No usable graphics device**: one retry on the software renderer
-//!   (`SOLIDCRAFT_RENDERER=cpu`), then a message box saying what failed and what to try.
+//! - **A renderer that cannot start**: on Windows, try the remaining graphics APIs in order,
+//!   then the software renderer (`SOLIDCRAFT_RENDERER=cpu`). An explicit `WGPU_BACKEND` fails
+//!   cleanly without switching. Exhausted retries show a message box with the error.
 
 use std::path::{Path, PathBuf};
 
@@ -216,6 +217,34 @@ pub fn choose_backends(
         return None;
     }
     Some(WINDOWS_ORDER.into_iter().find(|b| has_hardware(*b)).unwrap_or(Backends::DX12))
+}
+
+/// Internal, process-local retry choice; never written to the graphics preference.
+pub const RETRY_BACKEND_ENV: &str = "SOLIDCRAFT_STARTUP_BACKEND";
+/// Why this launch is using a fallback, carried to the new process for status and Preferences.
+pub const FALLBACK_NOTE_ENV: &str = "SOLIDCRAFT_GRAPHICS_FALLBACK";
+
+/// A handled startup failure tries each remaining Windows API once, then software rendering.
+/// An explicit environment choice is final, including when software rendering was requested.
+pub fn fallback_backend(windows: bool, explicit: bool, cpu: bool, failed: eframe::wgpu::Backends) -> Option<&'static str> {
+    if explicit || cpu {
+        return None;
+    }
+    if windows {
+        let last = WINDOWS_ORDER.iter().rposition(|backend| failed.intersects(*backend));
+        if let Some(next) = last.and_then(|i| WINDOWS_ORDER.get(i + 1)) {
+            return Some(if *next == eframe::wgpu::Backends::VULKAN { "vulkan" } else { "gl" });
+        }
+    }
+    Some("cpu")
+}
+
+/// Keep driver diagnostics on one bounded line, including across the finite retry chain.
+pub fn fallback_note(previous: &str, failed: eframe::wgpu::Backends, next: &str, error: &str) -> String {
+    let previous: String = previous.chars().take(2048).collect();
+    let error: String = error.chars().take(1024).collect();
+    let line = format!("{previous} Graphics fallback: {failed:?} failed ({error}); trying {next}.");
+    line.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(4096).collect()
 }
 
 /// The device feature for a 32-bit float depth buffer with a stencil (reversed depth, #1434).
@@ -440,6 +469,42 @@ mod tests {
         // `auto` and blanks are the default order.
         assert_eq!(choose_backends(true, false, false, Some(" auto "), probe(&[Backends::DX12])), Some(Backends::DX12));
         assert_eq!(choose_backends(true, false, false, Some(""), probe(&[Backends::GL])), Some(Backends::GL));
+    }
+
+    #[test]
+    fn failed_windows_backends_fall_back_in_order_and_stop_after_software() {
+        use eframe::wgpu::Backends as B;
+        assert_eq!(fallback_backend(true, false, false, B::DX12), Some("vulkan"));
+        assert_eq!(fallback_backend(true, false, false, B::VULKAN), Some("gl"));
+        assert_eq!(fallback_backend(true, false, false, B::GL), Some("cpu"));
+        assert_eq!(fallback_backend(true, false, true, B::DX12), None);
+        assert_eq!(fallback_backend(true, false, false, B::DX12 | B::VULKAN), Some("gl"));
+        assert_eq!(fallback_backend(false, false, false, B::VULKAN), Some("cpu"));
+        let note = fallback_note("", B::DX12, "vulkan", "egui_pipeline\n0x80070057");
+        assert!(note.contains("egui_pipeline 0x80070057") && note.contains("vulkan") && !note.contains('\n'));
+        let long = fallback_note(&"x".repeat(5000), B::VULKAN, "gl", &"y".repeat(5000));
+        assert!(long.chars().count() <= 4096 && long.ends_with("trying gl."));
+    }
+
+    #[test]
+    fn explicit_backend_failure_never_switches_api_or_retries_software() {
+        use eframe::wgpu::Backends as B;
+        for windows in [false, true] {
+            for cpu in [false, true] {
+                for backend in [B::DX12, B::VULKAN, B::GL, B::all()] {
+                    assert_eq!(fallback_backend(windows, true, cpu, backend), None);
+                    let mut probed = false;
+                    assert_eq!(
+                        choose_backends(windows, true, cpu, Some("vulkan"), |_| {
+                            probed = true;
+                            false
+                        }),
+                        None
+                    );
+                    assert!(!probed);
+                }
+            }
+        }
     }
 
     #[test]

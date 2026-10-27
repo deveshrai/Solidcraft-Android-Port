@@ -7,6 +7,8 @@ plane, in the view or on its browser row, offers **Create Sketch** on that plane
 keeping what changed since the sketch was created or opened for editing: a new sketch is removed,
 an edited one goes back to how it was, as one step that Undo brings back.
 
+Opening a sketch turns the view to face it. When the sketch ends, the view stays where it is by default. Preferences › Sketch › **When a sketch ends** changes that: **Return to the previous view** goes back to the view from before the sketch, and **Return unless rotated** goes back only when you panned or zoomed the sketch view but didn't turn it.
+
 In scripts, `XY`, `XZ`, `YZ` and their `Top`, `Front`, `Right` aliases name origin planes.
 These names are reserved: a construction plane cannot be created with or renamed to one
 (case-insensitive). If an older design already has a construction plane with such a name, a
@@ -35,6 +37,12 @@ into reference geometry that doesn't form profiles. Modify tools include trim (T
 fillet, chamfer, offset (O), mirror, patterns, move/copy and scale. With trim on, click a
 piece to remove it, or press and drag a path across several pieces: the ones it crosses light up
 and all go when you let go, in one undo step (`sketch.trim.path`).
+
+Tools with several variants (line and midpoint line; two-point, three-point, centre and rounded
+rectangle; the circle, arc, slot, polygon and spline variants) share one toolbar button with a
+drop-down. The button and the family's shortcut start the variant you picked last, so a
+shortcut such as L can start a Midpoint Line; pick the variant you want from the drop-down to
+change it ([Keyboard shortcuts](shortcuts.md)).
 
 The Sketch Palette's **Construction Geometries** option hides construction curves while you
 work. A hidden construction curve cannot be picked by a click or by a box. Nothing invisible
@@ -204,7 +212,7 @@ The solver is SolidCraft's own (damped Gauss–Newton with degree-of-freedom ana
 coincident, horizontal/vertical, parallel, perpendicular, tangent, equal, concentric, collinear,
 midpoint, symmetry, fix, curvature (G2) and polygon. **Sketch Dimension** (D) adds linear,
 aligned, horizontal, vertical, point-to-line, line-to-circle, point-to-circle, circle-to-circle,
-radius, diameter and angle dimensions. Each is a parameter
+radius, diameter, arc length and angle dimensions. For an arc's length, click the arc and then one of its end points. Each is a parameter
 (`d1`, `d2`, …), so it can hold an expression.
 
 Press D, click what you want to measure and type the value: as soon as the click settles the

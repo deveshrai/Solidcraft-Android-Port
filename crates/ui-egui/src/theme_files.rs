@@ -610,8 +610,8 @@ pub fn export(name: &str, base: Base, t: &Tokens) -> Value {
     json!({"format": FORMAT, "name": name, "base": base, "colors": colors, "radii": radii, "borders": borders, "icon_palette": icon_palette})
 }
 
-/// The theme files that come with SolidCraft (original files; Gruvbox, Tokyo Night, Solarized, Nord, Nosferatu and Catppuccin map open-source palettes, MIT; Okibi and Akari map the Okibi design system).
-const BUILTIN: [(&str, &str); 22] = [
+/// The theme files that come with SolidCraft (original files; Gruvbox, Tokyo Night, Solarized, Nord, Nosferatu and Catppuccin map open-source palettes, MIT; Okibi and Akari map the Okibi design system; Clay and Clay Dark are original warm paper and charcoal palettes).
+const BUILTIN: [(&str, &str); 24] = [
     ("gruvbox-dark", include_str!("../../../assets/styles/ui/themes/gruvbox-dark.json")),
     ("gruvbox-dark-hard", include_str!("../../../assets/styles/ui/themes/gruvbox-dark-hard.json")),
     ("gruvbox-dark-soft", include_str!("../../../assets/styles/ui/themes/gruvbox-dark-soft.json")),
@@ -634,6 +634,8 @@ const BUILTIN: [(&str, &str); 22] = [
     ("catppuccin-mocha", include_str!("../../../assets/styles/ui/themes/catppuccin-mocha.json")),
     ("okibi", include_str!("../../../assets/styles/ui/themes/okibi.json")),
     ("akari", include_str!("../../../assets/styles/ui/themes/akari.json")),
+    ("clay", include_str!("../../../assets/styles/ui/themes/clay.json")),
+    ("clay-dark", include_str!("../../../assets/styles/ui/themes/clay-dark.json")),
 ];
 
 /// The built-in themes, read once (one that fails to read is left out; a test reads them all).
@@ -1030,6 +1032,9 @@ mod tests {
         assert_eq!(values("solidcraft-95"), [3, 3, 4, 4, 3, 3]);
         assert_eq!(values("blueprint"), [4, 6, 8, 10, 6, 7]);
         assert_eq!(values("cupertino"), [6, 8, 12, 16, 8, 9]);
+        for id in ["clay", "clay-dark"] {
+            assert_eq!(values(id), [6, 9, 13, 18, 9, 10], "{id}");
+        }
         let defaults = radius_values(Tokens::dark());
         assert_eq!(defaults, radius_values(Tokens::light()));
         for suffix in ["", "-hard", "-soft"] {

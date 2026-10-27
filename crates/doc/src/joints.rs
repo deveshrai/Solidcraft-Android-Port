@@ -75,6 +75,10 @@ pub enum Snap {
         face: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         corner: Option<String>,
+        /// The frame's z when it isn't the face's normal (an edge or a corner picked as it is,
+        /// not on a face): the point still follows the edge, found by name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        axis: Option<EdgeAxis>,
     },
     /// A point, z along `z` (default +Z) and x toward `x` laid square to z (default: one chosen
     /// from z alone).
@@ -85,6 +89,25 @@ pub enum Snap {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         x: Option<Vec3>,
     },
+}
+
+/// The z of an edge origin that isn't its face's normal (component coordinates); its x follows
+/// from z alone, as a point origin's does.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeAxis {
+    /// Along a straight edge, the way this points: a hinge on the edge turns about it as it moves.
+    Along(Vec3),
+    /// This direction.
+    Fixed(Vec3),
+}
+
+impl EdgeAxis {
+    pub fn dir(self) -> Vec3 {
+        match self {
+            EdgeAxis::Along(d) | EdgeAxis::Fixed(d) => d,
+        }
+    }
 }
 
 /// What sets a joint origin's x axis (its turn about z): a direction, or a face found by its
@@ -179,7 +202,7 @@ impl Snap {
             Snap::Frame { origin, z, x } => origin.is_finite() && z.is_finite() && x.is_none_or(|x| x.is_finite()),
             Snap::FaceCenter { pick, x, .. } | Snap::CircleCenter { pick, x, .. } => pick.is_finite() && x_ok(x),
             Snap::Point { point, z, x } => point.is_finite() && z.is_none_or(|z| z.is_finite()) && x.is_none_or(|x| x.is_finite()),
-            Snap::Edge { pick, .. } => pick.is_finite(),
+            Snap::Edge { pick, axis, .. } => pick.is_finite() && axis.is_none_or(|a| a.dir().is_finite()),
         }
     }
 }
@@ -1370,9 +1393,11 @@ fn closure_gaps(workspace: &mut PlacementWorkspace, closing: &[u64], vals: &Valu
 }
 
 /// How far a closing joint may be off before it is a conflict: its frames apart by more than
-/// this many millimetres or turned by more than this many radians.
-const CONFLICT_MM: f64 = 1e-6;
-const CONFLICT_RAD: f64 = 1e-8;
+/// this many millimetres or turned by more than this many radians (a micrometre over a metre).
+/// Holes picked on parts are rarely exactly in line: axes a few hundredths of a microradian
+/// apart (#6211) are not a conflict, and the loop through them still moves.
+const CONFLICT_MM: f64 = 1e-4;
+const CONFLICT_RAD: f64 = 1e-6;
 
 /// The largest gap (`closure_gaps`, for loops of size `scale`) that still passes the conflict
 /// check, with room to spare.
@@ -1382,8 +1407,9 @@ fn loose_gap(scale: f64) -> f64 {
 
 /// Close loops whose gaps `f` gives from `x`, and the tolerance to keep them closed to from here
 /// on: `tol`, or, where they come no closer than that but within `loose`, a little more than they
-/// do come. Faces modelled a few nanometres apart along parallel axes leave a gap no value of a
-/// planar loop takes out; the loop still moves, as closed as it is. `None` when they can't close.
+/// do come. Faces modelled a few nanometres apart along parallel axes, or axes a hair out of
+/// parallel, leave a gap no value of a planar loop takes out (the second one that grows as the
+/// loop turns); the loop still moves, as closed as it comes. `None` when they can't close.
 fn close_within(f: &mut dyn FnMut(&[f64]) -> Option<Vec<f64>>, x: &mut Vec<f64>, bounds: &[(f64, f64)], tol: f64, loose: f64) -> Option<f64> {
     if least_squares(f, x, bounds, tol) {
         return Some(tol);
@@ -1691,7 +1717,8 @@ fn close_group(
     // that close is left as it is.
     let mut x = x0;
     let start = largest(&gaps(&x, 0.0)?);
-    let tol = match close_within(&mut |x| gaps(x, 0.0), &mut x, &bounds, tol, loose_gap(scale))? {
+    let loose = loose_gap(scale);
+    let tol = match close_within(&mut |x| gaps(x, 0.0), &mut x, &bounds, tol, loose)? {
         t if t > tol && moves.is_empty() && start <= t => return Some(BTreeMap::new()),
         t => t,
     };
@@ -1703,7 +1730,9 @@ fn close_group(
         }
         let t1 = (t + dt).min(1.0);
         let mut trial = x.clone();
-        if least_squares(&mut |x| gaps(x, t1), &mut trial, &bounds, tol) {
+        // Each step as closed as the start, or within the conflict check where the loop's gap
+        // grows as it moves (axes a hair out of parallel, #6211).
+        if close_within(&mut |x| gaps(x, t1), &mut trial, &bounds, tol, loose).is_some() {
             // A step that moved some loop value too far (through a link and a limit, or close to
             // a dead point) is taken again in halves.
             let next = effective(&trial, t1);
@@ -1718,7 +1747,7 @@ fn close_group(
             dt *= 0.5;
         }
     }
-    if largest(&gaps(&x, 1.0)?) > tol {
+    if largest(&gaps(&x, 1.0)?) > tol.max(loose) {
         return None;
     }
     // The values that changed from what is stored.
@@ -2079,7 +2108,7 @@ pub mod cam;
 
 #[path = "joints_edge.rs"]
 mod edge;
-pub use edge::edge_snap;
+pub use edge::{edge_axis, edge_snap};
 
 #[path = "joints_reach.rs"]
 mod reach;

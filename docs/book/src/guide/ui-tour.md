@@ -67,6 +67,10 @@
   keep the nearest quarter-turn heading. The house, the navigation bar's Home button and a middle-button double-click in the view go
   home, framing what is shown now (Navigation › **Middle double-click** can make it Fit, which
   keeps the orientation, or turn it off).
+  Interface › **OK and Cancel in the view's corner** puts a large check and cross at the view's
+  top right while a dialog or a sketch is open, and moves the axis view or cube down below them.
+  With a dialog open they do what its OK and Cancel do (the check is grey whenever OK is); in a
+  sketch without a dialog they are Finish Sketch and Cancel Sketch.
   Right-click for the marking menu: eight commands around the cursor, plus a
   menu for whatever is under it. Near the window's bottom or right edge a menu opens above or
   to the left of the cursor, so it stays in view.
@@ -118,11 +122,12 @@ and command menus remain available.
 ### Colour themes
 
 Interface › **Theme** lists Dark, Light and System (follows the operating system), the built-in
-themes and any themes you have imported. A choice applies at once. The built-in themes are Gruvbox
+themes and any themes you have imported. A choice applies at once. Under the themes, **Viewport** draws the 3D view in the Light or Dark theme's colours whatever the window uses, for example the model on a light view in a dark window (**Follow theme**, the default, keeps the theme's own). The built-in themes are Gruvbox
 (dark and light, each in hard, normal and soft contrast), SolidCraft 95, Platinum 9, Cupertino,
 Green Phosphor, Amber Phosphor, Blueprint, One Dark, Tokyo Night, Solarized Light, Nord, High
 Contrast, Graphite, Nosferatu, Catppuccin Mocha, and Okibi and Akari (dark and light, from the
-[Okibi design system](https://kaievns.github.io/okibi-akiri-design-system-spec/)).
+[Okibi design system](https://kaievns.github.io/okibi-akiri-design-system-spec/)), and Clay and
+Clay Dark (warm ivory paper and warm charcoal, with a terracotta accent and rounded corners).
 
 A theme is a small JSON file that starts from the Dark or Light palette and changes any of its
 colours and corner radii by name:
@@ -166,7 +171,7 @@ styles form controls, and `sketch_mode_radius` styles sketch creation buttons. T
 these settings, with matching shapes across light and dark variants. Dock joins remain
 square, circular controls remain circular, and control sizes and spacing stay the same.
 Platinum 9 and the phosphor themes use square corners, SolidCraft 95 uses subtle 3-point
-corners, Blueprint uses the standard radii, and Cupertino uses softer corners. Other built-in
+corners, Blueprint uses the standard radii, Cupertino uses softer corners, and Clay and Clay Dark use rounded corners. Other built-in
 themes retain the defaults.
 
 Tab accents also have separate fill, small-text ink and tint keys. Sketch uses

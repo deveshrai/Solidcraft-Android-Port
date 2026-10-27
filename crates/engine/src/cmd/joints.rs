@@ -20,7 +20,7 @@ mod inspect;
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("joint.origin", "Joint Origin", joint_origin).at("SOLID", "CREATE").icon("joint_origin").params(
-        "name?, occurrence?: id|name (default: from the pick, or the named face's component), face: [x,y,z] | \"<name>\" (centre of a planar face) | circle: [x,y,z] | \"<name>\" (centre of a round end: a point on its wall or rim, the end's centre, or the round face's name as model.faces lists it) | edge: [x,y,z] (a point on an edge of a planar face: the edge's middle, z out of the face, y into it; on?: [x,y,z] a point on the face (default: the larger planar face beside the edge); corner?: [x,y,z] near one end: the corner there, x and y along its two edges into the face; found again by name, so it follows the face as it changes size) | point: [x,y,z], z?: [x,y,z]; body?: the named face's body; end?: \"<name>\" (a circle's end: the face across its rim there; default the end nearer the pick); x?: [x,y,z] (a direction, world) | \"<face name>\" | {face: [x,y,z]} (the frame's x: a direction, a plane's normal, or the way to another hole's axis; keeps a round origin's turn; a point's x is a direction, laid square to its z, default: chosen from z alone). Faces are kept by name: the origin follows its face, and a circle its end, when the design changes",
+        "name?, occurrence?: id|name (default: from the pick, or the named face's component), face: [x,y,z] | \"<name>\" (centre of a planar face) | circle: [x,y,z] | \"<name>\" (centre of a round end: a point on its wall or rim, the end's centre, or the round face's name as model.faces lists it) | edge: [x,y,z] (a point on an edge of a planar face: the edge's middle, z out of the face, y into it; on?: [x,y,z] a point on the face (default: the larger planar face beside the edge); corner?: [x,y,z] near one end: the corner there, x and y along its two edges into the face; found again by name, so it follows the face as it changes size; z?: [x,y,z] the frame's z instead of the face's normal, along the edge when it runs that way, x chosen from z: an edge or corner picked as it is, kept as a point where it can't be found by name) | point: [x,y,z], z?: [x,y,z]; a circle's z?: [x,y,z] (a round edge's centre with the way out of it: its end by name when that is the frame it shows, else a point there); body?: the named face's body; end?: \"<name>\" (a circle's end: the face across its rim there; default the end nearer the pick); x?: [x,y,z] (a direction, world) | \"<face name>\" | {face: [x,y,z]} (the frame's x: a direction, a plane's normal, or the way to another hole's axis; keeps a round origin's turn; a point's x is a direction, laid square to its z, default: chosen from z alone). Faces are kept by name: the origin follows its face, and a circle its end, when the design changes",
     ),
     CommandSpec::new("joint.create", "Joint", joint).at("SOLID", "ASSEMBLE").icon("joint").key("J").params(
         "type: rigid|revolute|slider|cylindrical|pin_slot|planar|ball, or a relation: parallel|perpendicular|angle|point_on_plane|point_on_line|line_on_plane \
@@ -384,7 +384,20 @@ pub(crate) fn origin_param(s: &Session, v: Option<&Value>, cmd: &str) -> Result<
         }
         "edge" => {
             let (on, corner) = (v.get("on").and_then(vec3).map(local), v.get("corner").and_then(vec3).map(local));
-            joints::edge_snap(&s.doc, &st, component, local(world), on, corner).map_err(|e| bad(cmd, e.to_string()))?
+            let snap = joints::edge_snap(&s.doc, &st, component, local(world), on, corner);
+            match given_z(v, &local_dir, cmd)? {
+                None => snap.map_err(|e| bad(cmd, e.to_string()))?,
+                // An edge or a corner picked as it is (z given): it follows the edge by name with
+                // that z, or, where it can't be (no planar face beside it, no names), stays a
+                // point there as before.
+                Some(z) => {
+                    let at = corner.unwrap_or(local(world));
+                    let point = Snap::Point { point: at, z: Some(z), x: None };
+                    let followed = snap.ok().map(|snap| joints::edge_axis(&s.doc, &st, component, snap, z));
+                    let o = followed.map(|snap| JointOrigin { occurrence, snap }).filter(|o| same_frame(s, o, at, z));
+                    return Ok(o.unwrap_or(JointOrigin { occurrence, snap: point }));
+                }
+            }
         }
         "point" => {
             let z = v.get("z").and_then(vec3).map(local_dir);
@@ -407,6 +420,28 @@ pub(crate) fn origin_param(s: &Session, v: Option<&Value>, cmd: &str) -> Result<
         }
     };
     let o = JointOrigin { occurrence, snap };
+    // A round edge's centre with the z it was picked with: its end, by name, where that is the
+    // frame it shows; else a point there as before.
+    if what == "circle"
+        && let Some(z) = given_z(v, &local_dir, cmd)?
+    {
+        let at = local(world);
+        // The turn the point gave, kept.
+        let point = Snap::Point { point: at, z: Some(z), x: None };
+        let px =
+            joints::resolve_origin(&s.doc, &st, &JointOrigin { occurrence, snap: point.clone() }).ok().map(|m| Vec3::new(m[0][0], m[0][1], m[0][2]));
+        let turn = |snap: Snap| match (snap, px) {
+            (Snap::CircleCenter { pick, face, end, x: None }, Some(x)) => Snap::CircleCenter { pick, face, end, x: Some(XRef::Dir(x)) },
+            (snap, _) => snap,
+        };
+        let by_wall = settle(s, JointOrigin { occurrence, snap: turn(o.snap.clone()) }, v, cmd).ok();
+        let by_centre = || {
+            let snap = joints::round_end_at(&s.doc, &st, component, at)?;
+            settle(s, JointOrigin { occurrence, snap: turn(snap) }, v, cmd).ok()
+        };
+        let found = by_wall.filter(|o| same_frame(s, o, at, z)).or_else(|| by_centre().filter(|o| same_frame(s, o, at, z)));
+        return Ok(found.unwrap_or(JointOrigin { occurrence, snap: point }));
+    }
     match settle(s, o, v, cmd) {
         Ok(o) => Ok(o),
         // A circle given by its centre, where no face lies (#393): that end of the cylinder, by
@@ -420,6 +455,24 @@ pub(crate) fn origin_param(s: &Session, v: Option<&Value>, cmd: &str) -> Result<
         }
         Err(e) => Err(e),
     }
+}
+
+/// An origin's `z` (world), in its component's coordinates.
+fn given_z(v: &Value, local_dir: &dyn Fn(Vec3) -> Vec3, cmd: &str) -> Result<Option<Vec3>> {
+    match v.get("z") {
+        None | Some(Value::Null) => Ok(None),
+        Some(z) => {
+            vec3(z).filter(|z| z.is_finite() && z.len() > 1e-9).map(|z| Some(local_dir(z))).ok_or_else(|| bad(cmd, "`z` is a direction [x, y, z]"))
+        }
+    }
+}
+
+/// Whether origin `o` resolves, now, to the frame at `at` with z along `z` (component coordinates)
+/// that its pick showed.
+fn same_frame(s: &Session, o: &JointOrigin, at: Vec3, z: Vec3) -> bool {
+    let Ok(m) = joints::resolve_origin(&s.doc, &s.model.state(), o) else { return false };
+    let (o, oz) = (Vec3::new(m[3][0], m[3][1], m[3][2]), Vec3::new(m[2][0], m[2][1], m[2][2]));
+    o.dist(at) <= 1e-6 * at.len().max(100.0) && z.normalized().is_some_and(|z| oz.dot(z) > 1.0 - 1e-9)
 }
 
 /// The longest face name a joint origin takes. A face that cuts split and merged keeps the names
@@ -1462,7 +1515,7 @@ mod edge_tests;
 mod exprs_tests;
 #[cfg(test)]
 #[path = "joints_face_tests.rs"]
-mod face_tests;
+pub(crate) mod face_tests;
 #[cfg(test)]
 #[path = "joint_frames_tests.rs"]
 mod frames_tests;

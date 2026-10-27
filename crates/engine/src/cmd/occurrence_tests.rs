@@ -53,6 +53,55 @@ fn component_create_rejects_unknown_keys_and_accepts_documented_keys() {
 }
 
 #[test]
+fn body_and_component_renames_keep_hidden_copies_through_history() {
+    let mut s = Session::default();
+    let (component, first) = created(&mut s, "Knob");
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "Knob"}));
+    let second = run(&mut s, "occurrence.copy", json!({"component": component, "translate": [20, 0, 0]}))["occurrence"].as_u64().unwrap();
+    let name = |s: &Session, path: &[u64]| s.occurrence_placement(path).unwrap().bodies[0].world.clone();
+    let hidden = name(&s, &[second]);
+    run(&mut s, "browser.visibility", json!({"items": [hidden], "visible": false}));
+    for (command, params) in [
+        ("body.rename", json!({"body": "Knob", "name": "Grip"})),
+        ("component.rename", json!({"component": component, "name": "Dial"})),
+        ("edit.undo", json!({})),
+        ("edit.undo", json!({})),
+        ("edit.redo", json!({})),
+        ("edit.redo", json!({})),
+    ] {
+        run(&mut s, command, params);
+        assert!(s.body_visible(&name(&s, &[first])), "{command}: the first copy stays visible");
+        assert!(!s.body_visible(&name(&s, &[second])), "{command}: the hidden copy stays hidden");
+        assert_eq!(s.visibility.hidden_bodies, [name(&s, &[second])], "no stale names after {command}");
+    }
+}
+
+#[test]
+fn renaming_a_parent_preserves_hidden_nested_copies_with_ambiguous_labels() {
+    let mut s = Session::default();
+    let (parent, first_parent) = created(&mut s, "Assembly");
+    let (_, child) = created(&mut s, "Knob");
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "Knob"}));
+    let second_parent = run(&mut s, "occurrence.copy", json!({"component": parent, "translate": [20, 0, 0]}))["occurrence"].as_u64().unwrap();
+    let name = |s: &Session, path: &[u64]| s.occurrence_placement(path).unwrap().bodies[0].world.clone();
+    let hidden = name(&s, &[second_parent, child]);
+    run(&mut s, "browser.visibility", json!({"items": [hidden], "visible": false}));
+    for (command, params) in [
+        ("component.rename", json!({"component": parent, "name": "Assembly/Other"})),
+        ("body.rename", json!({"body": "Knob", "name": "Grip (@occ[custom])"})),
+        ("edit.undo", json!({})),
+        ("edit.undo", json!({})),
+        ("edit.redo", json!({})),
+        ("edit.redo", json!({})),
+    ] {
+        run(&mut s, command, params);
+        assert!(s.body_visible(&name(&s, &[first_parent, child])), "{command}");
+        assert!(!s.body_visible(&name(&s, &[second_parent, child])), "{command}");
+        assert_eq!(s.visibility.hidden_bodies, [name(&s, &[second_parent, child])]);
+    }
+}
+
+#[test]
 fn instance_copy_uses_selected_source_transform() {
     let mut s = Session::default();
     let (component, first) = created(&mut s, "Block");
@@ -595,6 +644,42 @@ fn a_linked_design_brings_its_bodies_in_and_follows_edits_to_the_part_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #5679: a linked part's bodies come from its design file, so a cut or join from the top level
+/// on a sketch on its face is refused with the reason, and the plate stays as the file has it.
+#[test]
+fn a_cut_or_join_from_the_top_level_into_a_linked_part_is_refused() {
+    let dir = std::env::temp_dir().join(format!("solidcraft-linked-cut-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let part = dir.join("plate.solidcraft");
+    saved_box_design(&part, 30.0);
+    let mut s = Session::default();
+    run(&mut s, INSERT_DESIGN, json!({"path": part, "translate": [50, 0, 0]}));
+    let _ = std::fs::remove_dir_all(&dir);
+    run(&mut s, "component.activate", json!({"component": "root"}));
+    run(&mut s, "sketch.create", json!({"plane": {"face": [55, 10, 30]}, "project_edges": false}));
+    let plane = s
+        .doc
+        .features
+        .iter()
+        .rev()
+        .find_map(|f| match &f.kind {
+            solidcraft_doc::FeatureKind::Sketch { plane: solidcraft_doc::PlaneRef::Face { plane, .. }, .. } => Some(*plane),
+            _ => None,
+        })
+        .unwrap();
+    let c = plane.to_local(solidcraft_geom::Vec3::new(55.0, 10.0, 30.0));
+    run(&mut s, "sketch.circle.center", json!({"center": [c.x, c.y], "radius": 2}));
+    run(&mut s, "sketch.finish", json!({}));
+    let features = s.doc.features.len();
+    for (operation, distance) in [("cut", -5), ("join", 5)] {
+        let refused = s.execute("solid.extrude", &json!({"distance": distance, "operation": operation})).unwrap_err().to_string();
+        assert!(refused.contains("`Plate`") && refused.contains("linked to a design file"), "{operation}: {refused}");
+    }
+    assert_eq!(s.doc.features.len(), features);
+    let volume = run(&mut s, "inspect.measure", json!({"bodies": ["Plate"]}))["total"]["volume_mm3"].clone();
+    near(&volume, 6000.0);
+}
+
 /// The compact list counts what a component holds and leaves out identity transforms; the full
 /// list stays as it was.
 #[test]
@@ -687,9 +772,9 @@ fn matrix_move_turns_a_quarter_and_moves() {
 }
 
 /// #3223, #2872: a STEP assembly whose part sits two levels down, each level placed, opened and
-/// stood up. With the imported root active, as Open leaves it, a circle sketched on the part's
-/// top face cuts it through, reads as a Cut dragged in and a Join dragged out, and joins it in
-/// one piece instead of starting a body of the root's own.
+/// stood up. With the imported root active, as Open leaves it, or the top level, a circle sketched
+/// on the part's top face cuts it through, reads as a Cut dragged in and a Join dragged out, and
+/// joins it in one piece instead of starting a body of the active component's own.
 #[test]
 fn a_stood_up_nested_step_part_is_cut_and_joined_from_its_face() {
     let dir = std::env::temp_dir().join(format!("solidcraft-nested-stood-{}", std::process::id()));
@@ -705,40 +790,52 @@ fn a_stood_up_nested_step_part_is_cut_and_joined_from_its_face() {
     let top = solidcraft_doc::apply_point(&src.doc.component_transform(part), solidcraft_geom::Vec3::new(20.0, 12.0, 10.0));
     run(&mut src, "file.export", json!({"path": path, "format": "step"}));
 
-    let mut s = Session::default();
-    run(&mut s, "doc.open", json!({"path": path, "up": "y"}));
-    let _ = std::fs::remove_dir_all(&dir);
-    let at = solidcraft_doc::apply_point(&s.doc.component_transform(s.active_component), top);
-    run(&mut s, "sketch.create", json!({"plane": {"face": [at.x, at.y, at.z]}, "project_edges": false}));
-    let centre = s
-        .doc
-        .features
-        .iter()
-        .rev()
-        .find_map(|f| match &f.kind {
-            solidcraft_doc::FeatureKind::Sketch { plane: solidcraft_doc::PlaneRef::Face { plane, .. }, .. } => Some(plane.to_local(top)),
-            _ => None,
-        })
-        .unwrap();
-    run(&mut s, "sketch.circle.center", json!({"center": [centre.x, centre.y], "radius": 3}));
-    run(&mut s, "sketch.finish", json!({}));
-    assert_eq!(crate::auto_operation(&s, &json!({"distance": -5})), Some("cut"));
-    assert_eq!(crate::auto_operation(&s, &json!({"distance": 5})), Some("join"));
-    let volume = |s: &mut Session| run(s, "inspect.measure", json!({"bodies": ["NestedBlock"]}))["total"]["volume_mm3"].as_f64().unwrap();
-    let block = 40.0 * 24.0 * 10.0;
-    let hole = std::f64::consts::PI * 3.0 * 3.0;
+    // #5679: the same from the top level, where the part is two moved and turned levels down
+    // (#5678 was this cut silently doing nothing; `auto` read it as a new body).
+    for top_level in [false, true] {
+        let mut s = Session::default();
+        run(&mut s, "doc.open", json!({"path": path, "up": "y"}));
+        let at = solidcraft_doc::apply_point(&s.doc.component_transform(s.active_component), top);
+        if top_level {
+            run(&mut s, "component.activate", json!({"component": "root"}));
+        }
+        // The sketch is in the active component's frame: the imported root's, or the world's.
+        let local = if top_level { at } else { top };
+        run(&mut s, "sketch.create", json!({"plane": {"face": [at.x, at.y, at.z]}, "project_edges": false}));
+        let centre = s
+            .doc
+            .features
+            .iter()
+            .rev()
+            .find_map(|f| match &f.kind {
+                solidcraft_doc::FeatureKind::Sketch { plane: solidcraft_doc::PlaneRef::Face { plane, .. }, .. } => Some(plane.to_local(local)),
+                _ => None,
+            })
+            .unwrap();
+        run(&mut s, "sketch.circle.center", json!({"center": [centre.x, centre.y], "radius": 3}));
+        run(&mut s, "sketch.finish", json!({}));
+        assert_eq!(crate::auto_operation(&s, &json!({"distance": -5})), Some("cut"), "top level {top_level}");
+        assert_eq!(crate::auto_operation(&s, &json!({"distance": 5})), Some("join"), "top level {top_level}");
+        let volume = |s: &mut Session| run(s, "inspect.measure", json!({"bodies": ["NestedBlock"]}))["total"]["volume_mm3"].as_f64().unwrap();
+        let block = 40.0 * 24.0 * 10.0;
+        let hole = std::f64::consts::PI * 3.0 * 3.0;
 
-    // The circle is measured as faceted: within a thousandth of what it removes or adds.
-    for operation in ["cut", "auto"] {
-        run(&mut s, "solid.extrude", json!({"distance": -20, "operation": operation}));
-        assert!((block - volume(&mut s) - hole * 10.0).abs() < 1e-3 * hole * 10.0, "{operation}: {}", volume(&mut s));
-        run(&mut s, "edit.undo", json!({}));
+        // The circle is measured as faceted: within a thousandth of what it removes or adds.
+        for operation in ["cut", "auto"] {
+            run(&mut s, "solid.extrude", json!({"distance": -20, "operation": operation}));
+            assert!((block - volume(&mut s) - hole * 10.0).abs() < 1e-3 * hole * 10.0, "{top_level} {operation}: {}", volume(&mut s));
+            run(&mut s, "edit.undo", json!({}));
+        }
+        for operation in ["join", "auto"] {
+            run(&mut s, "solid.extrude", json!({"distance": 5, "operation": operation}));
+            let st = s.model.state();
+            assert_eq!(st.bodies.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["NestedBlock"], "{top_level} {operation}");
+            assert_eq!(st.body("NestedBlock").map(|b| b.body.shell_count()), Some(1), "{top_level} {operation}");
+            assert!((volume(&mut s) - block - hole * 5.0).abs() < 1e-3 * hole * 5.0, "{top_level} {operation}: {}", volume(&mut s));
+            run(&mut s, "edit.undo", json!({}));
+        }
     }
-    run(&mut s, "solid.extrude", json!({"distance": 5, "operation": "join"}));
-    let st = s.model.state();
-    assert_eq!(st.bodies.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["NestedBlock"]);
-    assert_eq!(st.body("NestedBlock").map(|b| b.body.shell_count()), Some(1));
-    assert!((volume(&mut s) - block - hole * 5.0).abs() < 1e-3 * hole * 5.0, "join: {}", volume(&mut s));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A rotation that is one only up to rounding is orthonormalised; a scale, a shear or a mirror

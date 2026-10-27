@@ -67,6 +67,13 @@ pub const ORIGIN: Accept = 4096;
 pub const SKETCH_LINES: Accept = 8192;
 /// Sketch points with an explicit source sketch; only for commands that consume external references.
 pub const EXTERNAL_POINTS: Accept = 16384;
+/// Named construction points.
+pub const CONSTRUCTION_POINTS: Accept = 32768;
+/// What a 3D axis input takes (Revolve, Circular Pattern, Plane at Angle, Move's Rotate): an
+/// origin or construction axis, a straight sketch line, and an edge or face of the model that
+/// has an axis (a straight or circular edge, a cylinder, cone or torus face; the dialog takes
+/// only those, `Dialog::candidate_on`).
+pub const AXIS_PICKS: Accept = AXES | EDGES | FACES;
 
 /// One selection input of a command dialog ("Profiles", "Edges", "Plane", ...).
 #[derive(Clone, Debug, PartialEq)]
@@ -105,6 +112,7 @@ impl SelInput {
             Hit::Face { body, .. } if a & BODIES != 0 => Some(Sel::Body { name: body.clone() }),
             Hit::Plane { name, .. } if a & PLANES != 0 => Some(Sel::Plane { name: name.clone() }),
             Hit::Axis { name } if a & AXES != 0 => Some(Sel::Axis { name: name.clone() }),
+            Hit::ConstructionPoint { name } if a & CONSTRUCTION_POINTS != 0 => Some(Sel::ConstructionPoint { name: name.clone() }),
             Hit::SketchCurve { sketch, id, straight: true, .. } if a & AXES != 0 => Some(curve_pick(id, *sketch, active)),
             Hit::SketchCurve { sketch, id, .. } if a & SKETCH_LINES != 0 => Some(Sel::ExternalSketchCurve { sketch: *sketch, id: id.clone() }),
             Hit::SketchCurve { sketch, id, .. } if a & CURVES != 0 => Some(curve_pick(id, *sketch, active)),

@@ -930,12 +930,12 @@ fn edit_atomic(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn store(s: &mut Session, comp: u64, sp: &Spec) {
-    use solidcraft_doc::metadata::{DESCRIPTION, PART_NUMBER};
+    use solidcraft_doc::metadata::{DESCRIPTION, Owner, PART_NUMBER};
     let Some(c) = s.doc.components.iter().find(|c| c.id == comp) else { return };
     let mut m = c.metadata.clone();
-    let _ = m.set(KEY, sp.to_json());
-    let _ = m.set(PART_NUMBER, Value::String(sp.name()));
-    let _ = m.set(DESCRIPTION, Value::String(format!("{}, module {} mm, {} teeth", sp.ty.label(), trim(sp.m), sp.teeth)));
+    let _ = m.set(Owner::Component, KEY, sp.to_json());
+    let _ = m.set(Owner::Component, PART_NUMBER, Value::String(sp.name()));
+    let _ = m.set(Owner::Component, DESCRIPTION, Value::String(format!("{}, module {} mm, {} teeth", sp.ty.label(), trim(sp.m), sp.teeth)));
     if let Some(c) = s.doc_mut().components.iter_mut().find(|c| c.id == comp) {
         c.metadata = m;
     }

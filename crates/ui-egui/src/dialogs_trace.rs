@@ -86,10 +86,13 @@ pub fn params(s: &Session, f: &TraceForm, inputs: &[SelInput]) -> Result<Value, 
     {
         let mut reference = snap.param;
         reference["occurrence"] = json!(path.last().copied().unwrap_or(0));
-        for key in ["point", "face", "circle", "edge"] {
+        for key in ["point", "face", "circle", "edge", "corner"] {
             if let Some(at) = reference.get(key).and_then(solidcraft_engine::params::vec3) {
                 reference[key] = pt(apply_point(&placed, apply_point(&inverse, at)));
             }
+        }
+        if let Some(z) = reference.get("z").and_then(solidcraft_engine::params::vec3) {
+            reference["z"] = pt(solidcraft_engine::doc::apply_vector(&placed, solidcraft_engine::doc::apply_vector(&inverse, z)));
         }
         p["point_ref"] = reference;
     }

@@ -144,14 +144,18 @@ conversation starts with), its own permission setting, and **Remove** for the on
 SolidCraft looks for agents that speak the [Agent Client Protocol](https://agentclientprotocol.com)
 on your `PATH` and in the usual install folders a desktop app's `PATH` often misses (npm's
 global folder, nvm, Volta, bun, `~/.local/bin`, `~/.grok/bin`, Homebrew, `%APPDATA%\npm`). For each one it
-shows its **version** (from `--version`, given three seconds) and whether it looks **signed in**.
+shows its **version** (from `--version`, given three seconds) and whether a **login was found**.
 Version checks and agent sessions also use those folders on their `PATH`, so adapters can find
 runtimes such as Node when SolidCraft is opened from Finder or the Dock. Existing absolute
 `PATH` entries keep their order; no shell startup files are run.
 SolidCraft only checks whether the agent's own login file (`~/.claude/.credentials.json`,
 `~/.codex/auth.json`, `~/.gemini/oauth_creds.json`, …) or one of its key variables exists. It never
 reads the file and never starts the agent to find out. On macOS Claude Code keeps its login in
-the keychain, so SolidCraft doesn't guess there.
+the keychain, so SolidCraft doesn't guess there. A found login file may be expired: **Test** or a
+chat connection verifies it. A successful ACP connection shows **signed in**; an authentication
+rejection shows **not signed in**. These results apply to that agent until a newer connection
+result or **Refresh**, which checks the installed agents again. An unrelated connection error
+doesn't change the last known login state.
 
 | Agent | What to install |
 |---|---|
@@ -223,6 +227,25 @@ Grok Build also supports `XAI_API_KEY` for users who choose API authentication.
   hardware, or a long message with many tool results) may need more; raise it here or in the
   endpoint's entry under **Agents**, where a change applies from the next request. A request that
   runs out of time ends the message with the limit it hit and where to raise it.
+
+For Ollama, choosing a model checks its reported capabilities in the background. If its
+capabilities list lacks `tools`, a warning below the model picker explains that the model can
+only chat and suggests choosing one with tool support. Results are cached in memory per base URL and
+model, with a limit of 128 entries. SolidCraft recognises Ollama through `/api/version` at the
+endpoint's origin or the Ollama preset. Failed checks and older servers without a capabilities
+field show no warning. The check never blocks sending a message.
+
+### Local models
+
+Choose a model that supports native tool calling to read or change the design. With Ollama,
+look for `tools` in the model's capabilities; a model that only supports chat cannot operate
+SolidCraft. Other OpenAI-compatible endpoints also need a model with native tool support.
+
+If tools were available but a completed turn made no tool calls or changes, the panel shows a
+short notice when the reply was empty, or when an explicit edit request received only text.
+Ordinary answers to questions do not show it. Edit requests are recognised conservatively from
+English opening words such as “make”, “rename”, or “can you move”; other phrasing may stay quiet.
+Cancelled and failed turns keep their existing messages. Text describing a call is never run.
 
 ### An agent inside WSL (Windows)
 

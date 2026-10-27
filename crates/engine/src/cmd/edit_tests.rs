@@ -822,6 +822,53 @@ fn suppressing_a_feature_keeps_later_counted_body_names() {
     assert!(works(&s));
 }
 
+/// Counted body names are pinned when the body is made, as if the user had renamed it: deleting,
+/// reordering or rolling back another feature leaves the other bodies' names alone, and a number
+/// a deleted feature held is not handed to the next body.
+#[test]
+fn counted_body_names_stay_when_the_timeline_changes() {
+    let mut s = Session::default();
+    for (name, x) in [("A", 0), ("B", 20), ("C", 40)] {
+        run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [x, 0, 0], "name": name}));
+    }
+    run(&mut s, "solid.move", json!({"bodies": ["Body2"], "translate": [0, 30, 0], "name": "Move"}));
+    let bodies = |s: &Session| -> Vec<(String, String)> {
+        let st = s.model.state();
+        st.bodies.iter().map(|b| (b.name.clone(), s.doc.feature(b.feature).map(|f| f.name.clone()).unwrap_or_default())).collect()
+    };
+    let named = |pairs: &[(&str, &str)]| pairs.iter().map(|(b, f)| (b.to_string(), f.to_string())).collect::<Vec<_>>();
+    let works = |s: &Session| s.doc.features.iter().all(|f| s.model.result(f.id).is_some_and(|r| r.error.is_none()));
+    // The names are stored on the features as soon as the bodies exist.
+    assert_eq!(s.doc.find_feature("B").map(|f| f.body_names.clone()), Some(vec!["Body2".to_string()]));
+    assert!(["Body1", "Body2", "Body3"].iter().all(|n| s.doc.reserved_body_names.contains(*n)));
+
+    // Reordering A behind B: every body keeps its number, wherever it comes in the list.
+    run(&mut s, "timeline.reorder", json!({"feature": "A", "position": 2, "active": true}));
+    let mut reordered = bodies(&s);
+    reordered.sort();
+    assert_eq!(reordered, named(&[("Body1", "A"), ("Body2", "B"), ("Body3", "C")]));
+    assert!(works(&s));
+    run(&mut s, "edit.undo", json!({}));
+
+    // Rolled back to before B and forward again.
+    run(&mut s, "timeline.roll_to", json!({"position": 1}));
+    run(&mut s, "timeline.roll_to", json!({"position": "end"}));
+    assert_eq!(bodies(&s), named(&[("Body1", "A"), ("Body2", "B"), ("Body3", "C")]));
+
+    // Deleting A: B and C keep their names, so the Move still finds Body2.
+    run(&mut s, "timeline.delete", json!({"feature": "A"}));
+    assert_eq!(bodies(&s), named(&[("Body2", "B"), ("Body3", "C")]));
+    assert!(works(&s), "the Move still finds Body2");
+
+    // The number A held is not handed out again.
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [60, 0, 0], "name": "D"}));
+    assert_eq!(bodies(&s), named(&[("Body2", "B"), ("Body3", "C"), ("Body4", "D")]));
+    // Undo takes the box away, and the number back with it.
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [60, 0, 0], "name": "E"}));
+    assert_eq!(bodies(&s), named(&[("Body2", "B"), ("Body3", "C"), ("Body4", "E")]));
+}
+
 /// The value at a dotted path of a definition.
 fn dotted<'a>(def: &'a Value, path: &str) -> &'a Value {
     path.split('.').fold(def, |v, k| &v[k])
@@ -1008,4 +1055,28 @@ fn renaming_a_plane_keeps_its_projections_canvases_and_hidden_state() {
     run(&mut s, "edit.redo", json!({}));
     assert_eq!(s.visibility.hidden_origin, ["Rail"]);
     assert_eq!(plane_link(&s), "Ledge");
+}
+
+/// #6186: a reorder evaluates the design once. The model the move was checked on is the one the
+/// session keeps, so setting the reordered design finds every result ready: nothing is
+/// recomputed or taken from the cache again. The same for `timeline.reorder_many`, whose check
+/// starts from the session's results rather than an empty model.
+#[test]
+fn a_reorder_keeps_the_model_it_was_checked_on() {
+    let mut s = Session::default();
+    for i in 0..4 {
+        run(&mut s, "solid.box", json!({"length": 5, "width": 5, "height": 5 + i, "corner": [i * 10, 0, 0], "operation": "new"}));
+    }
+    let bodies = |s: &Session| s.model.state().bodies.len();
+    run(&mut s, "timeline.reorder", json!({"feature": "Box2", "position": 0}));
+    assert_eq!((s.model.last_recomputed, s.model.last_restored), (0, 0), "the checked model was kept");
+    assert_eq!(s.doc.features.first().map(|f| f.name.as_str()), Some("Box2"));
+    assert_eq!(bodies(&s), 4);
+    run(&mut s, "timeline.reorder_many", json!({"features": ["Box4"], "position": 2}));
+    assert_eq!((s.model.last_recomputed, s.model.last_restored), (0, 0), "the checked model was kept");
+    assert_eq!(s.doc.features.get(2).map(|f| f.name.as_str()), Some("Box4"));
+    // The kept model is the design's: evaluating it from scratch gives the same bodies.
+    let mut fresh = solidcraft_doc::Model::new();
+    fresh.evaluate(&s.doc);
+    assert_eq!(fresh.state().bodies.len(), bodies(&s));
 }

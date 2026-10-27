@@ -1249,6 +1249,58 @@ fn thread_size_suggestion_can_be_cleared_and_edited_in_the_dialog() {
 }
 
 #[test]
+fn thread_handedness_choices_create_edit_and_restore_the_saved_direction() {
+    use solidcraft_engine::doc::{FeatureKind, ThreadHandedness};
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("solid.cylinder", json!({"radius":3,"height":6})).unwrap();
+    h.app.session.selection = vec![thread_face(&h.app, "Body1")];
+    h.step(&json!({"start":"solid.thread"})).unwrap();
+    h.frames(2);
+    assert!(matches!(&h.app.dialog.as_ref().unwrap().kind, crate::dialogs::Kind::Thread { handedness: ThreadHandedness::Right, .. }));
+    h.step(&json!({"click":{"handle":"dialog:thread.direction"}})).unwrap();
+    h.step(&json!({"click":{"handle":"dialog:thread.direction:thread.left_hand"}})).unwrap();
+    let command = crate::dialogs::apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
+    assert_eq!(command[0].1["handedness"], "left");
+    h.step(&json!({"widget":"OK"})).unwrap();
+    let id = h.app.session.doc.features.last().unwrap().id;
+    h.call("ui.editFeature", json!({"feature":id}));
+    h.frames(2);
+    assert!(matches!(&h.app.dialog.as_ref().unwrap().kind, crate::dialogs::Kind::Thread { handedness: ThreadHandedness::Left, .. }));
+    h.step(&json!({"click":{"handle":"dialog:thread.direction"}})).unwrap();
+    h.step(&json!({"click":{"handle":"dialog:thread.direction:thread.right_hand"}})).unwrap();
+    h.step(&json!({"widget":"OK"})).unwrap();
+    assert!(matches!(&h.app.session.doc.feature(id).unwrap().kind, FeatureKind::Thread { handedness: ThreadHandedness::Right, .. }));
+    assert_eq!(h.app.session.model.state().threads[0].handedness, ThreadHandedness::Right);
+}
+
+#[test]
+fn thread_handedness_tapped_hole_edit_retains_and_changes_direction() {
+    use solidcraft_engine::doc::{FeatureKind, ThreadHandedness};
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("solid.box", json!({"length":20,"width":20,"height":10})).unwrap();
+    let id =
+        h.app.run("solid.hole", json!({"position":[10,10,10],"thread":"M6","depth":6,"thread_depth":"3 mm","handedness":"left"})).unwrap()["feature"]
+            .as_u64()
+            .unwrap();
+    h.call("ui.editFeature", json!({"feature":id}));
+    h.frames(2);
+    assert!(
+        matches!(&h.app.dialog.as_ref().unwrap().kind, crate::dialogs::Kind::Hole { opts, .. } if opts.handedness == ThreadHandedness::Left && !opts.thread_full_depth && opts.thread_depth == "3 mm")
+    );
+    h.step(&json!({"click":{"handle":"dialog:thread.direction"}})).unwrap();
+    h.step(&json!({"click":{"handle":"dialog:thread.direction:thread.right_hand"}})).unwrap();
+    let command = crate::dialogs::apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
+    assert_eq!(command[0].0, "timeline.redefine");
+    assert_eq!(command[0].1["command"], "solid.hole");
+    assert_eq!(command[0].1["params"]["thread_depth"], "3 mm", "editing direction must retain the independent thread depth");
+    h.step(&json!({"widget":"OK"})).unwrap();
+    assert!(matches!(&h.app.session.doc.feature(id).unwrap().kind, FeatureKind::Hole { handedness: ThreadHandedness::Right, .. }));
+    let state = h.app.session.model.state();
+    assert_eq!(state.threads[0].handedness, ThreadHandedness::Right);
+    assert!((state.threads[0].end - state.threads[0].start - 3.0).abs() < 1e-8);
+}
+
+#[test]
 fn modeled_thread_survives_timeline_double_click_and_ok() {
     for (analytic_pick, change_length) in [(false, false), (false, true), (true, false), (true, true)] {
         let mut h = crate::scenario::Harness::new();
@@ -1743,6 +1795,68 @@ fn surface_sweep_dialog_takes_curves_and_a_path() {
     let back = crate::dialogs::for_feature(&app, fid, None).unwrap();
     assert_eq!(back.inputs[0].items, vec![Sel::SketchCurve { id: "l".into(), sketch: Some(1) }]);
     assert_eq!(back.inputs[1].items, vec![Sel::SketchCurve { id: "up".into(), sketch: Some(2) }]);
+}
+
+#[test]
+fn profile_picks_keep_multiple_sketches_only_for_lofts() {
+    let mut app = app_with(json!([
+        {"command":"sketch.create","params":{"plane":"XY"}},
+        {"command":"sketch.circle.center","params":{"center":[0,0],"radius":10}},
+        {"command":"sketch.finish","params":{}},
+        {"command":"sketch.create","params":{"plane":{"origin":[0,0,25],"x_dir":[1,0,0],"y_dir":[0,1,0]}}},
+        {"command":"sketch.circle.center","params":{"center":[0,0],"radius":10}},
+        {"command":"sketch.finish","params":{}}
+    ]));
+    let first = Sel::Profile { sketch: app.session.doc.features[0].id, index: 0 };
+    let second = Sel::Profile { sketch: app.session.doc.features[1].id, index: 0 };
+    for command in ["solid.loft", "surface.loft", "solid.extrude", "surface.extrude", "solid.revolve", "surface.revolve"] {
+        let mut d = start(&mut app, vec![], command);
+        d.pick(&app.session, first.clone());
+        d.pick(&app.session, second.clone());
+        if command.ends_with("loft") {
+            assert_eq!(d.inputs[0].items, vec![first.clone(), second.clone()], "{command}");
+            d.pick(&app.session, first.clone());
+            assert_eq!(d.inputs[0].items, vec![second.clone()], "a second click removes only the picked section");
+            d.pick(&app.session, first.clone());
+            assert_eq!(d.inputs[0].items, vec![second.clone(), first.clone()], "sections retain their new pick order");
+        } else {
+            assert_eq!(d.inputs[0].items, vec![second.clone()], "{command} still takes profiles from one sketch");
+        }
+    }
+}
+
+#[test]
+fn surface_loft_keeps_sections_picked_in_different_sketches() {
+    let mut h = crate::scenario::Harness::new();
+    let mut sketches = Vec::new();
+    for z in [0, 25] {
+        let sk = h.app.run("sketch.create", json!({"plane":{"origin":[0,0,z],"x_dir":[1,0,0],"y_dir":[0,1,0]}})).unwrap()["sketch"].as_u64().unwrap();
+        sketches.push(sk);
+        h.app.run("sketch.circle.center", json!({"center":[0,0],"radius":10})).unwrap();
+        h.app.run("sketch.finish", json!({})).unwrap();
+    }
+    h.app.set_origin_shown(false);
+    h.call("ui.camera", json!({"target":[0,0,12.5],"yaw":-0.6,"pitch":0.5,"distance":100}));
+    h.step(&json!({"start":"surface.loft"})).unwrap();
+    h.step(&json!({"click":{"world":[0,0,0]}})).unwrap();
+    assert_eq!(h.app.dialog.as_ref().unwrap().inputs[0].items, vec![Sel::Profile { sketch: sketches[0], index: 0 }]);
+    h.step(&json!({"click":{"world":[0,0,25]}})).unwrap();
+    let d = h.app.dialog.as_ref().unwrap();
+    let picks = vec![Sel::Profile { sketch: sketches[0], index: 0 }, Sel::Profile { sketch: sketches[1], index: 0 }];
+    assert_eq!(d.inputs[0].items, picks, "the second sketch must not replace the first loft section (#6400)");
+    let commands = apply_commands(&h.app, d).unwrap();
+    assert_eq!(commands[0].0, "surface.loft");
+    assert_eq!(commands[0].1["sections"], json!([{"sketch":sketches[0],"profiles":[0]}, {"sketch":sketches[1],"profiles":[0]}]));
+    h.step(&json!({"key":"Enter"})).unwrap();
+    assert!(h.app.dialog.is_none(), "{:?}", h.app.dialog);
+    let state = h.app.session.model.state();
+    let body = state.bodies.last().unwrap();
+    assert!(body.body.is_surface());
+    let area = body.mesh().measure().area;
+    assert!((area - 2.0 * std::f64::consts::PI * 10.0 * 25.0).abs() < 1.0, "{area}");
+    let feature = h.app.session.doc.features.last().unwrap().id;
+    let reopened = crate::dialogs::for_feature(&h.app, feature, None).unwrap();
+    assert_eq!(reopened.inputs[0].items, picks, "Edit Feature keeps both sections in pick order");
 }
 
 #[test]
@@ -2463,4 +2577,98 @@ fn face_then_revolve_turns_the_face() {
     let v = solidcraft_engine::doc::kernel::measure(&made.body).unwrap().volume;
     let want = std::f64::consts::PI * 40.0 * 40.0 * 20.0;
     assert!((v - want).abs() < want * 1e-3, "{v} vs {want}");
+}
+
+/// #4830: the Loft window takes a sketch point as an apex: a 20 × 20 square lofted to a point
+/// 30 above its middle is a pyramid of 20² · 30 / 3 = 4000 mm³.
+#[test]
+fn a_loft_from_a_profile_to_a_sketch_point_is_a_pyramid() {
+    let mut app = app_with(json!([
+        {"command": "sketch.create", "params": {"plane": "XY", "name": "Base"}},
+        {"command": "sketch.rectangle.two_point", "params": {"p0": [-10, -10], "p1": [10, 10]}},
+        {"command": "sketch.finish", "params": {}},
+        {"command": "sketch.create", "params": {"plane": {"origin": [0, 0, 30], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}, "name": "Tip"}},
+        {"command": "sketch.point", "params": {"point": [0, 0], "id": "apex"}},
+        {"command": "sketch.finish", "params": {}},
+    ]));
+    let base = app.session.doc.find_feature("Base").unwrap().id;
+    let tip = app.session.doc.find_feature("Tip").unwrap().id;
+    let mut d = start(&mut app, vec![], "solid.loft");
+    d.inputs[0].items = vec![Sel::Profile { sketch: base, index: 0 }];
+    // A finished sketch's point, as a click on it gives.
+    d.inputs[0].toggle(vec![Sel::SketchPoint { id: format!("{tip}:apex") }]);
+    assert_eq!(d.inputs[0].items.len(), 2, "{:?}", d.inputs[0].items);
+    let cmds = apply_commands(&app, &d).unwrap();
+    assert_eq!(cmds[0].1["sections"][1], json!({"sketch": tip, "point": "apex"}), "{:?}", cmds[0].1);
+    for (cmd, p) in cmds {
+        app.run(&cmd, p).unwrap();
+    }
+    let st = app.session.world_state();
+    let v = solidcraft_engine::doc::kernel::measure(&st.bodies[0].body).unwrap().volume;
+    assert!((v - 4000.0).abs() < 4.0, "{v}");
+}
+
+/// #2820: the Pipe window has an Operation row, so a pipe can cut; editing a cutting pipe keeps
+/// its operation.
+#[test]
+fn a_pipe_cuts_from_its_window_and_keeps_the_cut_when_edited() {
+    let mut app = app_with(json!([
+        {"command": "solid.box", "params": {"corner": [-30, -30, -5], "length": 60, "width": 60, "height": 10}},
+        {"command": "sketch.create", "params": {"plane": "XY", "name": "Path"}},
+        {"command": "sketch.circle.center", "params": {"center": [0, 0], "radius": 20, "id": "c"}},
+        {"command": "sketch.finish", "params": {}},
+    ]));
+    let mut d = start(&mut app, vec![Sel::SketchCurve { id: "c".into(), sketch: None }], "solid.pipe");
+    let Kind::Pipe { operation, .. } = &mut d.kind else { panic!("{:?}", d.kind) };
+    assert_eq!(*operation, 0, "a pipe makes a new body unless told otherwise");
+    *operation = 2;
+    let cmds = apply_commands(&app, &d).unwrap();
+    assert_eq!(cmds[0].1["operation"], "cut", "{:?}", cmds[0].1);
+    let volume = |app: &SolveApp| {
+        let st = app.session.world_state();
+        assert_eq!(st.bodies.len(), 1, "one body: {:?}", st.bodies.iter().map(|b| &b.name).collect::<Vec<_>>());
+        solidcraft_engine::doc::kernel::measure(&st.bodies[0].body).unwrap().volume
+    };
+    let before = volume(&app);
+    for (cmd, p) in cmds {
+        app.run(&cmd, p).unwrap();
+    }
+    assert!(volume(&app) < before - 1.0, "the pipe cut a groove into the box");
+    let pipe = app.session.doc.features.last().unwrap().id;
+    let d = crate::dialogs::for_feature(&app, pipe, None).unwrap();
+    assert!(matches!(d.kind, Kind::Pipe { operation: 2, .. }), "{:?}", d.kind);
+    let (edit, p) = apply_commands(&app, &d).unwrap().remove(0);
+    assert_eq!(edit, "timeline.redefine");
+    assert_eq!(p["params"]["operation"], "cut", "{p}");
+}
+
+#[test]
+fn construction_points_fill_three_point_plane_dialog() {
+    let mut h = crate::scenario::Harness::new();
+    let points = [[20, 15, 10], [40, 15, 10], [20, 35, 10]];
+    for (i, point) in points.iter().enumerate() {
+        h.app.run("construct.point.vertex", json!({"point":{"point":point},"name":format!("Point{}", i+1)})).unwrap();
+    }
+    h.app.start("construct.plane.three_points");
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 800.0));
+    let proj = crate::viewport::projection(&h.app, rect);
+    for point in points {
+        let pos = proj.to_screen(Vec3::new(point[0] as f64, point[1] as f64, point[2] as f64)).unwrap();
+        let hits = crate::viewport::pick(&h.app, &proj, pos);
+        let mut d = h.app.dialog.take().unwrap();
+        let sel = hits.iter().find_map(|hit| d.candidate(&h.app.session, hit)).expect("construction point accepted");
+        d.pick(&h.app.session, sel);
+        h.app.dialog = Some(d);
+    }
+    let commands = apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
+    assert_eq!(commands[0].1["a"], json!({"construct_point":"Point1"}));
+    assert_eq!(commands[0].1["b"], json!({"construct_point":"Point2"}));
+    assert_eq!(commands[0].1["c"], json!({"construct_point":"Point3"}));
+    for (cmd, params) in commands {
+        h.app.run(&cmd, params).unwrap();
+    }
+    let planes = solidcraft_engine::view::construction_planes(&h.app.session);
+    assert_eq!(planes.len(), 1);
+    assert!((planes[0].2.origin.z - 10.0).abs() < 1e-9);
+    assert!(planes[0].2.normal().dot(Vec3::Z).abs() > 1.0 - 1e-9);
 }

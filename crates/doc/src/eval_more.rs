@@ -933,13 +933,61 @@ pub(super) fn sheet_cut(
     constructor: Option<&ExtrudeConstructor>,
     warning: &mut Option<String>,
 ) -> Result<Vec<String>> {
-    let FeatureKind::Extrude { sketch, profiles, operation, extent, .. } = &f.kind else { return Ok(Vec::new()) };
-    if extent.taper.is_some() || !any_eligible_sheet(f, st, targets) {
+    if !any_eligible_sheet(f, st, targets) {
         return Ok(Vec::new());
     }
-    let Some(ss) = st.sketch(sketch.0).cloned() else { return Ok(Vec::new()) };
-    let regions = solidcraft_sketch::merge_regions(&select_profiles(&ss, profiles)?);
-    // The outlines of the sketch's text: the sheet remembers where its letters went.
+    let Some(cut) = extrude_cut(st, f)? else { return Ok(Vec::new()) };
+    sheet_prism_cut(f, st, &cut.plane, &cut.regions, cut.operation, tools, targets, constructor, cut.bound, &cut.text, warning)
+}
+
+/// A copy of the extrude cut `src` that the pattern `f` makes, moved by `m`: machined into the
+/// sheets as the cut itself is, in the moved sketch plane (#6841). `tools` are the copy's. Only
+/// for a cut moved without turning over: a mirrored copy, and any other feature, comes back
+/// unhandled (no sheets) for the caller to apply as before.
+pub(super) fn sheet_cut_copy(
+    f: &Feature,
+    src: &Feature,
+    m: &Mat,
+    st: &mut ModelState,
+    tools: &[Body],
+    targets: &[String],
+    warning: &mut Option<String>,
+) -> Result<Vec<String>> {
+    if !any_eligible_sheet(f, st, targets) {
+        return Ok(Vec::new());
+    }
+    let Some(cut) = extrude_cut(st, src)? else { return Ok(Vec::new()) };
+    if cut.operation != Operation::Cut {
+        return Ok(Vec::new());
+    }
+    let (x, y) = (crate::apply_vector(m, cut.plane.x), crate::apply_vector(m, cut.plane.y));
+    if x.cross(y).dot(crate::apply_vector(m, cut.plane.normal())) <= 0.0 {
+        return Ok(Vec::new());
+    }
+    let Some(plane) = Plane::new(apply_point(m, cut.plane.origin), x, y) else { return Ok(Vec::new()) };
+    sheet_prism_cut(f, st, &plane, &cut.regions, cut.operation, tools, targets, None, cut.bound, &cut.text, warning)
+}
+
+/// What an untapered extrude cut (or intersect) machines into a sheet.
+struct ExtrudeCut {
+    plane: Plane,
+    regions: Vec<Region2>,
+    /// The outlines of the sketch's text: the sheet remembers where its letters went.
+    text: Vec<Seg2>,
+    operation: Operation,
+    /// Up to a face: the tools' own footprints bound it.
+    bound: bool,
+}
+
+/// The sketch plane, regions and text of `f`'s extrude; None for any other feature, a tapered
+/// extrude or a missing sketch.
+fn extrude_cut(st: &ModelState, f: &Feature) -> Result<Option<ExtrudeCut>> {
+    let FeatureKind::Extrude { sketch, profiles, operation, extent, .. } = &f.kind else { return Ok(None) };
+    if extent.taper.is_some() {
+        return Ok(None);
+    }
+    let Some(ss) = st.sketch(sketch.0) else { return Ok(None) };
+    let regions = solidcraft_sketch::merge_regions(&select_profiles(ss, profiles)?);
     let text: Vec<Seg2> = ss
         .sketch
         .links
@@ -948,7 +996,7 @@ pub(super) fn sheet_cut(
         .flat_map(|l| ss.sketch.link_curves(&l.id))
         .flat_map(|ci| ss.sketch.exact_segs(ci).unwrap_or_else(|| ss.sketch.segs(ci)))
         .collect();
-    sheet_prism_cut(f, st, &ss.plane, &regions, *operation, tools, targets, constructor, extent.to.is_some(), &text, warning)
+    Ok(Some(ExtrudeCut { plane: ss.plane, regions, text, operation: *operation, bound: extent.to.is_some() }))
 }
 
 /// Whether a cut of `f` with these targets (else its participants, else its component's
@@ -2005,19 +2053,22 @@ pub(super) fn plastic_eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &F
                 apply_traced(doc, st, f, tool, Operation::Join, std::slice::from_ref(&target))
             }
         }
-        FeatureKind::SnapFit { position, direction, hook, length, thickness, width, catch_depth, catch_length, body } => {
+        FeatureKind::SnapFit { position, direction, hook, length, thickness, width, catch_depth, catch_length, base_height, new_body, body } => {
             let target = body_under(st, body, position.0)?;
             let size = |what: &str, e: &str| plastic_size("snap fit", what, len(e)?);
             let (l, t, w) = (size("length", length)?, size("thickness", thickness)?, size("width", width)?);
             let (cd, cl) = (size("catch_depth", catch_depth)?, size("catch_length", catch_length)?);
+            let bh = base_height.as_deref().map(|e| size("base_height", e)).transpose()?.unwrap_or(0.0);
             if !(cl < l) {
                 return Err(DocError::Invalid("the snap fit's catch must be shorter than its arm".into()));
             }
             let (x, y, z) = local_frame(direction.0, Some(hook.0))?;
             let delta = (l * 0.05).clamp(1e-3, 0.5);
             // Side profile (x = toward the catch, y = up the arm), extruded across the width.
-            let pts =
-                [Vec2::new(-t, -delta), Vec2::new(0.0, -delta), Vec2::new(0.0, l - cl), Vec2::new(cd, l - cl), Vec2::new(0.0, l), Vec2::new(-t, l)];
+            // The base reaches `base_height` below the face; a joined arm bites `delta` into
+            // the wall, a separate body sits flush on it.
+            let y0 = if *new_body { -bh } else { -delta - bh };
+            let pts = [Vec2::new(-t, y0), Vec2::new(0.0, y0), Vec2::new(0.0, l - cl), Vec2::new(cd, l - cl), Vec2::new(0.0, l), Vec2::new(-t, l)];
             let o = position.0 - y * (w / 2.0);
             let pl = Plane::new(o, x, z).ok_or_else(|| DocError::Invalid("snap fit frame".into()))?;
             let mut lp = Loop2::polygon(&pts);
@@ -2028,7 +2079,8 @@ pub(super) fn plastic_eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &F
             let (lo, hi) = if sgn > 0.0 { (0.0, w) } else { (-w, 0.0) };
             let tool = kernel::extrude(&pl, &[Region2 { outer: lp, holes: Vec::new() }], lo, hi)?;
             let tool = tool.into_iter().map(|b| crate::lineage::part_tool(b, "arm")).collect();
-            apply_traced(doc, st, f, tool, Operation::Join, std::slice::from_ref(&target))
+            let op = if *new_body { Operation::NewBody } else { Operation::Join };
+            apply_traced(doc, st, f, tool, op, std::slice::from_ref(&target))
         }
         FeatureKind::Rest { position, direction, along, width, length, height, draft, thickness, body } => {
             let target = body_under(st, body, position.0)?;

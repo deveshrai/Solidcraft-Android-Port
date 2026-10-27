@@ -71,6 +71,11 @@ pub struct ExtrudeParams {
     #[serde(default, deserialize_with = "present")]
     #[schemars(with = "ProfilesParam")]
     pub profiles: Option<ProfilesParam>,
+    /// Each index or point pick is exactly the region it names. Without it, a pick on a drawn
+    /// profile that reference geometry (a face's projected outline) cuts into regions takes the
+    /// whole drawn profile. The dialogs send `true`: they highlight the regions they pick.
+    #[serde(default)]
+    pub exact_regions: Option<bool>,
     /// A point on a planar body face to extrude instead of a sketch profile.
     #[serde(default)]
     pub face: Option<Point3>,

@@ -24,6 +24,12 @@ use super::process::{AgentProcess, FromAgent, ProcessHandle};
 const MAX_TOOL_TEXT: usize = 20_000;
 /// Messages kept in the conversation (the system note stays).
 const MAX_HISTORY: usize = 240;
+/// Pictures of the view kept in the conversation. The whole history goes with every request
+/// (up to `MAX_REQUESTS_PER_TURN` per message), so older views are swapped for a short note:
+/// otherwise each attached view makes every later request bigger, until the endpoint refuses it.
+const MAX_HISTORY_IMAGES: usize = 2;
+/// What an older view becomes in the history.
+const DROPPED_VIEW_NOTE: &str = "[an earlier picture of the view, removed to keep the request small]";
 /// How long one tool call may take (it may wait for the user's Allow, declined after four
 /// minutes). It does not depend on the endpoint's request timeout: a tool call is SolidCraft's own
 /// work and the user's answer, never a wait for the model, so a longer request timeout does not
@@ -183,6 +189,7 @@ impl Worker {
         if let Err(e) = self.start_mcp() {
             self.emit(Event::Error(e));
         }
+        self.emit(Event::ToolsAvailable(!self.tools.is_empty()));
         self.emit(Event::Ready { agent: format!("{} · {}", self.cfg.name, self.cfg.model), images: true });
         // The endpoint's models for the picker; an endpoint that does not list them shows none.
         if let Ok(list) = self.model_list() {
@@ -273,6 +280,7 @@ impl Worker {
 
     fn turn(&mut self, parts: Vec<PromptPart>) {
         self.history.push(user_message(self.cfg.protocol, &parts));
+        drop_old_views(&mut self.history, MAX_HISTORY_IMAGES);
         self.trim_history();
         // No cap on requests: Stop sets `cancel`, checked at the top of every round.
         loop {
@@ -321,6 +329,7 @@ impl Worker {
                     title: Some(title),
                     kind: Some(String::new()),
                     status: Some(ToolStatus::InProgress),
+                    input: c.arguments.as_ref().ok().filter(|a| a.is_object()).cloned(),
                     output: None,
                 });
                 let (text, failed) = if self.cancel.load(Ordering::Relaxed) {
@@ -342,6 +351,7 @@ impl Worker {
                     title: None,
                     kind: None,
                     status: Some(if failed { ToolStatus::Failed } else { ToolStatus::Completed }),
+                    input: None,
                     output: Some(shown),
                 });
                 match self.cfg.protocol {
@@ -491,6 +501,7 @@ pub fn http_error(status: u16, body: &Value) -> String {
         401 | 403 => crate::i18n::tr("ui.ai_http_key"),
         404 => crate::i18n::tr("ui.ai_http_not_found"),
         429 => crate::i18n::tr("ui.ai_http_busy"),
+        413 => crate::i18n::tr("ui.ai_http_too_large"),
         _ => "",
     };
     format!(
@@ -649,6 +660,25 @@ fn anthropic_reply(body: &Value) -> Reply {
         _ => json!({"role": "assistant", "content": content.clone()}),
     };
     Reply { text, calls, assistant }
+}
+
+/// Keeps the newest `keep` pictures of the view in the history and swaps every older one for a
+/// short note, so the model still knows a view was shown. Text is never touched. Pictures come
+/// as OpenAI `image_url` parts or Anthropic `image` blocks, depending on the endpoint.
+fn drop_old_views(history: &mut [Value], keep: usize) {
+    let mut seen = 0;
+    for msg in history.iter_mut().rev() {
+        let Some(content) = msg.get_mut("content").and_then(Value::as_array_mut) else { continue };
+        for part in content.iter_mut().rev() {
+            if !matches!(part.get("type").and_then(Value::as_str), Some("image_url" | "image")) {
+                continue;
+            }
+            seen += 1;
+            if seen > keep {
+                *part = json!({"type": "text", "text": DROPPED_VIEW_NOTE});
+            }
+        }
+    }
 }
 
 /// MCP `tools/list` as OpenAI function tools (the hidden ones left out).
@@ -903,6 +933,80 @@ mod tests {
         assert_eq!(a["content"][1]["source"]["data"], "AA==");
     }
 
+    fn view(n: u8) -> Value {
+        user_message(
+            Protocol::OpenAi,
+            &[PromptPart::Text(format!("look {n}")), PromptPart::Image { mime: "image/png".into(), base64: format!("V{n}") }],
+        )
+    }
+
+    fn pictures(history: &[Value]) -> Vec<String> {
+        history
+            .iter()
+            .filter_map(|m| m["content"].as_array())
+            .flatten()
+            .filter_map(|p| p.pointer("/image_url/url").and_then(Value::as_str).map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn only_the_newest_views_stay_in_the_history_and_older_ones_become_a_note() {
+        let mut h = vec![json!({"role": "system", "content": "note"}), view(1), json!({"role": "assistant", "content": "ok"}), view(2)];
+        drop_old_views(&mut h, 2);
+        assert_eq!(pictures(&h).len(), 2, "two views fit, nothing is dropped");
+
+        h.push(json!({"role": "user", "content": "plain text"}));
+        h.push(view(3));
+        drop_old_views(&mut h, 2);
+        assert_eq!(pictures(&h), vec!["data:image/png;base64,V2", "data:image/png;base64,V3"]);
+        // The oldest view is a note now; the words sent with it, and every other message, stay.
+        assert_eq!(h[1]["content"][0]["text"], "look 1");
+        assert_eq!(h[1]["content"][1], json!({"type": "text", "text": DROPPED_VIEW_NOTE}));
+        assert_eq!(h[0]["content"], "note");
+        assert_eq!(h[4]["content"], "plain text");
+    }
+
+    #[test]
+    fn a_long_chat_with_a_view_per_message_does_not_grow_without_end() {
+        let mut h = vec![json!({"role": "system", "content": "note"})];
+        let big = "A".repeat(200_000);
+        for _ in 0..40 {
+            h.push(user_message(
+                Protocol::OpenAi,
+                &[PromptPart::Text("again".into()), PromptPart::Image { mime: "image/png".into(), base64: big.clone() }],
+            ));
+            drop_old_views(&mut h, MAX_HISTORY_IMAGES);
+            h.push(json!({"role": "assistant", "content": "done"}));
+        }
+        let size = json!({"messages": h}).to_string().len();
+        assert_eq!(pictures(&h).len(), MAX_HISTORY_IMAGES);
+        assert!(size < (MAX_HISTORY_IMAGES + 1) * big.len(), "request body is {size} bytes");
+    }
+
+    #[test]
+    fn anthropic_views_are_dropped_the_same_way() {
+        let view = |n: u8| {
+            user_message(
+                Protocol::Anthropic,
+                &[PromptPart::Text(format!("look {n}")), PromptPart::Image { mime: "image/png".into(), base64: format!("V{n}") }],
+            )
+        };
+        let mut h = vec![view(1), json!({"role": "assistant", "content": "ok"}), view(2), view(3)];
+        drop_old_views(&mut h, 2);
+        let kept: Vec<&str> =
+            h.iter().filter_map(|m| m["content"].as_array()).flatten().filter_map(|p| p.pointer("/source/data").and_then(Value::as_str)).collect();
+        assert_eq!(kept, vec!["V2", "V3"]);
+        assert_eq!(h[0]["content"][0]["text"], "look 1");
+        assert_eq!(h[0]["content"][1], json!({"type": "text", "text": DROPPED_VIEW_NOTE}));
+    }
+
+    #[test]
+    fn a_too_large_request_says_so() {
+        let e = http_error(413, &json!({"error": {"message": "Request body is too large."}}));
+        assert!(e.starts_with("HTTP 413: "), "{e}");
+        assert!(e.ends_with("(Request body is too large.)"), "{e}");
+    }
+
     /// A scripted endpoint: one answer with a tool call, then a plain answer. The loop runs the
     /// tool (here without SolidCraft tools: an unknown tool fails) and reports the turn's end.
     #[test]
@@ -939,7 +1043,8 @@ mod tests {
             events.extend(b.poll());
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(matches!(events.first(), Some(Event::Ready { .. })), "{events:?}");
+        assert_eq!(events.first(), Some(&Event::ToolsAvailable(false)));
+        assert!(events.iter().any(|e| matches!(e, Event::Ready { .. })), "{events:?}");
         assert!(events.iter().any(|e| matches!(e, Event::Tool { status: Some(ToolStatus::Failed), .. })), "{events:?}");
         assert!(events.iter().any(|e| matches!(e, Event::Text { text, .. } if text == "Done.")), "{events:?}");
         assert!(matches!(events.last(), Some(Event::TurnEnded { reason }) if reason.is_empty()), "{events:?}");
@@ -1336,7 +1441,8 @@ mod tests {
             events.extend(b.poll());
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(matches!(events.first(), Some(Event::Ready { .. })), "{events:?}");
+        assert_eq!(events.first(), Some(&Event::ToolsAvailable(false)));
+        assert!(events.iter().any(|e| matches!(e, Event::Ready { .. })), "{events:?}");
         assert!(events.iter().any(|e| matches!(e, Event::Tool { status: Some(ToolStatus::Failed), .. })), "{events:?}");
         assert!(events.iter().any(|e| matches!(e, Event::Text { text, .. } if text == "Done.")), "{events:?}");
         assert!(matches!(events.last(), Some(Event::TurnEnded { reason }) if reason.is_empty()), "{events:?}");

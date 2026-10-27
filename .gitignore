@@ -12,5 +12,8 @@ __pycache__/
 # cargo-mutants output (docs/mutation-testing.md)
 mutants.out*/
 
+# external corpus downloads (cargo xtask external-corpus, #1397): fetched at test time,
+# hash-pinned in tests/external-corpus.toml; never commit case data
+/corpus/
 # Local scripts that resume a Claude Code session.
 continue-*.sh

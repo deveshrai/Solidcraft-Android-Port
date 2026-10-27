@@ -58,11 +58,15 @@ pub(super) fn source(s: &Session, p: &Value, cmd: &str) -> Result<MotionTrace> {
             let placed = placed_world(s, &occurrence)?;
             let inverse = solidcraft_doc::mat_inverse(&placed).ok_or_else(|| bad(cmd, "invalid occurrence placement"))?;
             let canonical = joints::occurrence_world(&s.doc, id);
-            for key in ["face", "circle", "edge", "point"] {
+            for key in ["face", "circle", "edge", "point", "corner"] {
                 if let Some(at) = reference.get(key).and_then(crate::params::vec3) {
                     let at = apply_point(&canonical, apply_point(&inverse, at));
                     reference[key] = json!([at.x, at.y, at.z]);
                 }
+            }
+            if let Some(z) = reference.get("z").and_then(crate::params::vec3) {
+                let z = solidcraft_doc::apply_vector(&canonical, solidcraft_doc::apply_vector(&inverse, z));
+                reference["z"] = json!([z.x, z.y, z.z]);
             }
             let o = super::super::joints::origin_param(s, Some(&reference), cmd)?;
             if o.occurrence != occurrence.last().copied().unwrap_or(0) {

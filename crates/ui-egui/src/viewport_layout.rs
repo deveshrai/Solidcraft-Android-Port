@@ -10,7 +10,14 @@ pub(crate) struct Layout {
     pub content: Rect,
     pub axis_view: Rect,
     pub navigation: Rect,
+    /// OK and Cancel in the view's corner (#6709), or nothing while they are not shown.
+    pub confirm: Rect,
 }
+
+/// How far the OK and Cancel pair sits in from the content's top right corner, and the space
+/// between it and the axis view moved down below it.
+const CORNER_INSET: f32 = 8.0;
+const CORNER_GAP: f32 = 4.0;
 
 /// Enumerate rectangles whose edges meet the viewport or a bounded number of overlays.
 pub(crate) fn free_rect(view: Rect, obstacles: &[Rect]) -> Rect {
@@ -43,25 +50,49 @@ pub(crate) fn free_rect(view: Rect, obstacles: &[Rect]) -> Rect {
 }
 
 impl Layout {
-    pub fn new(viewport: Rect, docks: &[Rect], scale: f32, style: crate::prefs::NavigatorStyle) -> Self {
-        Self::with_content(viewport, viewport, docks, scale, style)
+    /// The whole viewport as content, without the OK and Cancel pair.
+    #[cfg(test)]
+    pub fn new(viewport: Rect, docks: &[Rect], scale: f32, style: crate::prefs::NavigatorStyle, show_navigation_bar: bool) -> Self {
+        Self::with_content(viewport, viewport, docks, scale, style, egui::Vec2::ZERO, show_navigation_bar)
     }
 
-    pub fn with_content(viewport: Rect, content: Rect, docks: &[Rect], scale: f32, style: crate::prefs::NavigatorStyle) -> Self {
+    /// `corner` is the size of the OK and Cancel pair (#6709; zero while it is not shown): it is
+    /// held in the top right corner of the content, and the axis view moves down below it.
+    pub fn with_content(
+        viewport: Rect,
+        content: Rect,
+        docks: &[Rect],
+        scale: f32,
+        style: crate::prefs::NavigatorStyle,
+        corner: egui::Vec2,
+        show_navigation_bar: bool,
+    ) -> Self {
         let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
         let mut obstacles: Vec<_> = docks.iter().take(14).copied().filter(|r| r.is_finite()).map(|r| r.expand(4.0)).collect();
         // Navigation is anchored to the viewport, never to transient dialog space.
         let available = content;
+        let confirm = if corner.is_finite()
+            && corner.x > 0.0
+            && corner.y > 0.0
+            && available.width() >= corner.x + CORNER_INSET
+            && available.height() >= corner.y + CORNER_INSET
+        {
+            Rect::from_min_size(pos2(available.right() - CORNER_INSET - corner.x, available.top() + CORNER_INSET), corner)
+        } else {
+            Rect::NOTHING
+        };
+        // The axis view starts below the pair while it is shown.
+        let top = if confirm.is_positive() { confirm.bottom() + CORNER_GAP } else { available.top() };
         let cube_size = super::viewport::axis_view_size(style);
-        let mut axis_view = if available.width() >= cube_size && available.height() >= cube_size {
-            Rect::from_min_size(pos2(available.right() - cube_size, available.top()), vec2(cube_size, cube_size))
+        let mut axis_view = if available.width() >= cube_size && available.bottom() - top >= cube_size {
+            Rect::from_min_size(pos2(available.right() - cube_size, top), vec2(cube_size, cube_size))
         } else {
             Rect::NOTHING
         };
         let nav_space = content;
         let columns = ((nav_space.width() - 10.0) / 30.0).floor().clamp(1.0, 10.0);
         let nav_height = (10.0 / columns).ceil() * 30.0;
-        let navigation = if nav_space.width() >= columns * 30.0 + 10.0 && nav_space.height() >= nav_height + 7.0 {
+        let navigation = if show_navigation_bar && nav_space.width() >= columns * 30.0 + 10.0 && nav_space.height() >= nav_height + 7.0 {
             Rect::from_center_size(pos2(nav_space.center().x, nav_space.bottom() - nav_height * 0.5 - 7.0), vec2(columns * 30.0 + 10.0, nav_height))
         } else {
             Rect::NOTHING
@@ -69,21 +100,20 @@ impl Layout {
         // On tiny viewports keep the bottom controls usable rather than overlapping them.
         // This decision depends only on viewport size, never on an overlay.
         if axis_view.intersect(navigation).is_positive() {
-            let compact = (navigation.top() - content.top() - 4.0).min(cube_size);
+            let compact = (navigation.top() - top - 4.0).min(cube_size);
             axis_view = if style == crate::prefs::NavigatorStyle::Cube && compact >= 96.0 {
-                Rect::from_min_size(pos2(content.right() - compact, content.top()), vec2(compact, compact))
+                Rect::from_min_size(pos2(content.right() - compact, top), vec2(compact, compact))
             } else {
                 Rect::NOTHING
             };
         }
-        if axis_view.is_positive() {
-            obstacles.push(axis_view);
-        }
-        if navigation.is_positive() {
-            obstacles.push(navigation);
+        for control in [axis_view, navigation, confirm] {
+            if control.is_positive() {
+                obstacles.push(control);
+            }
         }
         let drawable = free_rect(viewport, &obstacles).shrink(16.0 / scale);
-        Self { viewport, drawable, content, axis_view, navigation }
+        Self { viewport, drawable, content, axis_view, navigation, confirm }
     }
 }
 

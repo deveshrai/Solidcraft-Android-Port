@@ -296,10 +296,12 @@ pub(crate) fn clipboard_buttons(app: &mut SolveApp, ui: &mut egui::Ui, id: u64) 
 pub(crate) fn status_text(name: &str, ty: &str, error: Option<&str>, warning: Option<&str>) -> String {
     let mut text = format!("{name}  ({ty})");
     if let Some(error) = error {
-        text.push_str(&format!("\nError: {}", crate::i18n::tr_diagnostic(error)));
+        text.push('\n');
+        text.push_str(&crate::i18n::format("timeline.feature_error", &[("message", &crate::i18n::tr_diagnostic(error))]));
     }
     if let Some(warning) = warning {
-        text.push_str(&format!("\nWarning: {warning}"));
+        text.push('\n');
+        text.push_str(&crate::i18n::format("timeline.feature_warning", &[("message", &crate::i18n::tr_diagnostic(warning))]));
     }
     text
 }
@@ -339,6 +341,19 @@ fn select_range(app: &mut SolveApp, order: &[u64], id: u64, add: bool) {
     let range = order.get(from.min(to)..=from.max(to)).unwrap_or_default();
     let items: Vec<_> = range.iter().map(|f| json!({"type": "feature", "id": f})).collect();
     let _ = app.run("select.set", json!({ "items": items, "add": add }));
+}
+
+/// Give a History feature click to a compatible active dialog input in any layout.
+/// Plain clicks keep an existing pick; Ctrl/Command clicks toggle it off.
+pub(crate) fn pick_feature_into_dialog(app: &mut SolveApp, id: u64, modifiers: egui::Modifiers) -> bool {
+    let Some(d) = app.dialog.as_mut().filter(|d| d.active_input().is_some_and(|i| i.accept & crate::selection::FEATURES != 0)) else {
+        return false;
+    };
+    let feature = solidcraft_engine::Sel::Feature { id };
+    if modifiers.command || modifiers.ctrl || !d.active_input().is_some_and(|i| i.items.contains(&feature)) {
+        d.pick(&app.session, feature);
+    }
+    true
 }
 
 /// A plain click on a feature: select it alone.
@@ -544,29 +559,14 @@ fn timeline_contents(app: &mut SolveApp, ui: &mut egui::Ui, floating: bool) {
                     drag = Some(Drag::Feature(*id));
                 }
                 let resp = resp.on_hover_text(tip);
-                if resp.clicked() {
-                    // A dialog input that takes features (pattern objects) gets the click.
-                    let takes = app.dialog.as_ref().and_then(|d| d.active_input()).is_some_and(|i| i.accept & crate::selection::FEATURES != 0);
-                    if takes {
-                        // A click adds the feature and keeps one already picked (it shows as
-                        // selected); Ctrl+click takes it out, as Ctrl+click toggles outside a dialog.
-                        let toggle = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
-                        if let Some(mut d) = app.dialog.take() {
-                            let feature = solidcraft_engine::Sel::Feature { id: *id };
-                            if toggle || !d.active_input().is_some_and(|i| i.items.contains(&feature)) {
-                                d.pick(&app.session, feature);
-                            }
-                            app.dialog = Some(d);
-                        }
+                if resp.clicked() && !pick_feature_into_dialog(app, *id, ui.input(|i| i.modifiers)) {
+                    let modifiers = ui.input(|i| i.modifiers);
+                    if modifiers.shift {
+                        select_range(app, &order, *id, modifiers.command || modifiers.ctrl);
+                    } else if modifiers.command || modifiers.ctrl {
+                        toggle_feature(app, *id);
                     } else {
-                        let modifiers = ui.input(|i| i.modifiers);
-                        if modifiers.shift {
-                            select_range(app, &order, *id, modifiers.command || modifiers.ctrl);
-                        } else if modifiers.command || modifiers.ctrl {
-                            toggle_feature(app, *id);
-                        } else {
-                            select_one(app, *id);
-                        }
+                        select_one(app, *id);
                     }
                 }
                 if resp.double_clicked() {
@@ -632,7 +632,7 @@ fn timeline_contents(app: &mut SolveApp, ui: &mut egui::Ui, floating: bool) {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                 }
                 crate::ui_kit::history_marker(&p, mr, false, accent);
-                resp.on_hover_text("History marker: drag to roll the model back; new features go here");
+                resp.on_hover_text(crate::i18n::tr("ui.history_marker_tip"));
             }
             let content_end = crate::dialogs_assembly::timeline_joints(app, ui, &p, end + 10.0, r);
             // The scroll range follows the drawn content (the buttons don't take layout space themselves).
@@ -720,6 +720,45 @@ mod tests {
     use serde_json::json;
 
     use crate::scenario::Harness;
+
+    #[test]
+    fn history_status_translates_prefixes_and_both_diagnostics() {
+        let diagnostic = "there is no body to cut or intersect in component 'Mount'; the tool may overlap 'Plate' in component 'Base' — activate that component or pick the body as a target";
+        let _language = crate::i18n::scope("ja");
+        let translated = crate::i18n::tr_diagnostic(diagnostic);
+        assert_ne!(translated, diagnostic);
+        assert_eq!(
+            super::status_text("My feature", "ExtrudeFeature", Some(diagnostic), Some(diagnostic)),
+            format!("My feature  (ExtrudeFeature)\nエラー: {translated}\n警告: {translated}")
+        );
+        assert_eq!(super::status_text("My feature", "ExtrudeFeature", None, None), "My feature  (ExtrudeFeature)");
+        // Unknown diagnostics remain intact, including names and measured values.
+        assert_eq!(
+            super::status_text("My feature", "ExtrudeFeature", None, Some("Custom part: 1.25 mm")),
+            "My feature  (ExtrudeFeature)\n警告: Custom part: 1.25 mm"
+        );
+        let _english = crate::i18n::scope("en");
+        assert_eq!(super::status_text("Box", "BoxFeature", Some("error"), Some("warning")), "Box  (BoxFeature)\nError: error\nWarning: warning");
+    }
+
+    #[test]
+    fn history_marker_tooltip_uses_the_language_in_both_layouts() {
+        for left in [false, true] {
+            let mut h = Harness::new();
+            h.app.preferences.language = "ja".into();
+            h.app.preferences.timeline_left = left;
+            h.app.run("sketch.create", json!({"plane": "XY"})).unwrap();
+            h.app.run("sketch.finish", json!({})).unwrap();
+            h.frames(4);
+            let marker = crate::scenario::rect_of("history:marker").unwrap().center();
+            h.call("ui.move", json!({"x": marker.x, "y": marker.y}));
+            h.frames(90);
+            let expected = crate::i18n::Locale::for_language("ja").text("ui.history_marker_tip");
+            let output = egui::FullOutput { shapes: h.shapes.clone(), ..Default::default() };
+            let texts: Vec<_> = crate::test_support::text_shapes(&output).map(|t| t.galley.text()).collect();
+            assert!(texts.contains(&expected), "left={left}: {texts:?}");
+        }
+    }
 
     #[test]
     fn construction_history_matches_the_tool_that_created_it() {

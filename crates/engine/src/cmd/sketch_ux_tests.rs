@@ -1492,6 +1492,29 @@ fn a_live_frame_stops_once_its_numerical_solves_are_spent() {
     assert!(reached > 0.0 && reached < 1.0 && r["retry"] == json!(true), "{r}");
 }
 
+/// A drag from a script (not live) past the arm's reach: the steps after a failed one are solved
+/// at once and those that fail in a row are taken as tried. The drag ends where solving every
+/// step one by one ends it, with the same held solves counted.
+#[test]
+fn a_scripted_drag_solves_the_steps_past_a_failure_at_once_and_ends_where_one_by_one_does() {
+    let start = hung_arm();
+    let h = pt(&start, "eh.end");
+    let far = hung_hand_target(&start, 2.0, 1.5);
+    let drag = |s: &mut Session| run(s, "sketch.drag", json!({"entity": "eh.end", "from": [h.x, h.y], "to": [far.x, far.y]}));
+    let points = |s: &Session| s.doc.sketch(s.active_sketch.unwrap()).unwrap().points.iter().map(|p| (p.id.clone(), p.pos)).collect::<Vec<_>>();
+    let mut one = hung_arm();
+    let r1 = super::drag::last_drag::one_by_one(|| drag(&mut one));
+    let solves1 = super::drag::last_drag::get();
+    super::drag::last_drag::skipped();
+    let mut ahead = hung_arm();
+    let r2 = drag(&mut ahead);
+    let solves2 = super::drag::last_drag::get();
+    assert!(super::drag::last_drag::skipped() > 0, "steps were solved ahead");
+    assert_eq!(r2, r1);
+    assert_eq!(points(&ahead), points(&one));
+    assert_eq!((solves2.count, solves2.work), (solves1.count, solves1.work));
+}
+
 /// All the held solves of one live frame, halvings included, share one decomposition budget:
 /// together they do at most a frame's work, and one solve's more.
 #[test]
@@ -1766,4 +1789,64 @@ fn dragging_an_end_of_a_tangent_line_leaves_its_other_end_still() {
     );
     let si = run(&mut s, "sketch.inspect", json!({}));
     assert!(si["failing"].as_array().is_some_and(Vec::is_empty), "still tangent: {si}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// A dimension without a value restates its measurement in the design's units (#3812): `1 in`
+// for a 25.4 mm line in an inch design, so the value box opens in the units the text shows.
+
+/// A sketch with a 25.4 mm line `l1` in a design in `units`.
+fn units_line(units: &str) -> Session {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [25.4, 0]], "ids": ["l1"]}));
+    run(&mut s, "document.units", json!({"units": units}));
+    s
+}
+
+fn units_param(s: &Session, name: &str) -> (String, String) {
+    let p = s.doc.param(name).unwrap();
+    (p.expr.clone(), p.unit.clone())
+}
+
+fn units_line_end(s: &Session) -> f64 {
+    let state = s.model.state();
+    let sk = &state.sketch(s.active_sketch.unwrap()).unwrap().sketch;
+    sk.point(sk.resolve_point("l1.end").unwrap()).unwrap().x
+}
+
+#[test]
+fn a_dimension_without_a_value_is_written_in_the_design_units() {
+    for (units, expr) in [("in", "1 in"), ("mm", "25.4 mm"), ("cm", "2.54 cm"), ("ft", "0.083333333 ft"), ("m", "0.0254 m")] {
+        let mut s = units_line(units);
+        let r = run(&mut s, "sketch.dimension", json!({"entities": ["l1"], "scale_sketch": true}));
+        let name = r["param"].as_str().unwrap();
+        assert_eq!(units_param(&s, name), (expr.to_string(), units.to_string()), "{units}");
+        assert!((units_line_end(&s) - 25.4).abs() < 1e-5, "{units}: the restated dimension moves nothing ({})", units_line_end(&s));
+    }
+}
+
+#[test]
+fn a_typed_bare_number_still_means_the_design_units() {
+    let mut s = units_line("in");
+    let r = run(&mut s, "sketch.dimension", json!({"entities": ["l1"], "value": "2"}));
+    assert_eq!(units_param(&s, r["param"].as_str().unwrap()).0, "2 in");
+    assert!((units_line_end(&s) - 50.8).abs() < 1e-6);
+}
+
+#[test]
+fn a_driven_dimension_made_driving_and_autoconstrain_dimensions_use_the_design_units() {
+    let mut s = units_line("in");
+    run(&mut s, "sketch.dimension", json!({"entities": ["l1"], "driven": true}));
+    let state = s.model.state();
+    let id = state.sketch(s.active_sketch.unwrap()).unwrap().sketch.constraints.iter().find(|c| c.driven).unwrap().id.clone();
+    run(&mut s, "sketch.toggle_driven", json!({"constraint": id, "driven": false}));
+    let made = s.doc.params.iter().find(|p| p.model).unwrap();
+    assert_eq!((made.expr.as_str(), made.unit.as_str()), ("1 in", "in"));
+
+    let mut s = units_line("in");
+    run(&mut s, "sketch.auto_constrain", json!({}));
+    let lengths: Vec<_> = s.doc.params.iter().filter(|p| p.model && p.unit != "deg").collect();
+    assert!(!lengths.is_empty(), "AutoConstrain dimensioned the line");
+    assert!(lengths.iter().all(|p| p.unit == "in" && p.expr.ends_with(" in")), "{lengths:?}");
 }

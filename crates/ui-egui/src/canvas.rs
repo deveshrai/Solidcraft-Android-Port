@@ -276,9 +276,16 @@ pub(crate) fn owns_pointer(app: &SolveApp, proj: &Proj, p: Pos2) -> bool {
     // The triad only registers an egui hit widget after a handle is under the pointer.
     // Test its geometry before navigation, including the first frame entering a handle.
     app.dialog.as_ref().and_then(|d| crate::dialogs_move::triad(app, d)).is_some_and(|t| crate::gizmo::contains_pointer(proj, &t, p))
+        || app
+            .dialog
+            .as_ref()
+            .and_then(|d| move_rotation(app, d, proj))
+            .and_then(|r| proj.to_screen(r.point(r.angle)))
+            .is_some_and(|end| egui::Rect::from_center_size(end, vec2(20.0, 20.0)).contains(p))
         || (app.dialog.is_none()
             && app.tool.is_none()
             && crate::browser::occurrence_triad_model(app).is_some_and(|t| crate::gizmo::contains_pointer(proj, &t, p)))
+        || crate::place_gizmo::contains_pointer(app, p)
 }
 
 /// Draw the manipulator and the value box (called by the viewport after the model is drawn).
@@ -318,9 +325,11 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj
             dragging = true;
         }
         // Read the triad again after the drag, so the box follows it in the same frame. Move
-        // types with no triad (Rotate, Point to Point, Point to Position) put the box on the
-        // picked bodies instead.
+        // types with no triad put the box on the picked bodies, or beside Rotate's handle
+        // once an axis is selected.
         let triad = crate::dialogs_move::triad(app, &d);
+        let rotation = draw_move_rotation(app, ui, painter, proj, &mut d);
+        dragging |= rotation.is_some_and(|(_, changed)| changed);
         let at = triad.map(|t| t.center).or_else(|| anchor(app, &d).map(|(base, _)| base));
         // Tab and Shift+Tab in the box show the next or previous value (Y after X; #4776),
         // keeping the keyboard in the box.
@@ -340,7 +349,8 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj
             // Clear of the triad: its arrows reach LEN_PX and its rings RING of that, so a box
             // beside the centre would cover the handles the user is reaching for.
             let off = if triad.is_some() { vec2(crate::gizmo::LEN_PX as f32 + 16.0, -12.0) } else { vec2(16.0, -30.0) };
-            value_box_with(ui, label, value, bs + off, focus || dragging, true);
+            let box_at = rotation.map_or(bs + off, |(end, _)| end + vec2(16.0, -12.0));
+            value_box_with(ui, label, value, box_at, focus || dragging, true);
         }
         app.dialog = Some(d);
         return;
@@ -350,9 +360,63 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj
     {
         draw(app, ui, painter, proj, &mut d, base, bs, dir);
     }
+    crate::place_gizmo::show(app, ui, painter, proj, &mut d);
     app.dialog = Some(d);
     // A Single hole's handles, over the depth arrow's stem: a press on a hole moves it.
     crate::hole_place::show(app, ui, painter, proj);
+}
+
+struct MoveRotation {
+    centre: Vec3,
+    axis: Vec3,
+    radius: f64,
+    angle: f64,
+}
+
+impl MoveRotation {
+    fn point(&self, angle: f64) -> Vec3 {
+        let e1 = self.axis.any_perp();
+        let e2 = self.axis.cross(e1);
+        self.centre + (e1 * angle.cos() + e2 * angle.sin()) * self.radius
+    }
+}
+
+fn move_rotation(app: &SolveApp, d: &Dialog, proj: &Proj) -> Option<MoveRotation> {
+    let Kind::Move { angle, .. } = &d.kind else { return None };
+    let (centre, axis) = crate::dialogs_move::rotation_axis(app, d)?;
+    let angle = crate::length_input::eval(&app.session.doc, angle, ValueKind::Angle).ok().filter(|a| a.is_finite()).unwrap_or(0.0);
+    Some(MoveRotation { centre, axis, radius: crate::gizmo::ring_radius(proj, centre)?, angle })
+}
+
+/// Reuse the angular handle's snapping and edge-on projection for Move's selected axis.
+fn draw_move_rotation(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj, d: &mut Dialog) -> Option<(Pos2, bool)> {
+    let r = move_rotation(app, d, proj)?;
+    let points: Vec<_> = (0..=64).filter_map(|i| proj.to_screen(r.point(i as f64 / 64.0 * std::f64::consts::TAU))).collect();
+    painter.add(egui::Shape::line(points, Stroke::new(1.8, Tokens::get().manipulator)));
+    let Kind::Move { angle, .. } = &mut d.kind else { return None };
+    let before = angle.clone();
+    let e1 = r.axis.any_perp();
+    // Keep full turns in the expression while the shared handle works near zero.
+    let boundary = r.angle % std::f64::consts::TAU;
+    let offset = r.angle - boundary;
+    let span = 2.0 * std::f64::consts::TAU;
+    let end = rotation_handle(
+        ui,
+        painter,
+        proj,
+        r.centre,
+        e1,
+        r.axis.cross(e1),
+        r.axis,
+        r.radius,
+        boundary,
+        1.0,
+        offset,
+        (offset - span, offset + span),
+        "move_rotate",
+        angle,
+    )?;
+    Some((end, *angle != before))
 }
 
 /// A round step for dragged values at this zoom (1, 2 or 5 times a power of ten).
@@ -449,16 +513,20 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
     } else {
         1.0
     };
-    // Extrudes and moves go either way; radii and thicknesses stay positive.
-    let signed = matches!(
-        d.kind,
+    // Extrudes, moves, pattern spacings and one-sided sketch offsets go either way (#5497);
+    // radii, thicknesses, depths and heights stay positive. A symmetric offset takes the
+    // distance's size only, so a drag past its curve would just turn the arrow round.
+    let signed = match &d.kind {
         Kind::Extrude { .. }
-            | Kind::Move { .. }
-            | Kind::Section { .. }
-            | Kind::OffsetPlane { .. }
-            | Kind::OffsetFaces { .. }
-            | Kind::SketchModify(crate::sketch_modify_ui::Mod::Move { .. })
-    );
+        | Kind::Move { .. }
+        | Kind::Section { .. }
+        | Kind::OffsetPlane { .. }
+        | Kind::OffsetFaces { .. }
+        | Kind::PatternRect { .. } => true,
+        Kind::SketchModify(crate::sketch_modify_ui::Mod::Move { .. } | crate::sketch_modify_ui::Mod::PatternRect { .. }) => true,
+        Kind::SketchModify(crate::sketch_modify_ui::Mod::Offset { mode, .. }) => !crate::sketch_modify_ui::offset_symmetric(*mode),
+        _ => false,
+    };
     let mut focus = std::mem::take(&mut d.focus);
     let half_height = app.cam.half_height();
     let axis = revolve_axis(app, d);
@@ -472,14 +540,28 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
     if let (Kind::Extrude { direction: crate::dialogs::TWO_SIDES | crate::dialogs::TWO_SIDES_REVERSED, distance2, .. }, Some(n)) = (&mut d.kind, dir)
         && let Some(l2) = crate::length_input::eval(&app.session.doc, distance2, ValueKind::Length).ok().filter(|v| v.is_finite())
     {
-        drag_arrow(&app.session.doc, ui, painter, proj, base, bs, -(n * sign), l2, true, egui::Id::new("sc_manipulator2"), half_height, distance2);
+        drag_arrow(
+            &app.session.doc,
+            ui,
+            painter,
+            proj,
+            base,
+            bs,
+            -(n * sign),
+            l2,
+            true,
+            egui::Id::new("sc_manipulator2"),
+            half_height,
+            0.0,
+            distance2,
+        );
     }
     // A chamfer of two distances: Distance 2 gets its own arrow along the other face.
     let faces = chamfer_face_dirs(app, d, base);
     if let (Kind::Fillet { distance2, .. }, Some((_, t2))) = (&mut d.kind, faces)
         && let Some(l2) = crate::length_input::eval(&app.session.doc, distance2, ValueKind::Length).ok().filter(|v| v.is_finite())
     {
-        drag_arrow(&app.session.doc, ui, painter, proj, base, bs, t2, l2, false, egui::Id::new("sc_manipulator2"), half_height, distance2);
+        drag_arrow(&app.session.doc, ui, painter, proj, base, bs, t2, l2, false, egui::Id::new("sc_manipulator2"), half_height, 0.0, distance2);
     }
     // A rectangular pattern's second direction gets its own arrow for Spacing 2 (#2462), as the
     // first direction's arrow sets Spacing.
@@ -491,7 +573,7 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
         if let Some(spacing2) = spacing2
             && let Some(l2) = crate::length_input::eval(&app.session.doc, spacing2, ValueKind::Length).ok().filter(|v| v.is_finite())
         {
-            drag_arrow(&app.session.doc, ui, painter, proj, base, bs, n2, l2, false, egui::Id::new("sc_manipulator2"), half_height, spacing2);
+            drag_arrow(&app.session.doc, ui, painter, proj, base, bs, n2, l2, true, egui::Id::new("sc_manipulator2"), half_height, 0.0, spacing2);
         }
     }
     // An offset plane shows where it will be: at the distance, or through the picked point.
@@ -549,7 +631,7 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
             crate::length_input::eval(&app.session.doc, depth, ValueKind::Length).ok().filter(|v| v.is_finite()).unwrap_or(0.0)
         };
         let before = depth.clone();
-        drag_arrow(&app.session.doc, ui, painter, proj, base, bs, -n, l, false, egui::Id::new("sc_manipulator_depth"), half_height, depth);
+        drag_arrow(&app.session.doc, ui, painter, proj, base, bs, -n, l, false, egui::Id::new("sc_manipulator_depth"), half_height, 0.0, depth);
         // Dragging the depth turns "through all" into a distance.
         if *depth != before {
             opts.all = false;
@@ -586,6 +668,7 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
             false,
             egui::Id::new("sc_manipulator_offset2"),
             half_height,
+            0.0,
             distance2,
         ) {
             // Its own area and field, so it does not share Distance's focus or text.
@@ -600,6 +683,8 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
             );
         }
     }
+    // A placement marker at the base: the arrow stands above it and the base dot is the marker's.
+    let clear = crate::place_gizmo::arrow_clearance(app, d);
     let Some((label, kind, value)) = d.primary() else { return };
     let len = all_span.or_else(|| {
         if to_span.is_some() && value.trim().is_empty() {
@@ -610,6 +695,8 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
     });
     let before = value.clone();
     let mut box_at = bs + vec2(16.0, -30.0);
+    // Where the box hangs from: the arrow's tip, or the base when there is no arrow.
+    let mut anchor = bs;
     if let (Some(n), Some(l)) = (dir, len.filter(|_| kind == ValueKind::Length)) {
         let n = n * sign;
         let baseline = to_span.map(f64::abs).unwrap_or(0.0);
@@ -630,6 +717,7 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
             signed,
             egui::Id::new("sc_manipulator"),
             half_height,
+            clear,
             dragged,
         ) {
             if (to_span.is_some() || symmetric_scale != 1.0)
@@ -641,11 +729,16 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
             if symmetric && let Some(bt) = proj.to_screen(base - n * half) {
                 arrow(painter, bs, bt, t.manipulator);
             }
-            painter.circle(bs, 3.5, t.manipulator, Stroke::new(1.0, Color32::WHITE));
+            if clear == 0.0 {
+                painter.circle(bs, 3.5, t.manipulator, Stroke::new(1.0, Color32::WHITE));
+            }
             box_at = ts + vec2(14.0, -12.0);
+            anchor = ts;
         }
     }
     let note = crate::drag_extrude::step_note(app);
+    // Also without an arrow (the value does not evaluate yet): the box still keeps off the handles.
+    let box_at = crate::place_gizmo::yield_box(ui, anchor, box_at);
     value_box_noted(ui, label, value, box_at, focus || *value != before, note.as_deref());
     if *value != before
         && let Kind::Extrude { all, .. } = &mut d.kind
@@ -787,7 +880,9 @@ fn to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
 /// A draggable arrow from `base` along `n` showing `l` (at least a short stub); dragging writes
 /// the snapped length into `value`. The tip and the stem take the drag (#1740): pressed on the
 /// stem, the arrow keeps its length until the pointer moves, and then moves with it as far as the
-/// pointer does. Returns the tip's screen position.
+/// pointer does. Returns the tip's screen position. `clear_px` keeps that many screen points at
+/// the base free: the arrow starts past them and its shortest length grows by them, so it stands
+/// above a placement marker drawn at the base instead of through it.
 #[allow(clippy::too_many_arguments)]
 fn drag_arrow(
     doc: &solidcraft_engine::doc::Document,
@@ -801,19 +896,29 @@ fn drag_arrow(
     signed: bool,
     id: egui::Id,
     half_height: f64,
+    clear_px: f32,
     value: &mut String,
 ) -> Option<Pos2> {
     let t = Tokens::get();
-    let min = 40.0 * 2.0 * half_height / f64::from(proj.rect.height().max(1.0));
+    let min = f64::from(40.0 + clear_px) * 2.0 * half_height / f64::from(proj.rect.height().max(1.0));
     let tip = |length: f64| {
         let shown = if length.abs() < min { min * if length < 0.0 { -1.0 } else { 1.0 } } else { length };
         proj.to_screen(base + n * shown)
     };
     let mut ts = tip(l)?;
+    // Where the drawn arrow starts: the base, or past the cleared marker.
+    let start = |ts: Pos2| if clear_px > 0.0 && (ts - bs).length() > clear_px { bs + (ts - bs).normalized() * clear_px } else { bs };
     let at_tip = egui::Rect::from_center_size(ts, vec2(20.0, 20.0));
-    // Over the stem, the arrow answers where the pointer is.
-    let on_stem = ui.input(|i| i.pointer.hover_pos()).filter(|p| !at_tip.contains(*p) && to_segment(*p, bs, ts) <= ARROW_STEM_REACH);
-    let area = on_stem.map_or(at_tip, |p| egui::Rect::from_center_size(p, vec2(2.0 * ARROW_STEM_REACH, 2.0 * ARROW_STEM_REACH)));
+    // Over the stem, the arrow answers where the pointer is. A placement handle the arrow crosses
+    // (the turn ring's grip) keeps the pointer: the arrow then answers nowhere.
+    let hover = ui.input(|i| i.pointer.hover_pos());
+    let on_handle = hover.is_some_and(crate::place_gizmo::drawn_at);
+    let on_stem = hover.filter(|p| !on_handle && !at_tip.contains(*p) && to_segment(*p, start(ts), ts) <= ARROW_STEM_REACH);
+    let area = if on_handle {
+        egui::Rect::NOTHING
+    } else {
+        on_stem.map_or(at_tip, |p| egui::Rect::from_center_size(p, vec2(2.0 * ARROW_STEM_REACH, 2.0 * ARROW_STEM_REACH)))
+    };
     let r = ui.interact(area, id, egui::Sense::drag());
     // How far along the arrow the press was short of its end: the drag keeps that gap.
     let grab = id.with("stem grab");
@@ -863,7 +968,7 @@ fn drag_arrow(
     note_arrow(ui.ctx(), bs, ts);
     let hot = r.hovered() || r.dragged() || finger;
     let col = if hot { t.accent } else { t.manipulator };
-    arrow(painter, bs, ts, col);
+    arrow(painter, start(ts), ts, col);
     if hot {
         painter.circle_stroke(ts, 8.0, Stroke::new(1.5, col));
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
@@ -1524,7 +1629,7 @@ fn rotation_handle(
 
 /// An edge-on ring has two equally valid depths; retain the branch nearest the current handle.
 #[allow(clippy::too_many_arguments)]
-fn projected_rotation_angle(
+pub(crate) fn projected_rotation_angle(
     proj: &Proj,
     pointer: Pos2,
     centre: Vec3,

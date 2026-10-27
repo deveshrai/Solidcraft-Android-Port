@@ -26,6 +26,10 @@ const MAX_STEP_PART: usize = crate::MAX_STEP_BYTES;
 /// Deflate level for STEP sources. Level 1 uses fixed Huffman codes: a 270 MiB STEP export
 /// shrank to 70 MB in 1.6 s, at level 2 to 47 MB in 3.1 s; higher levels gain little more.
 const STEP_LEVEL: i64 = 2;
+/// An embedded mesh may be as large as a STEP source. One bigger than the design file is
+/// stored Deflate-compressed, so a compressible large import can be saved (#6600). The file
+/// itself stays within [`MAX_DESIGN_BYTES`].
+const MAX_MESH_PART: usize = crate::MAX_STEP_BYTES;
 /// Every other part is bounded by the file size limit.
 const MAX_PART: usize = MAX_DESIGN_BYTES;
 const MAX_EXPANDED: usize = MAX_STEP_PART + MAX_DESIGN_BYTES;
@@ -71,9 +75,21 @@ struct PackageWriter {
     resolved: usize,
 }
 
+/// The uncompressed size a part may have. STEP and mesh blobs may be larger than the
+/// design file because they are stored compressed when they would not fit otherwise.
+fn part_limit(name: &str) -> usize {
+    if name.ends_with(".step") {
+        MAX_STEP_PART
+    } else if name.ends_with(".mesh") {
+        MAX_MESH_PART
+    } else {
+        MAX_PART
+    }
+}
+
 impl PackageWriter {
     fn part(&mut self, name: &str, bytes: &[u8], compressed: bool) -> Result<()> {
-        if bytes.len() > if name.ends_with(".step") { MAX_STEP_PART } else { MAX_PART } {
+        if bytes.len() > part_limit(name) {
             return Err(invalid("part too large"));
         }
         if !self.names.insert(name.to_owned()) {
@@ -84,7 +100,9 @@ impl PackageWriter {
             return Err(invalid("package too large"));
         }
         let method = if compressed { zip::CompressionMethod::Deflated } else { zip::CompressionMethod::Stored };
-        let level = if name.ends_with(".step") { STEP_LEVEL } else { 1 };
+        // A mesh past the file limit uses the STEP level: level 1 of a large payload leaves
+        // more on disk, and this part exists only because compression is what makes it fit.
+        let level = if name.ends_with(".step") || (name.ends_with(".mesh") && bytes.len() > MAX_PART) { STEP_LEVEL } else { 1 };
         let options = zip::write::SimpleFileOptions::default().compression_method(method).compression_level(compressed.then_some(level));
         self.zip.start_file(name, options).map_err(invalid)?;
         self.zip.write_all(bytes).map_err(invalid)
@@ -175,8 +193,9 @@ pub fn check_step_storable(step: &str) -> Result<()> {
 }
 
 /// Write a compact container, deduplicating payloads by SHA-256. Mesh arrays are
-/// stored directly for low save/open latency; STEP sources and small metadata use
-/// fast Deflate. Use the explicit Compact option to compress meshes too.
+/// stored directly for low save/open latency unless a mesh exceeds the file limit;
+/// larger meshes, STEP sources and small metadata use Deflate. Use the explicit
+/// Compact option to compress smaller meshes too.
 pub fn write_design_container(doc: &Document) -> Result<Vec<u8>> {
     write_design_container_with_compression(doc, DesignCompression::Fast)
 }
@@ -240,7 +259,10 @@ fn write_container(
                 let mut metadata = Vec::with_capacity(meshes.len());
                 for mesh in meshes {
                     let bytes = encode_mesh(mesh)?;
-                    let blob = writer.blob(&bytes, "mesh", compression == DesignCompression::Compact)?;
+                    // Fast saves store a mesh that fits. One past the file limit is deflated,
+                    // or it could never be saved (#6600). Compact deflates every mesh.
+                    let compress = compression == DesignCompression::Compact || bytes.len() > MAX_PART;
+                    let blob = writer.blob(&bytes, "mesh", compress)?;
                     let mut value = replace(mesh, fields([("positions", json!([])), ("triangles", json!([]))])).map_err(invalid)?;
                     value.as_object_mut().ok_or_else(|| invalid("mesh metadata"))?.insert("mesh_blob".into(), blob);
                     metadata.push(value);
@@ -322,17 +344,20 @@ fn validate_mesh(mesh: &MeshData) -> Result<()> {
     Ok(())
 }
 
-fn encode_mesh(mesh: &MeshData) -> Result<Vec<u8>> {
-    validate_mesh(mesh)?;
-    let size = mesh
-        .positions
-        .len()
+/// Encoded blob length, or `None` when it would pass [`MAX_MESH_PART`] or overflow.
+fn mesh_encoded_len(positions: usize, triangles: usize) -> Option<usize> {
+    positions
         .checked_mul(8)
-        .and_then(|v| mesh.triangles.len().checked_mul(4).and_then(|t| v.checked_add(t)))
+        .and_then(|v| triangles.checked_mul(4).and_then(|t| v.checked_add(t)))
         .and_then(|v| v.checked_add(24))
-        .filter(|&n| n <= MAX_DESIGN_BYTES)
-        .ok_or_else(|| invalid("mesh too large"))?;
-    let mut bytes = Vec::with_capacity(size);
+        .filter(|&n| n <= MAX_MESH_PART)
+}
+
+fn encode_mesh(mesh: &MeshData) -> Result<Vec<u8>> {
+    let size = mesh_encoded_len(mesh.positions.len(), mesh.triangles.len()).ok_or_else(|| invalid("mesh too large"))?;
+    validate_mesh(mesh)?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(size).map_err(|_| invalid("could not reserve mesh blob"))?;
     bytes.extend_from_slice(MESH_MAGIC);
     bytes.extend_from_slice(&(mesh.positions.len() as u64).to_le_bytes());
     bytes.extend_from_slice(&(mesh.triangles.len() as u64).to_le_bytes());
@@ -423,7 +448,7 @@ impl<R: Read + Seek> PackageReader<R> {
                 return Err(invalid("duplicate or invalid archive entry"));
             }
             total = total.checked_add(part.size()).ok_or_else(|| invalid("expanded size overflow"))?;
-            let limit = if name.ends_with(".step") { MAX_STEP_PART } else { MAX_PART };
+            let limit = part_limit(&name);
             if part.size() > limit as u64 || total > MAX_EXPANDED as u64 {
                 return Err(invalid("expanded package too large"));
             }
@@ -439,7 +464,7 @@ impl<R: Read + Seek> PackageReader<R> {
         self.document.as_ref().filter(|d| d.len() <= limit).cloned().ok_or_else(|| invalid("metadata budget"))
     }
     fn part(&mut self, name: &str) -> Result<Vec<u8>> {
-        self.limited_part(name, if name.ends_with(".step") { MAX_STEP_PART } else { MAX_PART })
+        self.limited_part(name, part_limit(name))
     }
     fn limited_part(&mut self, name: &str, limit: usize) -> Result<Vec<u8>> {
         let part = self.zip.by_name(name).map_err(|e| invalid(format!("required part `{name}`: {e}")))?;
@@ -458,7 +483,7 @@ impl<R: Read + Seek> PackageReader<R> {
         Ok(bytes)
     }
     fn blob(&mut self, value: &Value, field: &str, extension: &str) -> Result<&[u8]> {
-        self.limited_blob(value, field, extension, if extension == "step" { MAX_STEP_PART } else { MAX_PART })
+        self.limited_blob(value, field, extension, part_limit(&format!("blob.{extension}")))
     }
     fn limited_blob(&mut self, value: &Value, field: &str, extension: &str, limit: usize) -> Result<&[u8]> {
         let name = value.get(field).and_then(Value::as_str).ok_or_else(|| invalid(format!("missing `{field}` reference")))?;
@@ -1589,6 +1614,111 @@ mod tests {
         let reopened = crate::step_import_feature(after.as_bytes(), "large.step").unwrap();
         assert_eq!(reopened.body_names, imported.body_names);
         assert_eq!(reopened.import.bodies.len(), 1);
+    }
+
+    /// #6600: a mesh whose binary form is larger than a design file used to import, then
+    /// fail to save (`mesh too large`) before compression was considered.
+    #[test]
+    fn mesh_larger_than_the_file_saves_compressed_and_reopens() {
+        let positions: Arc<[f64]> = Arc::from([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        let overhead = 24 + positions.len() * 8;
+        let min_indices = (MAX_DESIGN_BYTES - overhead) / 4 + 1;
+        let indices = min_indices.div_ceil(3) * 3;
+        let encoded = overhead + indices * 4;
+        assert!(encoded > MAX_DESIGN_BYTES && encoded <= MAX_MESH_PART, "encoded {encoded}");
+        let mesh = MeshData {
+            name: "Large".into(),
+            positions: Arc::clone(&positions),
+            triangles: (0..indices).map(|i| (i % 3) as u32).collect(),
+            color: None,
+        };
+        let mut doc = Document::new("Large mesh");
+        doc.add_feature(FeatureKind::MeshImport { file: "large.stl".into(), meshes: vec![mesh] }, None).unwrap();
+        for compression in [DesignCompression::Fast, DesignCompression::Compact] {
+            let bytes = write_design_container_with_compression(&doc, compression).unwrap();
+            assert!(bytes.len() < MAX_DESIGN_BYTES / 2, "saved {} MB", bytes.len() >> 20);
+            {
+                let mut archive = zip::ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+                let index = (0..archive.len())
+                    .find(|&i| archive.name_for_index(i).and_then(|name| name.ok()).is_some_and(|name| name.ends_with(".mesh")))
+                    .unwrap();
+                let file = archive.by_index(index).unwrap();
+                assert_eq!(file.compression(), zip::CompressionMethod::Deflated);
+                assert_eq!(file.size(), encoded as u64);
+            }
+            let restored = crate::read_design(&bytes).unwrap();
+            assert_eq!(restored, doc, "{compression:?} must preserve every coordinate and triangle index");
+        }
+    }
+
+    #[test]
+    fn mesh_over_the_expanded_cap_is_too_large_before_it_is_encoded() {
+        assert_eq!(mesh_encoded_len(0, 0), Some(24));
+        let at_cap = (MAX_MESH_PART - 24) / 4;
+        assert_eq!(mesh_encoded_len(0, at_cap), Some(MAX_MESH_PART));
+        assert!(mesh_encoded_len(0, at_cap + 1).is_none());
+        let indices = (MAX_MESH_PART / 4 + 3).div_ceil(3) * 3;
+        assert!(mesh_encoded_len(0, indices).is_none());
+        assert!(mesh_encoded_len(usize::MAX, 0).is_none());
+        assert!(mesh_encoded_len(0, usize::MAX).is_none());
+        assert!(mesh_encoded_len(usize::MAX, usize::MAX).is_none());
+    }
+
+    #[test]
+    fn mesh_archives_keep_expansion_and_repeated_reference_limits() {
+        // Change only the declared sizes in a tiny archive: admission must reject these
+        // without allocating or decompressing a half-gigabyte payload.
+        let entries = BTreeMap::from([("blobs/a.mesh".into(), vec![0]), ("blobs/b.mesh".into(), vec![0])]);
+        let original = package(&entries);
+        let headers: Vec<_> = original.windows(4).enumerate().filter_map(|(i, v)| (v == b"PK\x01\x02").then_some(i)).collect();
+        assert_eq!(headers.len(), 2);
+        for sizes in [[MAX_MESH_PART + 1, 1], [MAX_MESH_PART, MAX_MESH_PART]] {
+            let mut bytes = original.clone();
+            for (header, size) in headers.iter().zip(sizes) {
+                bytes[header + 24..header + 28].copy_from_slice(&(size as u32).to_le_bytes());
+            }
+            let error = PackageReader::new(Cursor::new(bytes)).err().unwrap();
+            assert!(error.to_string().contains("expanded package too large"), "{error}");
+        }
+        let mut doc = Document::new("Mesh budget");
+        doc.add_feature(FeatureKind::MeshImport { file: "triangle.stl".into(), meshes: vec![mesh()] }, None).unwrap();
+        let bytes = write_design_container(&doc).unwrap();
+        let entries = parts(&bytes);
+        let metadata: Value = serde_json::from_slice(&entries["document.json"]).unwrap();
+        let reference = &metadata["features"][0]["meshes"][0];
+        let mut reader = PackageReader::new(Cursor::new(&bytes)).unwrap();
+        let length = reader.blob(reference, "mesh_blob", "mesh").unwrap().len();
+        reader.hydrated = MAX_EXPANDED - length;
+        assert!(reader.blob(reference, "mesh_blob", "mesh").is_ok());
+        assert!(reader.blob(reference, "mesh_blob", "mesh").unwrap_err().to_string().contains("resolved payloads too large"));
+    }
+
+    #[test]
+    fn smaller_meshes_keep_the_compression_policy_and_older_designs_reopen() {
+        let mut doc = Document::new("Small mesh");
+        doc.add_feature(FeatureKind::MeshImport { file: "triangle.stl".into(), meshes: vec![mesh()] }, None).unwrap();
+        for (policy, method) in
+            [(DesignCompression::Fast, zip::CompressionMethod::Stored), (DesignCompression::Compact, zip::CompressionMethod::Deflated)]
+        {
+            let bytes = write_design_container_with_compression(&doc, policy).unwrap();
+            let mut entries = parts(&bytes);
+            let mut metadata: Value = serde_json::from_slice(&entries["document.json"]).unwrap();
+            assert_eq!(metadata["format"], solidcraft_doc::format::format_string(solidcraft_doc::format::FORMAT));
+            let blob = metadata["features"][0]["meshes"][0]["mesh_blob"].as_str().unwrap();
+            let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+            assert_eq!(archive.by_name(blob).unwrap().compression(), method);
+            // Format 36 is the last release before large mesh blobs. Its payload needs no
+            // migration, in either stored or compressed form.
+            metadata["format"] = json!("solidcraft/36");
+            metadata.as_object_mut().unwrap().remove("format_pending");
+            entries.insert("document.json".into(), serde_json::to_vec(&metadata).unwrap());
+            let mut legacy = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            for (name, data) in entries {
+                legacy.start_file(name, zip::write::SimpleFileOptions::default().compression_method(method)).unwrap();
+                legacy.write_all(&data).unwrap();
+            }
+            assert_eq!(crate::read_design(&legacy.finish().unwrap().into_inner()).unwrap(), doc);
+        }
     }
 
     #[test]

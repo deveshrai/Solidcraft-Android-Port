@@ -566,7 +566,7 @@ pub(super) fn extract(s: &mut Session, p: &Value) -> Result<Value> {
 
     // This design: the component's history becomes an Import feature of the new design's bodies
     let shown = file.display().to_string();
-    let (_, sf, faces) = session_bodies(&part, &shown)?;
+    let (_, sf, faces, _) = session_bodies(&part, &shown)?;
     // The link has a body per piece: a body in pieces keeps its name on the first
     let mut solids: Vec<String> = Vec::new();
     for b in part.world_state().bodies.iter().filter(|b| !b.body.is_mesh()) {
@@ -592,7 +592,7 @@ pub(super) fn extract(s: &mut Session, p: &Value) -> Result<Value> {
         f.link_faces = faces;
     }
     let path = stored(s.path.as_deref(), &file);
-    s.doc_mut().links.insert(comp, DesignLink { path: path.clone(), feature: id });
+    s.doc_mut().links.insert(comp, DesignLink { path: file.to_string_lossy().into_owned(), feature: id });
     s.refresh();
     rename_joint_faces(s, &state, id, &sc.own);
     if let Some(e) = s.model.result(id).and_then(|r| r.error.clone()) {

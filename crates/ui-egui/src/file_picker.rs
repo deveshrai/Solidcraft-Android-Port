@@ -242,6 +242,68 @@ mod tests {
         assert_eq!(h.app.session.path.as_deref(), path.to_str());
     }
 
+    /// The sheet-metal Output buttons must ask where to save, not discard the headless
+    /// command's returned text (#6847). Cancelling must not export or change the design.
+    #[test]
+    fn sheet_exports_wait_for_a_path_and_write_only_on_completion() {
+        for (command, extension, field) in [("sheet.export_dxf", "dxf", "dxf"), ("sheet.export_bend_table", "csv", "text")] {
+            let mut h = crate::scenario::Harness::new();
+            for (id, params) in [
+                ("sketch.create", json!({"plane": "XY", "name": "Base"})),
+                ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [100, 60]})),
+                ("sketch.finish", json!({})),
+                ("sheet.flange", json!({"sketch": "Base"})),
+                ("sheet.flange", json!({"edges": [[50, 0, 2.5]], "height": "20 mm", "position": "outside"})),
+            ] {
+                h.app.run(id, params).unwrap();
+            }
+            let answer = picker(&mut h.app, true);
+            let before = h.app.session.doc.to_json();
+            let expected = h.app.session.execute(command, &json!({})).unwrap();
+            assert!(!h.app.file_picker_busy(), "programmatic calls return text without a picker");
+            let text = expected[field].as_str().unwrap();
+            assert!(text.contains(if extension == "dxf" { "BEND_UP" } else { "Body1" }));
+            let path = h.dir.join(format!("flat.{extension}"));
+            for outcome in ["cancel", "fail", "save"] {
+                h.app.start(command);
+                h.frames(2);
+                assert!(h.app.file_picker_busy(), "{command} must open the save picker");
+                assert!(!path.exists());
+                assert_eq!(h.app.session.doc.to_json(), before);
+                let chosen = match outcome {
+                    "save" => Some(path.clone()),
+                    "fail" => Some(h.dir.join("missing").join(format!("flat.{extension}"))),
+                    _ => None,
+                };
+                finish(&mut h.app, &answer, chosen.map(|p| p.to_string_lossy().into_owned()));
+                assert_eq!(path.exists(), outcome == "save");
+                if outcome == "fail" {
+                    assert!(h.app.status.as_ref().is_some_and(|(_, _, error)| *error));
+                }
+                assert_eq!(h.app.session.doc.to_json(), before);
+            }
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+            assert!(h.app.status.as_ref().is_some_and(|(text, _, error)| text.starts_with("Exported ") && !error));
+        }
+    }
+
+    #[test]
+    fn sheet_exports_without_a_sheet_report_an_error_without_a_picker() {
+        let mut h = crate::scenario::Harness::new();
+        let asked = Rc::new(Cell::new(0));
+        let count = asked.clone();
+        h.app.services.pick_save = Some(Box::new(move |_, _| {
+            count.set(count.get() + 1);
+            Box::pin(std::future::ready(None))
+        }));
+        for command in ["sheet.export_dxf", "sheet.export_bend_table"] {
+            h.app.start(command);
+            assert_eq!(asked.get(), 0);
+            assert!(!h.app.file_picker_busy());
+            assert!(h.app.status.as_ref().is_some_and(|(_, _, error)| *error));
+        }
+    }
+
     #[test]
     fn close_and_quit_wait_for_save_as_and_cancel_or_failure_keeps_changes() {
         for quit in [false, true] {

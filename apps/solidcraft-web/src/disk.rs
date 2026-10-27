@@ -114,6 +114,46 @@ pub fn opens_design(extensions: &[&str]) -> bool {
     extensions.is_empty() || extensions.iter().any(|e| solidcraft_engine::io::DESIGN_EXTS.contains(e))
 }
 
+/// Where an Open for `extensions` (what the command reads; `&[]`: anything) is answered.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OpenRoute {
+    /// The browser's open dialog for a design: the file keeps its handle, so Save writes back.
+    Disk,
+    /// The "Files in this browser" window, where the browser can't open a design from the disk.
+    Panel,
+    /// A plain file input that offers these types: the file is read into the engine's files and
+    /// the command runs on it (Insert DXF or SVG, images, meshes, imported settings).
+    Upload,
+}
+
+/// Choose how an Open for `extensions` asks for its file; `api`: the browser can open a file
+/// from the disk and keep its handle.
+pub fn open_route(api: bool, extensions: &[&str]) -> OpenRoute {
+    match (opens_design(extensions), api) {
+        (true, true) => OpenRoute::Disk,
+        (true, false) => OpenRoute::Panel,
+        (false, _) => OpenRoute::Upload,
+    }
+}
+
+/// The `accept` list of a file input for `extensions` (with or without their dot): ".dxf,.svg".
+pub fn accept_list(extensions: &[&str]) -> String {
+    let list: Vec<String> = extensions
+        .iter()
+        .map(|e| e.trim().trim_start_matches('.'))
+        .filter(|e| !e.is_empty())
+        .map(|e| format!(".{}", e.to_ascii_lowercase()))
+        .collect();
+    list.join(",")
+}
+
+/// The largest file an upload for `extensions` reads: images go into a canvas, which has a size
+/// limit, so a bigger one is refused before it is read. `None`: the importer checks the file.
+pub fn upload_limit(extensions: &[&str]) -> Option<usize> {
+    let image = |e: &&str| ["png", "jpg", "jpeg"].contains(&e.trim_start_matches('.').to_ascii_lowercase().as_str());
+    (!extensions.is_empty() && extensions.iter().all(image)).then_some(solidcraft_engine::doc::canvas::MAX_CANVAS_BYTES)
+}
+
 /// The file type a Save As dialog offers for `name`: (description, MIME type, extension).
 pub fn save_type(name: &str) -> (&'static str, &'static str, &'static str) {
     let json = std::path::Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case("json"));
@@ -140,7 +180,7 @@ mod web {
     use wasm_bindgen_futures::{JsFuture, spawn_local};
     use web_sys::{FileSystemFileHandle, IdbDatabase, IdbObjectStore, IdbOpenDbRequest, IdbRequest, IdbTransactionMode};
 
-    use super::{HANDLE_MAX_AGE_MS, is_abort, make_id, opens_design, parse, path, plan_prune, save_type};
+    use super::{HANDLE_MAX_AGE_MS, is_abort, make_id, parse, path, plan_prune, save_type};
     use crate::files::{Files, err, read_handle};
 
     const DB: &str = "solidcraft-disk-handles";
@@ -294,7 +334,7 @@ mod web {
         let options = Object::new();
         let _ = Reflect::set(&options, &"multiple".into(), &JsValue::FALSE);
         let extensions = Array::new();
-        for e in [".solidcraft", ".solvecraft", ".json", ".step", ".stp", ".3mf", ".stl", ".obj", ".glb", ".gltf", ".fcstd", ".3dm"] {
+        for e in [".solidcraft", ".solvecraft", ".json", ".step", ".stp", ".3mf", ".stl", ".obj", ".glb", ".gltf", ".fcstd", ".3dm", ".dxf", ".svg"] {
             extensions.push(&e.into());
         }
         let accept = Object::new();
@@ -313,11 +353,6 @@ mod web {
         let p = if solidcraft_engine::io::is_design_path(&name) { register(handle) } else { format!("{}{name}", crate::files::UPLOAD) };
         vfs::insert(&p, bytes);
         p
-    }
-
-    /// Does an Open for `extensions` use the browser's open dialog?
-    pub fn handles_open(extensions: &[&str]) -> bool {
-        supported() && opens_design(extensions)
     }
 
     // ---- writing ------------------------------------------------------------------------
@@ -619,6 +654,21 @@ mod tests {
         assert!(opens_design(&["solvecraft"]));
         assert!(!opens_design(&["step", "stp"]));
         assert!(!opens_design(&["json"]));
+    }
+
+    /// Insert DXF or SVG, images and other non-design files get a file input that offers their
+    /// types in every browser (#2052); designs keep the disk dialog or the browser's files.
+    #[test]
+    fn opens_of_other_files_use_a_file_input_for_their_types() {
+        assert_eq!(open_route(true, &["dxf"]), OpenRoute::Upload);
+        assert_eq!(open_route(false, &["png", "jpg", "jpeg"]), OpenRoute::Upload);
+        assert_eq!(open_route(true, &[]), OpenRoute::Disk);
+        assert_eq!(open_route(false, &["solidcraft"]), OpenRoute::Panel);
+        assert_eq!(accept_list(&["dxf"]), ".dxf");
+        assert_eq!(accept_list(&["png", ".JPG", "", "jpeg"]), ".png,.jpg,.jpeg");
+        assert_eq!(accept_list(&[]), "");
+        assert!(upload_limit(&["png", "jpg", "jpeg"]).is_some());
+        assert_eq!(upload_limit(&["dxf"]), None);
     }
 
     #[test]

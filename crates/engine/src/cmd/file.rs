@@ -1,4 +1,4 @@
-//! Documents and files: new, open (designs and STEP), insert STEP, save, export.
+//! Documents and files: new, open designs, CAD files and drawings, insert STEP, save, export.
 
 #[path = "file_thumbnail.rs"]
 mod thumbnail;
@@ -20,7 +20,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("open")
         .key("Ctrl+O")
         .noundo()
-        .params("path: .solidcraft design, or a .step/.stp/.igs/.fcstd/.3dm/.3mf/.stl/.obj/.glb/.gltf file (STEP, IGES, FreeCAD, Rhino, 3MF, STL, OBJ or glTF; opens as a new design holding the file as a component named after it, as file.insert_step and file.insert_mesh make); up?: z|y for a STEP, IGES, FreeCAD, Rhino or glTF file (see file.insert_step and file.insert_mesh); names?: auto|solid|product|instance for a STEP, IGES, FreeCAD or Rhino file (see file.insert_step); read_only?: bool (a design: saving to its own file is refused, file.save_as keeps the changes elsewhere) → open_elsewhere: {host, user, app, opened} when another SolidCraft has the design open (its lock file is fresh)"),
+        .params("path: .solidcraft design, .dxf/.svg drawing (opens as a new, unsaved design with an XY sketch, using sketch.insert_dxf/sketch.insert_svg units and defaults), or a .step/.stp/.igs/.fcstd/.3dm/.3mf/.stl/.obj/.glb/.gltf file (STEP, IGES, FreeCAD, Rhino, 3MF, STL, OBJ or glTF; opens as a new design holding the file as a component named after it, as file.insert_step and file.insert_mesh make); up?: z|y for a STEP, IGES, FreeCAD, Rhino or glTF file (see file.insert_step and file.insert_mesh); names?: auto|solid|product|instance for a STEP, IGES, FreeCAD or Rhino file (see file.insert_step); read_only?: bool (a design: saving to its own file is refused, file.save_as keeps the changes elsewhere) → open_elsewhere: {host, user, app, opened} when another SolidCraft has the design open (its lock file is fresh)"),
     CommandSpec::new("file.insert_step", "Insert STEP", insert_step)
         .at("SOLID", "INSERT")
         .icon("import")
@@ -36,6 +36,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("path? (default: current file); format?: container|json (default: json for .json, otherwise container); compression?: fast|compact (default: fast); cache?: bool (the evaluated model, so the design opens without rebuilding; default: true); preview?: bool (saved display meshes, default: false); overwrite?: bool (replace the design's file even though another program or computer changed it since it was opened or saved; without it that save is refused)"),
     CommandSpec::new("file.save_as", "Save As", save_as)
         .icon("save")
+        .key("Ctrl+Shift+S")
         .noundo()
         .params("path; format?: container|json (default: json for .json, otherwise container); compression?: fast|compact (default: fast); cache?: bool (the evaluated model, so the design opens without rebuilding; default: true); preview?: bool (saved display meshes, default: false); overwrite?: bool (as file.save, when `path` is the design's own file)"),
     CommandSpec::new("doc.recovery_list", "Recoverable Designs", recovery_list).icon("restore")
@@ -260,6 +261,18 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
     if !solidcraft_io::is_step_path(path) && !solidcraft_io::is_gltf_path(path) && p.get("up").is_some_and(|v| !v.is_null()) {
         return Err(bad("doc.open", "`up` applies to STEP, IGES and glTF files only"));
     }
+    if let Some(command) = super::drawing_import_command(path) {
+        let stem = std::path::Path::new(path).file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into());
+        let mut fresh = Session::new(Document::new(&stem));
+        let mut out = fresh.execute(command, &json!({"path": path}))?;
+        fresh.undo.clear();
+        s.replace_design(fresh);
+        out["path"] = json!(path);
+        out["name"] = json!(s.doc.name);
+        out["features"] = json!(s.doc.features.len());
+        out["errors"] = json!(s.model.results.iter().filter(|r| r.error.is_some()).count());
+        return Ok(out);
+    }
     if solidcraft_io::is_step_path(path) || solidcraft_io::is_mesh_path(path) {
         // A new, unsaved design holding the file's bodies.
         let stem = std::path::Path::new(path).file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into());
@@ -292,8 +305,7 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(stem) = default_name_for(&doc.name, path) {
         doc.name = stem;
     }
-    s.replace_design(Session::opened(doc, saved.as_ref()));
-    s.path = Some(path.to_string());
+    s.replace_design(Session::opened_at(doc, saved.as_ref(), Some(path)));
     s.disk = disk;
     s.read_only = read_only;
     let errors = s.model.results.iter().filter(|r| r.error.is_some()).count();
@@ -390,16 +402,7 @@ fn write_file(s: &mut Session, path: &str, format: &str, compression: &str, prev
         "compact" => solidcraft_io::DesignCompression::Compact,
         _ => return Err(bad("file.save", "compression must be fast or compact")),
     };
-    // Linked designs are kept relative to the folder the design is saved in.
-    let links = super::component_link::rebased(&s.doc, s.path.as_deref(), path);
-    let old_links = (links != s.doc.links).then(|| std::mem::replace(&mut s.doc_mut().links, links));
-    let r = write_bytes(s, path, format, compression, preview, cache);
-    if r.is_err()
-        && let Some(old) = old_links
-    {
-        s.doc_mut().links = old;
-    }
-    r
+    write_bytes(s, path, format, compression, preview, cache)
 }
 
 fn write_bytes(
@@ -411,8 +414,8 @@ fn write_bytes(
     cache: bool,
 ) -> Result<Value> {
     let bytes = match format {
-        "container" => s.design_container(compression, preview, cache)?,
-        "json" => solidcraft_io::write_design(&s.design()),
+        "container" => s.design_container_at(Some(path), compression, preview, cache)?,
+        "json" => solidcraft_io::write_design(&s.design_at(Some(path))),
         _ => return Err(bad("file.save", "format must be container or json")),
     };
     // Atomic, keeping the version being replaced as `<file>.bak`.
@@ -425,17 +428,38 @@ fn write_bytes(
 }
 
 impl Session {
+    /// Open a design with its file location, resolving component links before history keeps
+    /// them. Absolute in-memory targets survive Save As, undo, redo and recovery unchanged.
+    pub fn opened_at(mut doc: Document, saved: Option<&solidcraft_doc::SavedModel>, path: Option<&str>) -> Self {
+        super::component_link::resolve_design_links(&mut doc, path);
+        let mut session = Self::opened(doc, saved);
+        session.path = path.map(str::to_owned);
+        session
+    }
+
+    /// Prepare only the file's copy with relative paths; saving never rewrites live history.
+    pub(crate) fn design_at(&self, path: Option<&str>) -> std::borrow::Cow<'_, Document> {
+        let mut design = std::borrow::Cow::Borrowed(&*self.doc);
+        if let Some(path) = path {
+            let links = super::component_link::rebased(&self.doc, self.path.as_deref(), path);
+            if links != self.doc.links {
+                design.to_mut().links = links;
+            }
+        }
+        if !self.visibility.is_empty() {
+            design.to_mut().visibility = self.visibility.clone();
+        }
+        design
+    }
+
     /// Take up a save that ran on `done`, a [`Session::scratch`] copy of this session that
     /// `file.save` or `file.save_as` ran on (on another thread, so the window keeps drawing)
-    /// while this one did not change: the name and link paths the save gave the design, its
+    /// while this one did not change: the name the save gave the design, its
     /// file, and its saved state, as running the command here would have left them.
     pub fn adopt_save(&mut self, done: &Session) {
         if done.doc.name != self.doc.name {
             let (from, to) = (self.doc.name.clone(), done.doc.name.clone());
             rename_design(self, &from, &to);
-        }
-        if done.doc.links != self.doc.links {
-            self.doc_mut().links.clone_from(&done.doc.links);
         }
         self.path.clone_from(&done.path);
         self.disk = done.disk;
@@ -455,7 +479,17 @@ impl Session {
     /// Container bytes for desktop and browser saves. Only already evaluated bodies
     /// and warm meshes are eligible; saving never forces evaluation or tessellation.
     pub fn design_container(&self, compression: solidcraft_io::DesignCompression, preview: bool, cache: bool) -> solidcraft_io::Result<Vec<u8>> {
-        let design = self.design();
+        self.design_container_at(self.path.as_deref(), compression, preview, cache)
+    }
+
+    fn design_container_at(
+        &self,
+        path: Option<&str>,
+        compression: solidcraft_io::DesignCompression,
+        preview: bool,
+        cache: bool,
+    ) -> solidcraft_io::Result<Vec<u8>> {
+        let design = self.design_at(path);
         let geometry = cache.then(|| saved_geometry(self, &design)).flatten();
         let preview = preview.then(|| saved_preview(self)).flatten();
         let thumbnail = cache.then(|| thumbnail::saved(self)).flatten();
@@ -696,8 +730,7 @@ fn recover(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(stem) = entry.path.as_deref().and_then(|path| default_name_for(&doc.name, path)) {
         doc.name = stem;
     }
-    s.replace_design(Session::new(doc));
-    s.path = entry.path.clone();
+    s.replace_design(Session::opened_at(doc, None, entry.path.as_deref()));
     s.mark_unsaved();
     if bool_(p, "discard").unwrap_or(false) {
         crate::recovery::remove(&dir, id)?;
@@ -761,6 +794,35 @@ mod tests {
             assert!(e.contains("`quality` must be standard, fine or finest"), "{bad}: {e}");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opening_drawing_files_creates_an_unsaved_xy_sketch() {
+        let dir = name_dir("drawing-open");
+        let dxf = "0\nSECTION\n2\nENTITIES\n0\nLINE\n10\n0\n20\n0\n11\n10\n21\n0\n0\nLINE\n10\n10\n20\n0\n11\n10\n21\n10\n0\nARC\n10\n0\n20\n0\n40\n5\n50\n0\n51\n90\n0\nENDSEC\n0\nEOF\n";
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 L10 0 L10 10"/><circle cx="5" cy="5" r="2"/></svg>"#;
+        for (file, text) in [("outline.DXF", dxf), ("outline.SVG", svg)] {
+            let path = dir.join(file);
+            std::fs::write(&path, text).unwrap();
+            let mut s = Session::default();
+            s.execute("sketch.create", &json!({"plane":"YZ"})).unwrap();
+            let result = s.execute("doc.open", &json!({"path":path})).unwrap();
+            assert_eq!(result["errors"], 0);
+            assert_eq!(s.doc.features.len(), 1);
+            let id = s.active_sketch.unwrap();
+            let sketch = s.doc.sketch(id).unwrap();
+            assert_eq!(s.model.state().sketch(id).unwrap().plane, solidcraft_geom::Plane::XY);
+            assert_eq!(sketch.curves.len(), 3);
+            assert_eq!(s.doc.name, "outline");
+            assert!(s.path.is_none(), "Save must ask for a design path");
+            assert!(s.is_dirty());
+            assert!(s.undo.is_empty());
+            let before = s.doc.clone();
+            std::fs::write(&path, "invalid drawing").unwrap();
+            assert!(s.execute("doc.open", &json!({"path":path})).is_err());
+            assert_eq!(s.doc, before, "a failed open preserves the current design");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// #3044: a save run on a scratch copy of the session (on a worker, so the window keeps

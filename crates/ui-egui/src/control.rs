@@ -41,7 +41,10 @@
 //!   and replies once the command has run (`"animate": false` skips that one call)
 //! - `ui.resize {width, height}`, `app.quit`
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use solidcraft_engine::io::vfs;
@@ -85,6 +88,81 @@ pub(crate) fn chat_turn_cancelled(turn: Option<&std::sync::atomic::AtomicBool>) 
 
 pub(crate) fn cancelled_chat_response() -> Value {
     json!({"ok": false, "error": "not run: the agent chat turn ended or its document tab was left"})
+}
+
+/// The active design's id and revision for control connections that sent `control.subscribe`
+/// (#6985): the window publishes them each frame while one is subscribed, and each such
+/// connection waits for them to move, then sends a `design.changed` line.
+#[derive(Default)]
+pub struct DesignWatch {
+    subscribers: AtomicUsize,
+    now: Mutex<Option<(String, u64)>>,
+    moved: Condvar,
+}
+
+/// The app's [`DesignWatch`].
+pub static DESIGN_WATCH: DesignWatch = DesignWatch::new();
+
+impl DesignWatch {
+    pub const fn new() -> Self {
+        DesignWatch { subscribers: AtomicUsize::new(0), now: Mutex::new(None), moved: Condvar::new() }
+    }
+
+    fn now(&self) -> MutexGuard<'_, Option<(String, u64)>> {
+        self.now.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The design as it is now; waiters wake only when it moved. Only the latest is kept, so
+    /// changes made faster than a connection sends them go out as one.
+    pub fn publish(&self, document_id: &str, revision: u64) {
+        let mut now = self.now();
+        if now.as_ref().is_some_and(|(id, r)| id == document_id && *r == revision) {
+            return;
+        }
+        *now = Some((document_id.to_string(), revision));
+        self.moved.notify_all();
+    }
+
+    /// Whether a connection is subscribed: the window publishes only then.
+    pub fn subscribed(&self) -> bool {
+        self.subscribers.load(Ordering::Relaxed) > 0
+    }
+
+    /// Count a subscribed connection until the returned guard is dropped.
+    pub fn join(&'static self) -> Subscriber {
+        self.subscribers.fetch_add(1, Ordering::Relaxed);
+        Subscriber(self)
+    }
+
+    /// Wait up to `wait` for the design to differ from `seen`, or for `stop`; the design then
+    /// (`None` before anything was published).
+    pub fn wait(&self, seen: &(String, u64), stop: &AtomicBool, wait: Duration) -> Option<(String, u64)> {
+        let unmoved = |now: &mut Option<(String, u64)>| now.as_ref() == Some(seen) && !stop.load(Ordering::Relaxed);
+        let (now, _) = self.moved.wait_timeout_while(self.now(), wait, unmoved).unwrap_or_else(PoisonError::into_inner);
+        now.clone()
+    }
+}
+
+/// A subscribed connection, counted by its [`DesignWatch`] while this lives.
+pub struct Subscriber(&'static DesignWatch);
+
+impl Drop for Subscriber {
+    fn drop(&mut self) {
+        self.0.subscribers.fetch_sub(1, Ordering::Relaxed);
+        // Under the lock, so a connection about to wait sees its `stop` set before it does.
+        let _now = self.0.now();
+        self.0.moved.notify_all();
+    }
+}
+
+/// Publish the active design for subscribed connections ([`DesignWatch`]). Called at the end of
+/// each frame's logic (which runs while the window is hidden too) and of its drawing, so a
+/// change made in either goes out in that frame.
+pub(crate) fn publish_design(app: &mut SolveApp, watch: &DesignWatch) {
+    if watch.subscribed() {
+        let revision = app.session.design_revision();
+        watch.publish(&app.session.document_id, revision);
+    }
 }
 
 pub enum Outcome {
@@ -148,9 +226,18 @@ fn execute(app: &mut SolveApp, id: &str, params: Value) -> Result<Value, String>
     if r.is_ok()
         && !matches!(
             id,
-            "view.layout"
+            "view.fit"
+                | "view.home"
+                | "view.tool"
+                | "view.spin"
+                | "view.visual_style"
+                | "view.grid"
+                | "view.ground_shadow"
+                | "view.navigation_bar"
+                | "view.layout"
                 | "view.navigate"
                 | "view.ambient_occlusion"
+                | "view.perspective"
                 | "view.graphics_preset"
                 | "view.history_layout"
                 | "browser.expand_all"
@@ -207,6 +294,10 @@ fn batch(app: &mut SolveApp, p: &Value) -> Outcome {
     // batch: `agent_cursor::intercept`.)
     if let Some(why) = batch_refusal(steps) {
         return err(why);
+    }
+    // A step the batch would refuse at its turn refuses it now, before anything runs (#5853).
+    if let Some(refusal) = solidcraft_engine::batch_preflight::check(steps, app.session.param_check, &["view.pick"]) {
+        return ok(refusal.reply(steps.len()));
     }
     let rollback = p.get("rollback").and_then(Value::as_bool).unwrap_or(true);
     let profile = p.get("profile").and_then(Value::as_bool).unwrap_or(false);
@@ -292,7 +383,7 @@ pub(crate) fn view_scene(app: &SolveApp, guides: solidcraft_engine::view::Guides
         &app.cam,
         crate::viewport::section_plane(app),
         solidcraft_engine::view::world_curve_parts,
-        &crate::viewport::scene_palette(app.ui.dark, app.preferences.color_vision),
+        &crate::viewport::scene_palette(app.viewport_dark(), app.preferences.color_vision),
         guides,
         app.preferences.cosmetic_threads,
     );
@@ -391,6 +482,14 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
         }
         "engine.commands" => wrap(app.session.execute("engine.commands", &json!({})).map_err(|e| e.to_string())),
         "document.inspect" => wrap(app.session.execute("document.inspect", p).map_err(|e| e.to_string())),
+        "document.revision" => wrap(app.session.execute("document.revision", p).map_err(|e| e.to_string())),
+        // The connection already counts as subscribed (`DesignWatch::join`), and its events start
+        // from this answer: published first, so no event repeats it and none older follows.
+        "control.subscribe" => {
+            let revision = app.session.design_revision();
+            DESIGN_WATCH.publish(&app.session.document_id, revision);
+            ok(json!({"document_id": app.session.document_id, "revision": revision}))
+        }
         "ui.messages" => ok(crate::messages::control(app, p)),
         "ui.inspect" => ok(json!({
             "render": crate::render_workspace::inspect_state(app),
@@ -639,6 +738,10 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
             "dialog": app.dialog.as_ref().map(|d| d.inputs.iter().map(|i| json!({"label": i.label, "items": i.items})).collect::<Vec<_>>()),
             "hover": app.viewport.hover.as_ref().map(|h| format!("{h:?}")),
             "dimensions": crate::dim_view::drawn().into_iter().map(|(id, p)| json!({"id": id, "x": p.x, "y": p.y})).collect::<Vec<_>>(),
+            "shown_dimensions": crate::dim_view::model_drawn()
+                .into_iter()
+                .map(|(sketch, id, p)| json!({"sketch": sketch, "id": id, "x": p.x, "y": p.y}))
+                .collect::<Vec<_>>(),
             "dimension_selected": crate::dim_view::selected(app),
             "dimension_editing": crate::dim_view::editing(),
         })),
@@ -1158,6 +1261,101 @@ mod tests {
         assert!(app.synthetic.is_empty());
     }
 
+    /// #6646: `document.revision` names the active design and what it holds. The revision moves on
+    /// an edit, a parameter, a hide, an undo and a redo, never on a read or a selection, and never
+    /// comes back; the id stays through edits and is another for another tab of the same name.
+    #[test]
+    fn document_revision_follows_the_design_and_tells_tabs_apart() {
+        fn now(h: &mut crate::scenario::Harness) -> (String, u64) {
+            let r = h.call("document.revision", json!({}));
+            assert_eq!(r["ok"], true, "{r}");
+            (r["result"]["document_id"].as_str().unwrap_or_default().to_string(), r["result"]["revision"].as_u64().unwrap_or_default())
+        }
+        fn run(h: &mut crate::scenario::Harness, command: &str, params: Value) {
+            let r = h.call("engine.execute", json!({"command": command, "params": params}));
+            assert_eq!(r["ok"], true, "{command}: {r}");
+        }
+        let mut h = crate::scenario::Harness::new();
+        let (id, mut last) = now(&mut h);
+        assert!(!id.is_empty() && last > 0, "{id} {last}");
+        // Reads and a selection leave it as it is (the view's own revision moves on a selection).
+        let view = h.app.session.revision;
+        h.call("document.inspect", json!({}));
+        h.call("ui.inspect", json!({}));
+        run(&mut h, "select.clear", json!({}));
+        assert!(h.app.session.revision > view);
+        assert_eq!(now(&mut h), (id.clone(), last));
+        for (command, params) in [
+            ("solid.box", json!({"length": 10, "width": 10, "height": 10})),
+            ("parameters.add", json!({"name": "w", "expression": "12 mm"})),
+            ("browser.visibility", json!({"folder": "bodies", "visible": false})),
+            ("edit.undo", json!({})),
+            ("edit.redo", json!({})),
+        ] {
+            run(&mut h, command, params);
+            let (same, revision) = now(&mut h);
+            assert_eq!(same, id, "{command} keeps the id");
+            assert!(revision > last, "{command}: {revision} after {last}");
+            assert_eq!(now(&mut h).1, revision, "asking again after {command}");
+            last = revision;
+        }
+        // Another tab with the same name is another design; back on the first, its revision is
+        // the one it had.
+        h.call("ui.documents", json!({"action": "new"}));
+        let tabs = h.call("ui.documents", json!({}))["result"]["documents"].clone();
+        assert_eq!(tabs[0]["name"], tabs[1]["name"], "{tabs}");
+        let (other, other_revision) = now(&mut h);
+        assert_ne!(other, id);
+        assert!(other_revision > last, "{other_revision} after {last}");
+        h.call("ui.documents", json!({"action": "switch", "index": 0}));
+        assert_eq!(now(&mut h), (id.clone(), last));
+        // A design started in its place is another one too, and its revision is new.
+        run(&mut h, "file.new", json!({}));
+        let (fresh, revision) = now(&mut h);
+        assert!(fresh != id && fresh != other, "{fresh}");
+        assert!(revision > other_revision, "{revision} after {other_revision}");
+    }
+
+    /// #6985: while a connection is subscribed, a frame publishes the active design as
+    /// `document.revision` names it: the same after a selection, a new revision after an edit,
+    /// another id on another tab; nothing while none is. `control.subscribe` answers what
+    /// `document.revision` does, and a connection that waited through several changes is told
+    /// only of the latest.
+    #[test]
+    fn subscribed_frames_publish_the_design() {
+        static WATCH: DesignWatch = DesignWatch::new();
+        let now = || WATCH.now().clone();
+        let mut h = crate::scenario::Harness::new();
+        publish_design(&mut h.app, &WATCH);
+        assert_eq!(now(), None, "nobody subscribed");
+        let counted = WATCH.join();
+        let subscribed = h.call("control.subscribe", json!({}));
+        assert_eq!(subscribed["result"], h.call("document.revision", json!({}))["result"], "{subscribed}");
+        publish_design(&mut h.app, &WATCH);
+        let (id, first) = now().unwrap();
+        assert_eq!(json!({"document_id": id, "revision": first}), subscribed["result"]);
+        h.call("engine.execute", json!({"command": "select.clear", "params": {}}));
+        publish_design(&mut h.app, &WATCH);
+        assert_eq!(now(), Some((id.clone(), first)), "a selection is no change");
+        h.call("engine.execute", json!({"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10}}));
+        publish_design(&mut h.app, &WATCH);
+        let (same, second) = now().unwrap();
+        assert!(same == id && second > first, "{same} {second} after {first}");
+        h.call("engine.execute", json!({"command": "edit.undo", "params": {}}));
+        publish_design(&mut h.app, &WATCH);
+        let third = now().unwrap().1;
+        assert!(third > second, "{third} after {second}");
+        let stop = AtomicBool::new(false);
+        assert_eq!(WATCH.wait(&(id.clone(), first), &stop, Duration::ZERO), Some((id.clone(), third)));
+        // New on a blank design reuses its tab: the box comes back first.
+        h.call("engine.execute", json!({"command": "edit.redo", "params": {}}));
+        h.call("ui.documents", json!({"action": "new"}));
+        publish_design(&mut h.app, &WATCH);
+        assert!(now().is_some_and(|(other, _)| other != id), "{:?}", now());
+        drop(counted);
+        assert!(!WATCH.subscribed());
+    }
+
     fn render(app: &mut SolveApp, path: &std::path::Path) -> Vec<u8> {
         let (req, _rx) = ControlRequest::new("ui.render", json!({"path": path.to_string_lossy(), "width": 200, "height": 140}));
         match handle(app, &crate::fonts::test_context(), &req) {
@@ -1168,7 +1366,7 @@ mod tests {
     }
 
     /// `ui.render` draws in the window's theme (#974): its background is the viewport's, light
-    /// or dark.
+    /// or dark, and with the 3D view in the other theme's colours, the view's (#4146).
     #[test]
     fn model_render_is_in_the_windows_theme() {
         if !crate::gpu::test_picture_renderer() {
@@ -1179,9 +1377,15 @@ mod tests {
         let mut app = SolveApp::new(s, Services::default());
         let dir = std::env::temp_dir().join(format!("solidcraft-render-theme-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        for dark in [false, true, false] {
-            app.ui.dark = dark;
-            let png = render(&mut app, &dir.join(format!("dark-{dark}.png")));
+        use crate::theme::ViewportTheme;
+        for (window, view) in
+            [(false, ViewportTheme::Theme), (true, ViewportTheme::Theme), (true, ViewportTheme::Light), (false, ViewportTheme::Dark)]
+        {
+            app.ui.dark = window;
+            app.preferences.viewport_theme = view;
+            let dark = app.viewport_dark();
+            let theme = format!("{window}-{}", view.id());
+            let png = render(&mut app, &dir.join(format!("{theme}.png")));
             let img = image::load_from_memory(&png).unwrap().to_rgba8();
             // The top row is the background's top: its most common colour.
             let mut counts = std::collections::HashMap::new();
@@ -1191,7 +1395,7 @@ mod tests {
             let top = counts.into_iter().max_by_key(|(_, n)| *n).map(|(c, _)| c).unwrap();
             let want = if dark { crate::theme::Tokens::dark() } else { crate::theme::Tokens::light() }.viewport_top;
             let near = top.iter().zip([want.r(), want.g(), want.b()]).all(|(a, b)| a.abs_diff(b) <= 2);
-            assert!(near, "dark {dark}: the render's top row is {top:?}, the window's background {want:?}");
+            assert!(near, "{theme}: the render's top row is {top:?}, the view's background {want:?}");
         }
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1389,7 +1593,8 @@ mod tests {
         assert_eq!(rows[1]["index"], 1);
         assert!(rows[1]["profile"]["boolean_ms"].as_f64().is_some_and(|ms| ms > 0.0), "{v}");
         assert!(v["result"]["total_ms"].as_f64().is_some(), "{v}");
-        let v = batch(&mut h, json!({"timings": true, "commands": [{"command": "NoSuchCommand"}]}));
+        // A step that fails at its turn is timed too.
+        let v = batch(&mut h, json!({"timings": true, "commands": [{"command": "solid.extrude", "params": {"distance": "bogus +"}}]}));
         assert_eq!(v["result"]["timings"].as_array().map(Vec::len), Some(1), "{v}");
         assert!(v["result"]["timings"][0].get("profile").is_none(), "{v}");
         let v = batch(&mut h, json!({"commands": [{"command": "solid.box", "params": {"length": 1, "width": 1, "height": 1}}]}));
@@ -1426,7 +1631,8 @@ mod tests {
             &mut h,
             json!({"rollback": false, "commands": [
                 {"command": "solid.sphere", "params": {"radius": 3}},
-                {"command": "NoSuchCommand"},
+                // Fails at its turn (an unknown command would be refused before the first step, #5853).
+                {"command": "solid.extrude", "params": {"distance": "bogus +"}},
             ]}),
         );
         assert_eq!(v["result"]["failed"]["index"], 1, "{v}");
@@ -1440,6 +1646,45 @@ mod tests {
         let v = batch(&mut h, json!({"commands": [{"params": {}}]}));
         assert_eq!(v["result"]["failed"]["index"], 0, "{v}");
         assert!(v["result"]["failed"]["error"].as_str().is_some_and(|e| e.contains("missing `command`")), "{v}");
+    }
+
+    /// #5853: a step the batch would refuse at its turn (an unknown command; with strict
+    /// parameter checking, a call that breaks its command's contract) refuses the batch before
+    /// its first step runs, however late the step is.
+    #[test]
+    fn engine_batch_refuses_a_bad_step_before_the_first_runs() {
+        let mut h = crate::scenario::Harness::new();
+        let before = inspect(&mut h);
+        let v = batch(
+            &mut h,
+            json!({"commands": [
+                {"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10}},
+                {"command": "solid.sphere", "params": {"radius": 3, "center": [50, 0, 0]}},
+                {"command": "solid.extrud", "params": {"distance": 5}},
+            ]}),
+        );
+        assert_eq!(v["ok"], true, "{v}");
+        let r = &v["result"];
+        assert_eq!((r["completed"].clone(), r["failed"]["index"].clone(), r["undone"].clone()), (json!(0), json!(2), json!(0)), "{v}");
+        assert!(r["failed"]["error"].as_str().is_some_and(|e| e.starts_with("unknown command `solid.extrud`") && e.contains("solid.extrude")), "{v}");
+        assert_eq!(r["not_run"], json!([0, 1, 2]), "{v}");
+        let after = inspect(&mut h);
+        assert_eq!((after["bodies"].clone(), after["undo"].clone()), (before["bodies"].clone(), before["undo"].clone()), "nothing ran: {after}");
+        // Strict checking refuses a broken contract up front too; off, the step runs (and the
+        // box command reads what it knows).
+        h.app.session.param_check = solidcraft_engine::schema::ParamCheck::Strict;
+        let steps = json!([
+            {"command": "solid.sphere", "params": {"radius": 3}},
+            {"command": "solid.box", "params": {"lenght": 10, "width": 10, "height": 10}},
+        ]);
+        let v = batch(&mut h, json!({"commands": steps}));
+        assert_eq!((v["result"]["completed"].clone(), v["result"]["failed"]["index"].clone()), (json!(0), json!(1)), "{v}");
+        assert!(v["result"]["failed"]["error"].as_str().is_some_and(|e| e.contains("lenght")), "{v}");
+        assert_eq!(inspect(&mut h)["bodies"], before["bodies"], "nothing ran");
+        // `view.pick` is answered by the app, outside the command registry: not refused.
+        h.app.session.param_check = solidcraft_engine::schema::ParamCheck::Off;
+        let v = batch(&mut h, json!({"commands": [{"command": "view.pick", "params": {"x": 1, "y": 1}}]}));
+        assert!(!v["result"]["failed"]["error"].as_str().is_some_and(|e| e.starts_with("unknown command")), "{v}");
     }
 
     #[test]
@@ -1472,7 +1717,7 @@ mod tests {
     #[test]
     fn engine_batch_reports_whether_it_rolled_back() {
         let mut h = crate::scenario::Harness::new();
-        let steps = json!([{"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10}}, {"command": "NoSuchCommand"}]);
+        let steps = json!([{"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10}}, {"command": "solid.extrude", "params": {"distance": "bogus +"}}]);
         let v = batch(&mut h, json!({"commands": steps.clone()}));
         assert_eq!((&v["result"]["rolled_back"], &v["result"]["undone"]), (&json!(true), &json!(1)), "{v}");
         let v = batch(&mut h, json!({"commands": steps, "rollback": false}));

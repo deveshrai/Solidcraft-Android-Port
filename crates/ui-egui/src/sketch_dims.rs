@@ -37,7 +37,7 @@ pub fn boxes_for(cmd: &str, n: usize) -> Vec<DimBox> {
     use ValueKind::*;
     let b = DimBox::new;
     match (cmd, n) {
-        ("sketch.line", n) if n >= 1 => vec![b("Length", Length), b("Angle", Angle)],
+        ("sketch.line" | "sketch.line.midpoint", n) if n >= 1 => vec![b("Length", Length), b("Angle", Angle)],
         ("sketch.rectangle.two_point" | "sketch.rectangle.center", 1) => vec![b("Width", Length), b("Height", Length)],
         ("sketch.rectangle.rounded", 1) => vec![b("Width", Length), b("Height", Length), b("Radius", Length)],
         ("sketch.circle.center", 1) => vec![b("Diameter", Length)],
@@ -78,6 +78,14 @@ pub fn effective(app: &SolveApp, t: &Tool, h: Vec2) -> Vec2 {
             let len = lk("Length").unwrap_or(v.len());
             let ang = lk("Angle").unwrap_or_else(|| snap_axis(v.angle()));
             a + Vec2::from_angle(ang) * len
+        }
+        // A midpoint line runs from the end's mirror image through the midpoint to the end, so
+        // the midpoint is the middle of the line: a typed length is half of it on each side.
+        ("sketch.line.midpoint", 1) => {
+            let v = h - a;
+            let half = lk("Length").map_or(v.len(), |length| length * 0.5);
+            let ang = lk("Angle").unwrap_or_else(|| v.angle());
+            a + Vec2::from_angle(ang) * half
         }
         ("sketch.rectangle.two_point" | "sketch.rectangle.rounded", 1) => {
             let d = h - a;
@@ -203,6 +211,15 @@ pub fn axis_aligned(a: Vec2, b: Vec2) -> Option<bool> {
     }
 }
 
+/// The Length and Angle boxes of a line from `a` to `e`: the length at the segment's middle,
+/// the angle along it, both a little off the line so they don't cover it.
+fn line_boxes(a: Vec2, e: Vec2, px: f64, off: f64) -> Vec<(f64, Vec2)> {
+    let v = e - a;
+    let d = dir_or_x(v);
+    let n = d.perp();
+    vec![(v.len(), (a + e) * 0.5 + n * off), (v.angle(), a + d * (v.len() * 0.3).min(60.0 * px) - n * off)]
+}
+
 /// The value each box shows while it follows the cursor, and where it sits (sketch coordinates).
 /// `px` is the size of a screen pixel in sketch units: boxes sit a little off the segment they
 /// measure so they don't cover it.
@@ -211,12 +228,10 @@ fn live(app: &SolveApp, t: &Tool, e: Vec2, px: f64) -> Vec<(f64, Vec2)> {
     let first = t.pts.first().map(|p| p.0).unwrap_or(a);
     let off = 20.0 * px;
     match (t.cmd, t.pts.len()) {
-        ("sketch.line", _) | ("sketch.slot.center_to_center" | "sketch.slot.overall", 1) => {
-            let v = e - a;
-            let d = dir_or_x(v);
-            let n = d.perp();
-            vec![(v.len(), (a + e) * 0.5 + n * off), (v.angle(), a + d * (v.len() * 0.3).min(60.0 * px) - n * off)]
-        }
+        ("sketch.line", _) | ("sketch.slot.center_to_center" | "sketch.slot.overall", 1) => line_boxes(a, e, px, off),
+        // The midpoint line runs from the end's mirror image through the midpoint to the end,
+        // so its length is the whole line: twice the distance from the midpoint to the cursor.
+        ("sketch.line.midpoint", 1) => line_boxes(a * 2.0 - e, e, px, off),
         ("sketch.slot.center_point", 1) => vec![(2.0 * (e - a).len(), (a + e) * 0.5 + dir_or_x(e - a).perp() * off)],
         ("sketch.rectangle.two_point", 1) => {
             let (sx, sy) = (sign(e.x - a.x), sign(e.y - a.y));
@@ -393,6 +408,17 @@ pub fn rounded_radius_value(app: &SolveApp, t: &Tool, a: Vec2, b: Vec2) -> Value
 /// A locked box value by label (for the polygon side count).
 pub fn locked_value(app: &SolveApp, t: &Tool, label: &str) -> Option<f64> {
     locked(app, t, label)
+}
+
+/// Give the keyboard back to the box it was in, after a click in another panel took it (#2927).
+/// The box that owned the keyboard is still the one that had it last frame; the active tool must
+/// still show its boxes, so a finished or restarted shape is left alone.
+pub fn restore_box_focus(app: &SolveApp, ctx: &egui::Context) {
+    let Some(count) = app.tool.as_ref().map(|t| t.dims.len()) else { return };
+    let holder = ctx.memory(|memory| (0..count).map(|i| egui::Id::new(("sc_dim", i))).find(|id| memory.had_focus_last_frame(*id)));
+    if let Some(id) = holder {
+        ctx.memory_mut(|memory| memory.request_focus(id));
+    }
 }
 
 /// Draw the boxes of the active tool next to what they measure. Enter places the point.

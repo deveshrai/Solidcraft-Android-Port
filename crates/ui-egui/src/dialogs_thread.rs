@@ -1,7 +1,9 @@
 //! Tapped-hole catalogues and metric Thread choices share document sizing data.
 //! Browsing choices does not edit the model or freeze an automatic Thread feature.
 
-use solidcraft_engine::doc::{Document, TappedThreadFamily, metric_thread_sizes, parse_metric_thread, parse_tapped_thread, tapped_thread_sizes};
+use solidcraft_engine::doc::{
+    Document, TappedThreadFamily, ThreadHandedness, metric_thread_sizes, parse_metric_thread, parse_tapped_thread, tapped_thread_sizes,
+};
 
 use crate::dialogs::{combo, form_row};
 use crate::i18n::tr;
@@ -161,7 +163,6 @@ pub struct HelixDraft {
     pub clearance: String,
     pub start_offset: String,
     pub end_offset: String,
-    pub left_handed: bool,
     /// The last summary worked out, and what it was worked out from.
     pub summary: Option<(String, Result<[String; 3], String>)>,
 }
@@ -196,9 +197,6 @@ impl HelixDraft {
                 p[key] = serde_json::json!(value.trim());
             }
         }
-        if self.left_handed {
-            p["left_handed"] = serde_json::json!(true);
-        }
     }
 
     /// The draft of a saved feature's options.
@@ -211,7 +209,6 @@ impl HelixDraft {
         clearance: Option<&str>,
         start_offset: Option<&str>,
         end_offset: Option<&str>,
-        left_handed: bool,
     ) -> Self {
         let s = |v: Option<&str>| v.unwrap_or_default().to_string();
         HelixDraft {
@@ -223,7 +220,6 @@ impl HelixDraft {
             clearance: s(clearance),
             start_offset: s(start_offset),
             end_offset: s(end_offset),
-            left_handed,
             summary: None,
         }
     }
@@ -236,10 +232,11 @@ impl HelixDraft {
         at: Option<solidcraft_engine::geom::Vec3>,
         designation: &str,
         length: &str,
+        handedness: ThreadHandedness,
     ) -> Option<Result<[String; 3], String>> {
         let at = at?;
         let key = format!(
-            "{at:?}|{designation}|{length}|{self:?}",
+            "{at:?}|{designation}|{length}|{handedness:?}|{self:?}",
             self = (&self.pitch, &self.depth, &self.angle, &self.clearance, &self.start_offset, &self.end_offset, self.custom)
         );
         if let Some((k, v)) = &self.summary
@@ -263,7 +260,7 @@ impl HelixDraft {
                 clearance: value(&self.clearance, length_kind)?,
                 start_offset: value(&self.start_offset, length_kind)?,
                 end_offset: value(&self.end_offset, length_kind)?,
-                left_handed: self.left_handed,
+                left_handed: handedness == ThreadHandedness::Left,
             };
             let st = app.session.world_state();
             let (_, cyl, t) = solidcraft_engine::doc::helical_thread_on(&st, at, &h).map_err(|e| e.to_string())?;
@@ -280,8 +277,8 @@ impl HelixDraft {
     }
 }
 
-/// The helical B-rep section: clearance, where the thread starts and ends, its hand (ISO; a
-/// custom thread shows it with its options), and what it comes to. Returns Enter pressed.
+/// The helical B-rep section: clearance, where the thread starts and ends, and what it comes
+/// to. Returns Enter pressed.
 pub(crate) fn helical_rows(
     ui: &mut egui::Ui,
     app: &crate::SolveApp,
@@ -289,6 +286,7 @@ pub(crate) fn helical_rows(
     at: Option<solidcraft_engine::geom::Vec3>,
     designation: &str,
     length: &str,
+    handedness: ThreadHandedness,
 ) -> bool {
     let mut enter = false;
     crate::ui_kit::section(ui, "thread_helical", "Helical B-rep", true, |ui| {
@@ -298,10 +296,7 @@ pub(crate) fn helical_rows(
         enter |= crate::ui_kit::hint_row(ui, "Clearance", &mut helix.clearance, "0 mm");
         enter |= crate::ui_kit::hint_row(ui, "Start offset", &mut helix.start_offset, tr("half a pitch"));
         enter |= crate::ui_kit::hint_row(ui, "End offset", &mut helix.end_offset, tr("half a pitch"));
-        if !helix.custom {
-            crate::ui_kit::checkbox_grid(ui, &mut [("Left-handed", &mut helix.left_handed)], 2);
-        }
-        match helix.summary(app, at, designation, length) {
+        match helix.summary(app, at, designation, length, handedness) {
             Some(Ok([turns, groove, crest])) => {
                 form_row(ui, "Turns", |ui| ui.label(turns));
                 form_row(ui, "Groove", |ui| ui.label(groove).on_hover_text(tr("width at the face × depth")));
@@ -317,6 +312,14 @@ pub(crate) fn helical_rows(
         }
     });
     enter
+}
+
+pub(crate) fn handedness_row(ui: &mut egui::Ui, handedness: &mut ThreadHandedness, id: &str) {
+    let mut selected = usize::from(*handedness == ThreadHandedness::Left);
+    form_row(ui, "thread.direction", |ui| {
+        combo(ui, id, &["thread.right_hand", "thread.left_hand"], &mut selected);
+    });
+    *handedness = if selected == 1 { ThreadHandedness::Left } else { ThreadHandedness::Right };
 }
 
 /// Returns (Enter pressed, automatic sizing requested).
@@ -338,7 +341,7 @@ pub(crate) fn rows(
 
     if helix.custom {
         crate::ui_kit::section(ui, "thread_options", "Options", true, |ui| {
-            crate::ui_kit::checkbox_grid(ui, &mut [("Full Length", full), ("Left-handed", &mut helix.left_handed)], 2);
+            crate::ui_kit::checkbox_grid(ui, &mut [("Full Length", full)], 2);
         });
         let mut enter = crate::ui_kit::hint_row(ui, "Pitch", &mut helix.pitch, "e.g. 1.25 mm");
         enter |= crate::ui_kit::hint_row(ui, "Thread depth", &mut helix.depth, tr("auto"));

@@ -1088,7 +1088,7 @@ fn fit_and_home_frame_the_flat_pattern() {
             app.flat_view.cam.pan(120.0, -80.0, 600.0);
             app.flat_view.cam.zoom_at(0.3, None);
             assert_ne!(app.flat_view.cam, fitted);
-            app.animate_view(view);
+            app.run(if view == "fit" { "view.fit" } else { "view.home" }, json!({})).unwrap();
             frame(&mut app, &ctx, &mut t, none, vec![]);
             assert!(
                 app.flat_view.cam.target.dist(fitted.target) < 1e-9 && (app.flat_view.cam.distance - fitted.distance).abs() < 1e-9,

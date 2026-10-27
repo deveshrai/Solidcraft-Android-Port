@@ -15,6 +15,7 @@ pub use body_transfer::{valid_transfer_matrix, validate_body_transfer};
 pub mod canvas;
 mod clipboard;
 pub use clipboard::{clone_expression, remap_topology};
+pub mod component_color;
 mod component_removal;
 pub use component_removal::RemovedTree;
 pub mod config;
@@ -76,9 +77,9 @@ pub use eval::KeptResults;
 pub use eval::{
     EdgeRef, FeatureResult, HelicalInputs, Model, ModelBody, ModelState, PlacedBodies, RevolveExtent, SavedModel, SolvedSketch, ThreadInfo,
     curve_pick_error, edge_names_for, edge_refs, face_point_names, face_point_state, helical_thread_on, hole_direction_at, import_body_names,
-    metric_thread_sizes, object_height, parse_metric_thread, pattern_matrices, revolve_extent, revolve_extent_with_convention, select_profiles,
-    sketch_hole_direction, sketch_line_plane, state_in_frame, state_in_frame_at, suggested_thread, tangent_face_chain, through_all_distance,
-    world_state, world_state_reusing,
+    map_wire, metric_thread_sizes, object_height, parse_metric_thread, pattern_matrices, revolve_extent, revolve_extent_with_convention,
+    select_profiles, sketch_hole_direction, sketch_line_plane, state_in_frame, state_in_frame_at, suggested_thread, tangent_face_chain,
+    through_all_distance, world_state, world_state_reusing,
 };
 pub use expr::Expr;
 pub use names::{BodyName, FeatureName, SketchId};

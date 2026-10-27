@@ -52,7 +52,22 @@ fn grouped_face_auto_operation_keeps_implicit_and_explicit_participants() {
     }
     run(&mut s, "solid.box", json!({"corner":[100,0,0],"length":10,"width":10,"height":10,"body_name":"Other"}));
     let mut params = json!({"faces":[[32,2,10],[38,8,10]],"face_body":"Stock","distance":-2});
-    assert_eq!(crate::auto_operation(&s, &params), Some("join"), "an existing active-component body keeps its original participant scope");
+    // The picked part takes part beside the active component's own body (#5679): going in cuts
+    // it, and the top level's own body is left alone.
+    assert_eq!(crate::auto_operation(&s, &params), Some("cut"), "the picked body takes part beside the active component's own");
+    for operation in ["auto", "cut"] {
+        let mut t = s.scratch();
+        let mut p = params.clone();
+        p["operation"] = json!(operation);
+        run(&mut t, "solid.extrude", p);
+        let volume = |name: &str| solidcraft_kernel::measure(&t.model.state().body(name).unwrap().body).unwrap().volume;
+        assert!(
+            (volume("Stock") - 800.).abs() < 1e-6 && (volume("Other") - 1000.).abs() < 1e-6,
+            "{operation}: {} {}",
+            volume("Stock"),
+            volume("Other")
+        );
+    }
     params["participants"] = json!(["Stock"]);
     assert_eq!(crate::auto_operation(&s, &params), Some("cut"));
     params["participants"] = json!(["Other"]);
@@ -158,6 +173,183 @@ fn every_inward_extrude_into_a_part_in_another_component_cuts_it() {
         }
     }
     assert!(wrong.is_empty(), "{} wrong:\n{}", wrong.len(), wrong.join("\n"));
+}
+
+/// #5679's part: a 10 mm cube `Stock` in component Part, its placement moved to (30, 5, 2) and
+/// turned 35 degrees about (1, 2, 0), with the top level active; with `base`, the top level has a
+/// body of its own, a 20 x 20 x 5 `Base` at (-40, -40, 0). Returns Part's placement.
+fn turned_part(base: bool) -> (Session, solidcraft_doc::Mat) {
+    let mut s = Session::default();
+    let part = run(&mut s, "component.create", json!({"name": "Part", "grounded": false}));
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "Stock"}));
+    run(&mut s, "component.activate", json!({"component": "root"}));
+    run(&mut s, "occurrence.move", json!({"occurrence": part["occurrence"], "translate": [30, 5, 2], "axis": [1, 2, 0], "angle": "35 deg"}));
+    run(&mut s, "component.capture_position", json!({}));
+    if base {
+        run(&mut s, "solid.box", json!({"length": 20, "width": 20, "height": 5, "corner": [-40, -40, 0], "operation": "new", "body_name": "Base"}));
+    }
+    let placed = s.doc.component_transform(part["component"].as_u64().unwrap());
+    (s, placed)
+}
+
+/// A sketch on the face at world point `at`, with `draw` given the point's place in the sketch.
+fn sketch_on_face(s: &mut Session, at: solidcraft_geom::Vec3, draw: impl FnOnce(&mut Session, solidcraft_geom::Vec2, solidcraft_geom::Plane)) {
+    run(s, "sketch.create", json!({"plane": {"face": [at.x, at.y, at.z]}, "project_edges": false}));
+    let plane = s
+        .doc
+        .features
+        .iter()
+        .rev()
+        .find_map(|f| match &f.kind {
+            solidcraft_doc::FeatureKind::Sketch { plane: solidcraft_doc::PlaneRef::Face { plane, .. }, .. } => Some(*plane),
+            _ => None,
+        })
+        .unwrap();
+    draw(s, plane.to_local(at), plane);
+    run(s, "sketch.finish", json!({}));
+}
+
+fn body_volume(s: &Session, name: &str) -> f64 {
+    solidcraft_kernel::measure(&s.model.state().body(name).unwrap().body).unwrap().volume
+}
+
+/// #5679: with the top level active, a circle sketched on the top face of a part in a moved and
+/// turned sub-component reads as a Cut going in and a Join going out, and either one, automatic
+/// or chosen, changes that part's body in its own component: the hole is where the circle is
+/// shown, not where the numbers would be in the part's frame. The top level's own body is left
+/// alone, whether it has one or not.
+#[test]
+fn a_sketch_on_a_turned_sub_components_face_cuts_and_joins_it_from_the_top_level() {
+    let hole = std::f64::consts::PI * 4.0 * 3.0;
+    for base in [false, true] {
+        let (mut s, placed) = turned_part(base);
+        let top = solidcraft_doc::apply_point(&placed, solidcraft_geom::Vec3::new(5.0, 5.0, 10.0));
+        sketch_on_face(&mut s, top, |s, c, _| {
+            run(s, "sketch.circle.center", json!({"center": [c.x, c.y], "radius": 2}));
+        });
+        for (distance, expected) in [(-3.0, "cut"), (3.0, "join")] {
+            assert_eq!(crate::auto_operation(&s, &json!({"distance": distance})), Some(expected), "base {base}, {distance}");
+            for operation in ["auto", expected] {
+                let mut t = s.scratch();
+                run(&mut t, "solid.extrude", json!({"distance": distance, "operation": operation}));
+                let case = format!("base {base}, {distance} {operation}");
+                let names: Vec<String> = t.model.state().bodies.iter().map(|b| b.name.clone()).collect();
+                assert_eq!(names, if base { vec!["Stock", "Base"] } else { vec!["Stock"] }, "{case}");
+                let want = if expected == "cut" { 1000.0 - hole } else { 1000.0 + hole };
+                assert!((body_volume(&t, "Stock") - want).abs() < 1e-3 * hole, "{case}: {}", body_volume(&t, "Stock"));
+                // In the part's own frame: through the middle of its top, not beside it.
+                let stock = t.model.state().body("Stock").unwrap().mesh();
+                let at = |x: f64, y: f64, z: f64| stock.contains(solidcraft_geom::Vec3::new(x, y, z));
+                if expected == "cut" {
+                    assert!(!at(5.0, 5.0, 8.0) && at(5.0, 5.0, 6.0) && at(1.0, 1.0, 9.0), "{case}");
+                } else {
+                    assert!(at(5.0, 5.0, 12.0) && !at(1.0, 1.0, 12.0), "{case}");
+                }
+                if base {
+                    assert!((body_volume(&t, "Base") - 2000.0).abs() < 1e-6, "{case}");
+                }
+            }
+        }
+    }
+}
+
+/// #5679: a revolve from the top level, from a profile on the turned part's top face, joins or
+/// cuts that part. A 6 x 1 rectangle turned about its long edge, which lies on the face, is a
+/// cylinder of radius 1 half above the face and half in the part: a Join adds 3π, a Cut takes it.
+#[test]
+fn a_revolve_from_a_turned_sub_components_face_joins_and_cuts_it_from_the_top_level() {
+    let half = std::f64::consts::PI * 3.0;
+    for (operation, want) in [("join", 1000.0 + half), ("cut", 1000.0 - half)] {
+        let (mut s, placed) = turned_part(true);
+        let top = solidcraft_doc::apply_point(&placed, solidcraft_geom::Vec3::new(5.0, 5.0, 10.0));
+        let mut axis = json!(null);
+        sketch_on_face(&mut s, top, |s, c, plane| {
+            run(s, "sketch.rectangle.two_point", json!({"p0": [c.x - 3.0, c.y], "p1": [c.x + 3.0, c.y + 1.0]}));
+            axis = json!({"origin": [top.x, top.y, top.z], "dir": [plane.x.x, plane.x.y, plane.x.z]});
+        });
+        run(&mut s, "solid.revolve", json!({"axis": axis, "operation": operation}));
+        let names: Vec<String> = s.model.state().bodies.iter().map(|b| b.name.clone()).collect();
+        assert_eq!(names, ["Stock", "Base"], "{operation}");
+        assert_eq!(s.model.state().body("Stock").map(|b| b.body.shell_count()), Some(1), "{operation}");
+        assert!((body_volume(&s, "Stock") - want).abs() < 1e-3 * half, "{operation}: {}", body_volume(&s, "Stock"));
+        assert!((body_volume(&s, "Base") - 2000.0).abs() < 1e-6, "{operation}");
+    }
+}
+
+/// #5679 for Loft (and Sweep, through the same join target): with the top level active, a loft
+/// from a circle on the turned part's top face to one 5 mm above joins the part, in one piece.
+#[test]
+fn a_loft_from_a_turned_sub_components_face_joins_it_from_the_top_level() {
+    let (mut s, placed) = turned_part(true);
+    let top = solidcraft_doc::apply_point(&placed, solidcraft_geom::Vec3::new(5.0, 5.0, 10.0));
+    let mut centre = solidcraft_geom::Vec2::new(0.0, 0.0);
+    sketch_on_face(&mut s, top, |s, c, _| {
+        run(s, "sketch.circle.center", json!({"center": [c.x, c.y], "radius": 2}));
+        centre = c;
+    });
+    let low = s.doc.features.iter().rev().find(|f| matches!(f.kind, solidcraft_doc::FeatureKind::Sketch { .. })).unwrap().id;
+    let high = run(&mut s, "sketch.create", json!({"plane": {"face": [top.x, top.y, top.z]}, "offset": 5, "project_edges": false}))["sketch"].clone();
+    run(&mut s, "sketch.circle.center", json!({"center": [centre.x, centre.y], "radius": 2}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.loft", json!({"sections": [{"sketch": low}, {"sketch": high}], "operation": "join"}));
+    let names: Vec<String> = s.model.state().bodies.iter().map(|b| b.name.clone()).collect();
+    assert_eq!(names, ["Stock", "Base"]);
+    assert_eq!(s.model.state().body("Stock").map(|b| b.body.shell_count()), Some(1));
+    let added = std::f64::consts::PI * 4.0 * 5.0;
+    assert!((body_volume(&s, "Stock") - 1000.0 - added).abs() < 1e-3 * added, "{}", body_volume(&s, "Stock"));
+    assert!((body_volume(&s, "Base") - 2000.0).abs() < 1e-6);
+}
+
+/// #5679: the part changes in its component, so a second placement of it shows the hole too. A
+/// sketch on that second placement's face would draw the hole where the first one is: the cut
+/// is refused with the reason, and the design stays as it was.
+#[test]
+fn a_cut_from_the_top_level_shows_in_every_placement_and_a_later_placement_is_refused() {
+    let (mut s, placed) = turned_part(true);
+    let second = run(&mut s, "occurrence.copy", json!({"component": "Part", "translate": [0, 40, 0]}))["occurrence"].as_u64().unwrap();
+    let top = solidcraft_doc::apply_point(&placed, solidcraft_geom::Vec3::new(5.0, 5.0, 10.0));
+    let mut first = s.scratch();
+    sketch_on_face(&mut first, top, |s, c, _| {
+        run(s, "sketch.circle.center", json!({"center": [c.x, c.y], "radius": 2}));
+    });
+    run(&mut first, "solid.extrude", json!({"distance": -3, "operation": "cut"}));
+    let world = first.world_state();
+    let placements: Vec<f64> =
+        world.bodies.iter().filter(|b| b.definition_name() == "Stock").map(|b| solidcraft_kernel::measure(&b.body).unwrap().volume).collect();
+    let want = 1000.0 - std::f64::consts::PI * 4.0 * 3.0;
+    assert_eq!(placements.len(), 2, "{placements:?}");
+    assert!(placements.iter().all(|v| (v - want).abs() < 1e-2), "{placements:?}");
+
+    let (_, moved) = s.doc.path_placement(&[second]).unwrap();
+    let top = solidcraft_doc::apply_point(&moved, solidcraft_geom::Vec3::new(5.0, 5.0, 10.0));
+    sketch_on_face(&mut s, top, |s, c, _| {
+        run(s, "sketch.circle.center", json!({"center": [c.x, c.y], "radius": 2}));
+    });
+    let features = s.doc.features.len();
+    for operation in ["cut", "join"] {
+        let refused = s.execute("solid.extrude", &json!({"distance": -3, "operation": operation})).unwrap_err().to_string();
+        assert!(refused.contains("placed more than once") && refused.contains("activate"), "{refused}");
+    }
+    assert_eq!(s.doc.features.len(), features);
+    assert!((body_volume(&s, "Stock") - 1000.0).abs() < 1e-6);
+}
+
+/// #5679: with the top level's own body as the target, nothing changes: a cut from a sketch on
+/// its face keeps the default scope (no bodies stored), cuts it, and leaves the part alone.
+#[test]
+fn a_sketch_on_a_top_level_body_beside_a_turned_part_cuts_only_that_body() {
+    let (mut s, _) = turned_part(true);
+    sketch_on_face(&mut s, solidcraft_geom::Vec3::new(-30.0, -30.0, 5.0), |s, c, _| {
+        run(s, "sketch.circle.center", json!({"center": [c.x, c.y], "radius": 2}));
+    });
+    assert_eq!(crate::auto_operation(&s, &json!({"distance": -2})), Some("cut"));
+    assert_eq!(crate::auto_operation(&s, &json!({"distance": 2})), Some("join"));
+    let made = run(&mut s, "solid.extrude", json!({"distance": -2, "operation": "auto"}));
+    let feature = s.doc.feature(made["feature"].as_u64().unwrap()).unwrap();
+    assert!(feature.participants.is_empty(), "{:?}", feature.participants);
+    let hole = std::f64::consts::PI * 4.0 * 2.0;
+    assert!((body_volume(&s, "Base") - (2000.0 - hole)).abs() < 1e-3 * hole, "{}", body_volume(&s, "Base"));
+    assert!((body_volume(&s, "Stock") - 1000.0).abs() < 1e-6);
 }
 
 fn run(s: &mut Session, id: &str, p: Value) -> Value {
@@ -2045,4 +2237,65 @@ fn an_imported_assembly_with_a_repeated_part_moves_as_one() {
         assert!(shifted(b, placed_bounds(&s, n), [240.0, -100.0, 0.0]), "{n}: {:?}", placed_bounds(&s, n));
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A 20 × 30 × 8 plate made in its own component and stood up by its placement (turned
+/// `angle` degrees about X), the way an imported part set upright is: in the world it lies
+/// flat at `x0`..`x0 + 20`, y 0..30, z 0..8. The design is active again afterwards.
+fn placed_plate(s: &mut Session, name: &str, x0: f64, angle: f64) {
+    let made = run(s, "component.create", json!({"name": name, "grounded": false}));
+    // Turned +90° about X a point goes (x, y, z) → (x, −z, y); turned −90°, (x, z, −y).
+    let corner = if angle > 0.0 { json!([x0, 0, -30]) } else { json!([x0, -8, 0]) };
+    let (width, height) = (8, 30);
+    run(s, "solid.box", json!({"length": 20, "width": width, "height": height, "corner": corner, "body_name": name}));
+    run(s, "occurrence.move", json!({"occurrence": made["occurrence"], "axis": [1, 0, 0], "angle": format!("{angle} deg")}));
+    run(s, "component.activate", json!({"component": 0}));
+    let b = world_bounds(s, name);
+    for (got, want) in [(b.min.x, x0), (b.max.x, x0 + 20.0), (b.min.y, 0.0), (b.max.y, 30.0), (b.min.z, 0.0), (b.max.z, 8.0)] {
+        assert!((got - want).abs() < 1e-6, "{name} placed at {b:?}");
+    }
+}
+
+fn world_bounds(s: &Session, name: &str) -> solidcraft_geom::Aabb3 {
+    s.world_state().body(name).unwrap_or_else(|| panic!("no {name}")).mesh().bounds()
+}
+
+fn near(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-6
+}
+
+/// Move's vector, axis and pivot are where the view shows them, whatever frame the moved
+/// body's component has: a plate stood up by its placement and moved up goes up.
+#[test]
+fn a_move_goes_the_way_it_is_shown_on_a_placed_component() {
+    let mut s = Session::default();
+    placed_plate(&mut s, "Plate", 0.0, 90.0);
+    run(&mut s, "solid.move", json!({"bodies": ["Plate"], "translate": [0, 0, 10]}));
+    let b = world_bounds(&s, "Plate");
+    assert!(near(b.min.z, 10.0) && near(b.max.z, 18.0) && near(b.min.y, 0.0) && near(b.max.y, 30.0), "moved up: {b:?}");
+    // A quarter turn about the world's Z through the origin: (x, y) → (−y, x).
+    run(&mut s, "solid.move", json!({"bodies": ["Plate"], "axis": [0, 0, 1], "angle": 90}));
+    let b = world_bounds(&s, "Plate");
+    assert!(near(b.min.x, -30.0) && near(b.max.x, 0.0) && near(b.min.y, 0.0) && near(b.max.y, 20.0) && near(b.min.z, 10.0), "turned: {b:?}");
+}
+
+/// Align between two parts placed in different frames: both ends are taken where they are
+/// shown, so the plate lands on the other one rather than at right angles to it.
+#[test]
+fn align_takes_both_ends_where_they_are_shown_across_placed_components() {
+    let mut s = Session::default();
+    placed_plate(&mut s, "A", 0.0, 90.0);
+    placed_plate(&mut s, "B", 50.0, -90.0);
+    // Corner to corner: a plain move.
+    run(&mut s, "solid.align", json!({"bodies": ["A"], "from": [0, 0, 8], "to": [50, 0, 8]}));
+    let a = world_bounds(&s, "A");
+    assert!(near(a.min.x, 50.0) && near(a.max.x, 70.0) && near(a.min.z, 0.0) && near(a.max.z, 8.0), "{a:?}");
+    // Snapped corners, then the top face onto B's top face: A turns over and sits on B.
+    run(&mut s, "solid.align", json!({"bodies": ["A"], "from": {"snap": "vertex", "at": [50, 0, 8]}, "to": {"snap": "vertex", "at": [70, 30, 8]}}));
+    let a = world_bounds(&s, "A");
+    assert!(near(a.min.x, 70.0) && near(a.min.y, 30.0) && near(a.max.z, 8.0), "snapped: {a:?}");
+    run(&mut s, "solid.align", json!({"bodies": ["A"], "from_face": [80, 45, 8], "to_face": [60, 15, 8]}));
+    let a = world_bounds(&s, "A");
+    assert!(near(a.min.z, 8.0) && near(a.max.z, 16.0), "on B's top, not across it: {a:?}");
+    assert!(near(0.5 * (a.min.x + a.max.x), 60.0) && near(0.5 * (a.min.y + a.max.y), 15.0), "centred on the picked point: {a:?}");
 }
