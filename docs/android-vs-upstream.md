@@ -4,7 +4,7 @@ How this port differs from upstream [tangency-labs/solidcraft](https://github.co
 The port is upstream plus an Android app, **plus modelling features upstream doesn't have yet**,
 built here first and kept up to date with every upstream release.
 
-Current: **port 0.23.0b**, against **upstream 0.23.0**. This page is kept up to date with each
+Current: **port 0.24.0a**, against **upstream 0.24.0**. This page is kept up to date with each
 port release ([keeping this page current](#keeping-this-page-current)).
 
 - [At a glance](#at-a-glance)
@@ -17,17 +17,18 @@ port release ([keeping this page current](#keeping-this-page-current)).
 
 ## At a glance
 
-| | Upstream 0.23.0 | Port 0.23.0b |
+| | Upstream 0.24.0 | Port 0.24.0a |
 |---|---|---|
 | Platforms | Windows, macOS, Linux, web | All of upstream's, **plus Android** (phones, tablets, foldables) |
 | Modelled threads | Cut as a faceted groove; the threaded body's curved faces become facets | Faceted as upstream, **or exact helical B-rep**: smooth helical faces, the rest of the body stays exact |
 | Thread sizes | Thread: ISO metric, coarse or fine (M8, M8x1), only on a face that size fits; tapped holes also UNC/UNF, G and Rp | Upstream's, **or any pitch on any diameter** (Type: Custom) |
-| Thread fit for printing | None | **Clearance**, thread depth, flank angle, start and end offsets, left-handed |
+| Thread fit for printing | Left- or right-handed (since 0.24.0) | **Clearance**, thread depth, flank angle, start and end offsets; upstream's left- or right-handed for every kind of thread |
 | Gears | None (requested upstream: [#6796](https://github.com/tangency-labs/solidcraft/issues/6796), [#4684](https://github.com/tangency-labs/solidcraft/issues/4684)) | **Ten involute types**: spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel, crossed helical; bore, DIN 6885 keyway and hub; editable after |
 | Twisted or scaled straight sweeps | One ruled strip per segment past 64 segments or with a hole | **One smooth wall per profile segment**, holes included |
+| AI agents | MCP over stdio on the same computer (`solidcraft-cli mcp`), and the agent chat | Upstream's, **plus an MCP server on the network** (Settings › MCP server): Claude Code in Termux on the device, or on a computer on the same Wi-Fi, models in the app |
 | Touch | None | Orbit, pan, pinch, tap to select, finger-dragged dialog arrows |
 | Files | Native file dialogs | Android's file picker: device, SD card, Google Drive, any storage app |
-| Design file format | 37 | 38 (37 plus the helical threads) |
+| Design file format | 39 | 40 (39 plus the helical threads) |
 
 Everything else (sketching, the solver, every feature and workspace, Render, sheet metal,
 assemblies, import and export) is upstream's, unchanged, at the same version.
@@ -47,8 +48,9 @@ ruled helicoid faces with planar end caps, checked against Pappus' volume. The b
 On top of that, **Type: Custom** threads any shaft or hole with any pitch, and **Clearance** moves
 the flanks and root into the material so printed parts screw together, the "surface offset" asked
 for in upstream's [#4684](https://github.com/tangency-labs/solidcraft/issues/4684). Depth, angle,
-start and end offsets and left-handed threads are there too. An M20 × 20 mm builds in under two
-seconds on a Galaxy Z Fold.
+start and end offsets are there too, and a helical thread is left- or right-handed through
+upstream's own **Thread direction** (since 0.24.0, which replaced the port's Left-handed box). An
+M20 × 20 mm builds in under two seconds on a Galaxy Z Fold.
 
 Guide: [android-threads.md](android-threads.md). Code: `crates/kernel/src/thread_brep.rs`.
 
@@ -65,6 +67,20 @@ place in one undo step. Upstream has no gear generator; its users have asked for
 
 Guide: [android-gears.md](android-gears.md). Code: `crates/engine/src/gear_profile.rs`,
 `crates/engine/src/cmd/gears.rs`.
+
+### The MCP server on the network
+
+**Settings › MCP server** lets Claude Code, or any MCP client, drive the app from Termux on the same
+device or from a computer on the same Wi-Fi: one switch, the server's address, and one command to
+paste that starts Claude Code connected. Every tool is upstream's own MCP server, bridged to the
+running app as `solidcraft-cli mcp` bridges to the desktop app; the port adds the network
+transport (MCP Streamable HTTP with a bearer token), the page, and what Android needs (the app
+must be on screen, so a call made while it is in the background says so instead of hanging).
+Upstream's MCP server runs over stdio on the same computer, which an Android app's sandbox can't
+offer.
+
+Guide: [android-mcp.md](android-mcp.md). Code: `apps/solidcraft-android/src/mcp_http.rs`,
+`apps/solidcraft-android/src/mcp_host.rs`, `crates/ui-egui/src/prefs/mcp_server.rs`.
 
 ### Smooth twisted and scaled sweeps
 
@@ -93,10 +109,12 @@ What it takes to run upstream's desktop app on Android
 
 - **The port opens every upstream design**, from any version.
 - **Upstream releases don't open port designs.** The helical thread fields are a design-format
-  change that upstream hasn't adopted, so the port saves format 38 where upstream 0.23.0 saves 37,
+  change that upstream hasn't adopted, so the port saves format 40 where upstream 0.24.0 saves 39,
   and upstream asks to be updated rather than silently rebuilding helical threads as faceted ones.
   This applies to every design the port saves, with or without threads.
 - **To share with upstream, export STEP.** Gears and threads arrive as exact solids.
+- Designs saved by earlier port releases with a left-handed helical thread (`left_handed`) open
+  with upstream's `handedness: left`, the same thread.
 - Gears need no format change of their own: their parameters are in the component's metadata, and
   the gear itself is ordinary sketches and features.
 
@@ -129,13 +147,13 @@ screenshots and released as the next letter (0.23.0a, b, c…).
 ### Candidates from upstream's requests
 
 Open, unclaimed feature requests on upstream that would most help the port's users, chosen from
-the ~390 open requests on 2026-10-26. These are candidates, not commitments; one that gets picked
+the ~390 open requests on 2026-10-26 (all ten still open on 2026-10-27). These are candidates, not commitments; one that gets picked
 moves to the table above.
 
 | | Candidate | Upstream request | Why |
 |---|---|---|---|
 | 1 | **Pen support**: hover highlights, the barrel button right-clicks, the palm is ignored | [#2828](https://github.com/tangency-labs/solidcraft/issues/2828), [#4271](https://github.com/tangency-labs/solidcraft/issues/4271) | Most tablet users have a pen, and today it acts as a finger |
-| 2 | **ViewCube**: tap a face, edge or corner to turn the view | [#2124](https://github.com/tangency-labs/solidcraft/issues/2124), [#2198](https://github.com/tangency-labs/solidcraft/issues/2198), [#6064](https://github.com/tangency-labs/solidcraft/issues/6064) | The axis triad is a small target for a finger; asked for three times |
+| 2 | **ViewCube**: tap a face, edge or corner to turn the view | [#2124](https://github.com/tangency-labs/solidcraft/issues/2124), [#2198](https://github.com/tangency-labs/solidcraft/issues/2198), [#6064](https://github.com/tangency-labs/solidcraft/issues/6064) | The axis triad is a small target for a finger; asked for three times. Upstream already offers a cube navigator (Settings › Interface); see what the requests still miss before starting |
 | 3 | **Drag a value to change it** | [#6477](https://github.com/tangency-labs/solidcraft/issues/6477) | Changes numbers without the on-screen keyboard |
 | 4 | **Edit sizes on the model**: tap a hole or round, change its size in place | [#6642](https://github.com/tangency-labs/solidcraft/issues/6642) | Saves finding and opening the sketch on a small screen |
 | 5 | **Inch threads** (UNC/UNF) for the helical threads | [#6112](https://github.com/tangency-labs/solidcraft/issues/6112) | Upstream's tapped holes already have the catalogue; a small step for our threads |

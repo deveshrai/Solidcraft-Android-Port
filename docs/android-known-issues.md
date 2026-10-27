@@ -4,7 +4,7 @@ What is wrong or missing in the current port release, and what is planned for th
 entry says how to work around it today. Fixed entries move to [Fixed](#fixed) with the release that
 fixed them.
 
-Current: **port 0.23.0b** (upstream 0.23.0). Next: **0.23.0c**, or **0.24.0a** if upstream releases
+Current: **port 0.24.0a** (upstream 0.24.0). Next: **0.24.0b**, or **0.25.0a** if upstream releases
 first. See also [android-vs-upstream.md](android-vs-upstream.md) for what upstream has that the port
 doesn't, and the reverse.
 
@@ -19,9 +19,9 @@ doesn't, and the reverse.
 
 | Issue | Seen on | Work-around today | Plan |
 |---|---|---|---|
-| **The helical thread is hard to find.** Thread opens as upstream's does: Modeled off, and once ticked, Geometry on Faceted. The port's Helical B-rep, Custom and Clearance look missing until you know where they are. | Galaxy Z Fold, 0.23.0a | Tick **Modeled**, set **Geometry** to **Helical B-rep** ([android-threads.md](android-threads.md#opening-thread)) | Decide whether the port opens Thread with Modeled ticked and Helical B-rep chosen |
+| **The helical thread is hard to find.** Thread opens as upstream's does: Modeled off, and once ticked, Geometry on Faceted. The port's Helical B-rep, Custom and Clearance look missing until you know where they are. | Galaxy Z Fold, 0.23.0a; still so in 0.24.0a | Tick **Modeled**, set **Geometry** to **Helical B-rep** ([android-threads.md](android-threads.md#opening-thread)) | Decide whether the port opens Thread with Modeled ticked and Helical B-rep chosen |
 | **A file saved to a device folder can lose its extension.** Save As writes the name typed in Android's picker; type *gear* and the file is `gear`, not `gear.solidcraft`. The app itself names the tab and its copy correctly and opens the file again, but file managers and other apps don't know what it is. | Pixel 9 and Galaxy Z Fold, 0.23.0a and b | Type the extension: *gear.solidcraft*, *part.stl* | Ask the picker for the name with its extension kept, or rename the saved document through the provider |
-| **The version shown in the app is upstream's.** The title bar shows *v0.23.0*; the port letter (b) is only in Android's app info and the APK name. | All, every port release | Settings › Apps › SolidCraft shows *0.23.0b* | Show the port version next to upstream's |
+| **The version shown in the app is upstream's.** The title bar shows *v0.24.0*; the port letter (a) is only in Android's app info and the APK name. | All, every port release | Settings › Apps › SolidCraft shows *0.24.0a* | Show the port version next to upstream's |
 | **Samsung's window handle covers the new-tab button.** On Samsung devices the handle at the top centre sits over the tab strip; a tap there can open Samsung's window menu instead of **+**. | Galaxy Z Fold | **Ctrl+N** or **File › New Design** | Keep the tab strip's buttons out of the handle's area on Samsung devices |
 | **Designs saved by 0.22.0a open as "Untitled (n)".** That release's Save As didn't store the typed name in the design (fixed in 0.23.0a), and Open names the tab from the design. | Any, files from 0.22.0a | **Save As** once to rename it | Fall back to the file's name when a design's name is a default "Untitled" one |
 
@@ -32,6 +32,7 @@ doesn't, and the reverse.
 | **The on-screen keyboard covers the lower half of the screen**; the app doesn't move above it, so a field low in a dialog is typed into blind. | Hide the keyboard with its ⌄ key to see the result; a hardware keyboard avoids it | Resize the window above the keyboard |
 | **No autosave recovery.** If Android ends the app in the background, unsaved work is lost. | Save often (Ctrl+S on a design opened from a file writes back to it) | Upstream's recovery folder on Android, offered at the next start |
 | **No "Open with".** Opening a `.solidcraft`, STEP or STL from a file manager or a mail doesn't offer SolidCraft. | **File › Open** inside the app | Register the file types and take the shared file as an Open |
+| **MCP: nothing on the device says Claude Code is waiting.** With SolidCraft in the background, an agent's call waits 15 s and then tells the agent to ask you to bring SolidCraft back; nothing on the phone itself says so. | Keep SolidCraft on screen next to Termux: split screen or a pop-up window ([android-mcp.md](android-mcp.md#keep-solidcraft-on-screen)) | A notification while a call waits, tapping it brings SolidCraft back |
 | **The phone layout is cramped.** It works in portrait and landscape, but the ribbon and dialogs are tight. | A tablet, or a foldable's inner screen | Larger touch targets and a compact ribbon on narrow screens |
 
 ## Upstream's, not the port's
@@ -52,6 +53,12 @@ reported or left to upstream, not patched in the port, so merges stay clean.
   upstream's (38 against 37) for the helical thread fields, so upstream asks to be updated rather
   than silently rebuilding helical threads as faceted ones. Export STEP to share
   ([android-vs-upstream.md](android-vs-upstream.md#design-files-and-compatibility)).
+- **The MCP server runs the agent's calls only while SolidCraft is on screen.** Android pauses an
+  app in the background, so no app can run them then; the call says so rather than hang
+  ([android-mcp.md](android-mcp.md#keep-solidcraft-on-screen)).
+- **The MCP server is plain HTTP.** As any local development server, it relies on the token and on
+  the network: use **Another computer** on networks you trust, or **This device**, which nothing
+  else can reach ([android-mcp.md](android-mcp.md#security)).
 - **Typing with no field selected runs shortcuts**, as on the desktop: with a hardware keyboard,
   *E* starts Extrude and so on.
 
@@ -59,6 +66,7 @@ reported or left to upstream, not patched in the port, so merges stay clean.
 
 | Issue | Fixed in |
 |---|---|
+| Back with Settings open sent the app to the background instead of closing Settings | 0.24.0a |
 | Ribbon menus taller than the screen couldn't be scrolled by touch, so on a foldable's inner screen **Model › Create** stopped at Web and **Gear**, Boss, Lip, Snap Fit, Rest and Frame Member couldn't be reached from it | 0.23.0b |
 | Save As kept the tab named "Untitled" instead of the name typed in the picker | 0.23.0a |
 

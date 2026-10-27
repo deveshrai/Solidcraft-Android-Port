@@ -13,6 +13,7 @@ Galaxy Tab running 0.22.0 with the gears.
 - [Threads](#threads)
 - [Gears](#gears)
 - [Rendering](#rendering)
+- [Claude Code (MCP server)](#claude-code-mcp-server)
 - [Mouse and keyboard](#mouse-and-keyboard)
 - [Typing values](#typing-values)
 - [Files](#files)
@@ -85,7 +86,7 @@ but not cut; with **Modeled** on, **Geometry** chooses how the groove is made:
 ![A helical B-rep M20 thread](screenshots/android/19-helical-thread.jpg)
 
 **Type: Custom** threads any shaft or hole as it is, whatever its diameter: type a **Pitch** (and
-optionally a **Thread depth**, **Thread angle** or **Left-handed**). For parts that screw
+optionally a **Thread depth** or **Thread angle**; **Thread direction** makes it left-handed). For parts that screw
 together, **Clearance** moves the flanks and root into the material, typically 0.1–0.2 mm for a
 3D print. Tap OK rather than pressing Enter in a field: Enter applies the dialog straight away.
 To change a thread later, double-tap it in the **History** bar.
@@ -128,6 +129,18 @@ materials and image export, with a live preview. **Start Render** makes the imag
 completed image** saves it through the file picker. **Return to Design** goes back.
 
 ![The Render workspace](screenshots/android/22-render-workspace.jpg)
+
+## Claude Code (MCP server)
+
+**Settings** (the gear, top right) › **MCP server** lets Claude Code drive the app, from Termux on
+this device or from a computer on the same Wi-Fi. Tick **Turn on the MCP server**, choose **This
+device** or **Another computer**, tap **Copy** under **Start Claude Code with it** and paste the
+command into the terminal. On one device, keep SolidCraft on screen next to Termux (split screen or
+a pop-up window): Android pauses it in the background.
+
+![Settings › MCP server](screenshots/android/mcp-01-settings-this-device.jpg)
+
+Everything about it (the settings, files, security, troubleshooting): [android-mcp.md](android-mcp.md).
 
 ## Mouse and keyboard
 
@@ -174,8 +187,8 @@ and go to the device, an SD card, Google Drive or any storage app.
 
 ## Back, Home and rotation
 
-- **Back** (the gesture or button) closes what is open: a dialog, a menu, a sketch tool, command
-  search, the on-screen keyboard. With nothing open it leaves the app as Home does; your designs
+- **Back** (the gesture or button) closes what is open: Settings, a dialog, a menu, a sketch tool,
+  command search, the on-screen keyboard. With nothing open it leaves the app as Home does; your designs
   stay open.
 - **Home** and coming back: the app is as you left it.
 - **Rotation**: the layout follows; portrait works, with a narrower ribbon.

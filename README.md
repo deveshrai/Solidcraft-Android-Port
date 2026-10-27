@@ -2,7 +2,9 @@
 > [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with each
 > upstream release, plus an Android app (touch, mouse and keyboard, files through Android's file
 > picker) and **modelling features upstream doesn't have yet**: exact helical B-rep threads with
-> custom pitch and clearance, and ten kinds of involute gears. How the two differ:
+> custom pitch and clearance, and ten kinds of involute gears. **Claude Code can drive the app**
+> from Termux on the device or from a computer on the same Wi-Fi (Settings › MCP server:
+> [docs/android-mcp.md](docs/android-mcp.md)). How the two differ:
 > [docs/android-vs-upstream.md](docs/android-vs-upstream.md). Known issues and what the next release fixes:
 > [docs/android-known-issues.md](docs/android-known-issues.md).
 >

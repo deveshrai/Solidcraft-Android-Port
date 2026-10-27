@@ -8,8 +8,9 @@ what this port adds:
 - **Custom threads**: any pitch on any shaft or hole, as it is, whatever its diameter.
 - **Clearance**: the thread's flanks and root moved into the material, so printed or machined parts
   fit together.
-- **Start and end offsets**, a **thread length**, **depth**, **flank angle** and **left-handed**
-  threads.
+- **Start and end offsets**, a **thread length**, **depth** and **flank angle**. Left-handed
+  helical threads use upstream's **Thread direction** (since 0.24.0a; before, the port had its own
+  Left-handed box).
 
 The classic ISO metric thread, cosmetic or faceted, works exactly as before and is still the
 default. The new geometry is an option next to it.
@@ -43,7 +44,7 @@ Screenshots are from the Pixel Tablet emulator (Android 16, 2560 × 1600) runnin
 | Clearance for the mating part | Not possible (facets can't be offset) | **Clearance** field moves flanks and root into the material |
 | A second thread on the same body | Fails once the body is faceted ("no cylindrical face there to thread") | Works: the rest of the body stays exact |
 | Where the thread starts and ends | The whole face, or a length from one end | Also **start and end offsets**; helical threads always end a little in from the face's ends |
-| Hand, depth, flank angle | Right-handed ISO only | **Left-handed**, **Thread depth**, **Thread angle** |
+| Hand, depth, flank angle | Right- or left-handed (**Thread direction**, upstream since 0.24.0) | Upstream's **Thread direction** for helical threads too, plus **Thread depth**, **Thread angle** |
 | Dialog | Profile, Modeled, Full Length, Automatic size, Size, Pitch, Designation | **Type**, **Geometry**, a **Helical B-rep** section, and live **Turns / Groove / Crest** readouts |
 
 These answer reports on the upstream project: threads that can't be offset for printing
@@ -86,7 +87,7 @@ The dialog opens on **Type: ISO metric** with the size that fits the face, as be
 
 **Where the helical thread is.** The dialog opens as upstream's does, so the port's options are
 one step in: tick **Modeled**, then set **Geometry** to **Helical B-rep**. The **Helical B-rep**
-section (depth, clearance, offsets, left-handed, and the Turns / Groove / Crest readouts) appears
+section (depth, clearance, offsets, and the Turns / Groove / Crest readouts) appears
 below; drag the dialog up with a finger to reach it on a shorter screen. **Type** lists
 **Custom** next to ISO metric. On a Galaxy Z Fold (0.23.0b), an M20 on a 20 mm cylinder:
 
@@ -154,7 +155,7 @@ cylinders can still be picked and threaded.)
 | **Thread depth** | How deep the groove goes into the material, measured radially | *auto*: the basic depth for the pitch and angle (see below) |
 | **Thread angle** | Included angle between the two flanks | 60° (metric and unified threads) |
 | **Full Length / Length** | Thread the whole face, or this length from the end nearest where you tapped | Full length |
-| **Left-handed** | Turn the other way | Right-handed |
+| **Thread direction** | Right-hand or Left-hand (upstream's row, under the dialog's sizes) | Right-hand |
 
 All fields take expressions with units, like the rest of the app: `1.25 mm`, `0.05 in`,
 `p / 2`, `30 deg`.
@@ -175,7 +176,6 @@ These appear for any helical thread, ISO or custom:
 | **Clearance** | How far both flanks and the root move into the material (square to each surface) | 0 mm |
 | **Start offset** | Plain band left at the threaded length's start (the end nearest where you tapped the face) | Half a pitch |
 | **End offset** | Plain band left at the other end | Half a pitch |
-| **Left-handed** (ISO; Custom has it under Options) | Turn the other way | Right-handed |
 
 Readouts, worked out as you type:
 
@@ -191,7 +191,14 @@ Its groove has to start after one end of the face and finish before the other, s
 thread always leaves a land at each end; the offsets set how wide. They must be more than zero.
 Use a small offset (0.2 mm, say) to run the thread almost to the end.
 
-A left-handed custom thread, 2 mm pitch, 10 mm long, starting 3 mm in from the bolt's top:
+**Thread direction** (upstream's, since 0.24.0) turns any thread the other way: cosmetic,
+faceted or helical, ISO or custom. Port releases before 0.24.0a had their own Left-handed box
+instead; designs saved with it open as Left-hand.
+
+![Edit Thread: Helical B-rep with Thread direction Left-hand (0.24.0a)](screenshots/android/thread-direction-left-hand.jpg)
+
+A left-handed custom thread, 2 mm pitch, 10 mm long, starting 3 mm in from the bolt's top
+(screenshot from 0.22.0a, when Left-handed was the port's own box):
 
 ![A short left-handed custom thread with a start offset](screenshots/android/threads-13-left-handed-length.jpg)
 
@@ -312,21 +319,22 @@ desktop control channel can do the same. New parameters (all optional):
 | `angle` | Thread angle (default 60 deg) |
 | `clearance` | Clearance (default 0) |
 | `start_offset`, `end_offset` | Lands at the start (nearest `face`) and end (default half a pitch; more than 0) |
-| `left_handed: true` | Left-handed |
+| `handedness: "left"` | Left-handed (upstream's parameter; any thread). The port's older `left_handed: true` still means the same |
 
-`depth`, `angle`, `clearance`, the offsets and `left_handed` are refused without `helical` or
-`pitch`, so they can't silently do nothing on a faceted thread.
+`depth`, `angle`, `clearance` and the offsets are refused without `helical` or `pitch`, so they
+can't silently do nothing on a faceted thread.
 
 ```json
 {"command": "solid.thread", "params": {"face": [4, 0, 10], "designation": "M8", "helical": true}}
 {"command": "solid.thread", "params": {"face": [34, 0, 5], "pitch": "1.25 mm", "clearance": "0.1 mm"}}
 {"command": "solid.thread", "params": {"face": [86.6, 0, 10], "pitch": "p", "start_offset": "2 mm",
-                                        "end_offset": "4 mm", "left_handed": true}}
+                                        "end_offset": "4 mm", "handedness": "left"}}
 ```
 
 The design files store these as new optional fields of the Thread feature (`helical`, `pitch`,
-`depth`, `angle`, `clearance`, `start_offset`, `end_offset`, `left_handed`), written only when
-used.
+`depth`, `angle`, `clearance`, `start_offset`, `end_offset`), written only when used; the hand is
+upstream's `handedness`. A design saved by a port release before 0.24.0a with `left_handed: true`
+is rewritten as it opens (`format/pending/helical-thread-handedness.rs`).
 
 ## Limits
 
@@ -374,7 +382,8 @@ renderer change was needed.
 |---|---|
 | `crates/kernel/src/thread_brep.rs` | New: `HelicalThread` (section, turns, basic depth), `helical_thread` |
 | `crates/kernel/src/lib.rs` | Exports |
-| `crates/doc/src/document.rs` | `FeatureKind::Thread` gains `helical`, `pitch`, `depth`, `angle`, `clearance`, `start_offset`, `end_offset`, `left_handed` (all optional; old files unchanged) |
+| `crates/doc/src/document.rs` | `FeatureKind::Thread` gains `helical`, `pitch`, `depth`, `angle`, `clearance`, `start_offset`, `end_offset` (all optional; old files unchanged); the hand is upstream's `handedness` |
+| `crates/doc/src/format/pending/helical-threads.rs`, `helical-thread-handedness.rs` | The format changes: the helical fields, and older port designs' `left_handed` rewritten as `handedness` |
 | `crates/doc/src/eval.rs` | `helical_thread_on` (ISO or custom dimensions, offsets) and the helical evaluation; shared `thread_face` / `thread_span` |
 | `crates/engine/src/cmd/features.rs` | `solid.thread` parameters and checks |
 | `crates/ui-egui/src/dialogs_thread.rs` | `HelixDraft`, Type and Geometry switches, the Helical B-rep section, readouts |

@@ -74,3 +74,8 @@
 | docs/screenshots/android/fold-09-helical-m20.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): a helical M20 thread on a 20 mm cylinder | MIT OR Apache-2.0 |
 | docs/screenshots/android/fold-10-step-inserted.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): a STEP file inserted next to the threaded cylinder | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/spur_gear.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| docs/screenshots/android/mcp-01-settings-this-device.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (emulator): Settings › MCP server, on, for Termux on the same device | MIT OR Apache-2.0 |
+| docs/screenshots/android/mcp-02-settings-another-computer.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (emulator): Settings › MCP server, on, for a computer on the same Wi-Fi | MIT OR Apache-2.0 |
+| docs/screenshots/android/mcp-03-advanced.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (emulator): Settings › MCP server, Advanced | MIT OR Apache-2.0 |
+| docs/screenshots/android/mcp-04-built-by-claude-code.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (emulator): a filleted block Claude Code built through the MCP server | MIT OR Apache-2.0 |
+| docs/screenshots/android/thread-direction-left-hand.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (emulator): Edit Thread with Helical B-rep and Thread direction: Left-hand | MIT OR Apache-2.0 |

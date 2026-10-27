@@ -8,6 +8,9 @@ touch, and opening, saving, importing and exporting through Android's document p
 
 **Threads** (helical B-rep, custom threads, clearance): [android-threads.md](android-threads.md).
 
+**Claude Code and other AI agents** (Settings › MCP server, from Termux or a computer):
+[android-mcp.md](android-mcp.md).
+
 This port lives in [deveshrai/Solidcraft-Android-Port](https://github.com/deveshrai/Solidcraft-Android-Port)
 and follows upstream [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft);
 [android-sync.md](android-sync.md) is how it is kept up to date.
@@ -34,10 +37,11 @@ Tested on an Android 16 tablet emulator (Pixel Tablet, arm64, Vulkan through Mol
 | Keyboard | Shortcuts with and without modifiers (tested: Ctrl+Z, Ctrl+S, Ctrl+O, E, Esc, S to search), typing into fields |
 | Touch | One finger orbits, a tap selects, two fingers pan, a pinch zooms about the fingers; a finger drags a dialog's arrows (Extrude distance, Fillet radius…) |
 | Gears | Port-only: spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel and crossed helical gears, editable after ([android-gears.md](android-gears.md)) |
-| Threads | Port-only: modelled threads as exact helical B-rep, custom pitch on any diameter, clearance, offsets, left-handed ([android-threads.md](android-threads.md)); the faceted and cosmetic ISO threads are unchanged |
+| Threads | Port-only: modelled threads as exact helical B-rep, custom pitch on any diameter, clearance, offsets; left-handed through upstream's Thread direction ([android-threads.md](android-threads.md)); the faceted and cosmetic ISO threads are unchanged |
 | Rendering (0.22) | The Render workspace's live preview and CPU render work on the Fold (the GPU path tracer finds the Adreno 840) |
 | Back | Closes the open dialog, menu, tool, sketch or keyboard, as Escape; with nothing open, the app goes to the background as Home does, designs kept |
 | Tested devices | Pixel Tablet emulator (Android 16); Galaxy Z Fold (SM-F971B, Android 17, Adreno 840): inner screen, landscape and portrait; 0.23.0b gears, helical threads, STEP and STL; Galaxy Tab (SM-X840, Android 17, Mali-G1-Ultra): gears; Pixel 9 (Android 17, portrait): 0.23.0a gears, helical threads, Save As and Open |
+| AI agents | Port-only: Settings › MCP server lets Claude Code in Termux on the device, or on a computer on the same Wi-Fi, drive the app through upstream's MCP tools ([android-mcp.md](android-mcp.md)); tested on the emulator with Claude Code from a Mac (0.24.0a) |
 | Files | Open, Open Recent, Save, Save As, Insert STEP/Mesh/Design, Save as mesh (STL, 3MF…), Export STEP/OBJ/DXF/URDF/JSON, from and to any documents provider (device, SD card, Drive…) |
 
 ## Building and installing
@@ -141,6 +145,12 @@ thread) only to use what needs Java:
 - When a provider resolves a name clash by numbering after the extension (`part.step (1)`, which
   no other app would know as STEP), the new document is renamed `part (1).step` where the
   provider supports renaming.
+- Before the library loads, `onCreate` sets `TMPDIR` (the app's cache) and
+  `SOLIDCRAFT_CONTROL_DIR` (a private `files/control` folder), which Android doesn't provide, for
+  the MCP server's screenshots and the control channel's token file.
+- `isOnScreen()` (started, which includes split screen and pop-up windows), so the MCP server can
+  tell a client the app is paused in the background instead of letting the call hang.
+- `copyText(text)` puts egui's Copy on the system clipboard (egui has no Android clipboard).
 
 The manifest names this activity, keeps `android.app.lib_name = solidcraft_android`, uses a
 fullscreen theme (Android 15+ lays apps out edge to edge, and the status bar covered the title
@@ -239,7 +249,11 @@ these docs). Upstream files changed, and why:
 | `attribution/pending/android-port.md` (new) | Attribution rows for the port's screenshots and icon, kept out of `ATTRIBUTION.md`'s table so it merges cleanly |
 | `xtask/src/layers.rs` | `solidcraft-android` registered as an app (exempt from layering, like the web app) |
 | `xtask/src/assets.rs` | The asset check skips Gradle's `build/` output |
-| `AGENTS.md` | The Android crate's two `unsafe` exceptions added to the list |
+| `apps/solidcraft-android/src/mcp_http.rs`, `mcp_host.rs` (new) | Port-only feature: the MCP server on the network and the host that runs it ([android-mcp.md](android-mcp.md)) |
+| `crates/ui-egui/src/prefs/mcp_server.rs` (new), `prefs.rs`, `lib.rs` | Settings › MCP server, shown only where the host sets `SolveApp::mcp_server` |
+| `apps/solidcraft-android/android/app/src/main/AndroidManifest.xml` | `INTERNET`, for the MCP server |
+| `crates/doc/src/format/pending/helical-thread-handedness.rs` (new) | Older port designs' `left_handed` rewritten as upstream's `handedness` (0.24.0a) |
+| `skills/solidcraft-crash-safety/SKILL.md` | The Android crate's two `unsafe` exceptions added to the list (upstream moved it there from `AGENTS.md` in 0.24.0) |
 | `ATTRIBUTION.md`, `vendor/README.md` | The vendored winit and its patch |
 | `docs/building.md` | How to build the APK |
 | `.gitignore` | Local `continue-*.sh` session scripts |
@@ -252,8 +266,8 @@ parameters in component metadata, so they need no design-format change of their 
 Design files below).
 
 **Design files.** The helical thread fields are a pending design-format change, so the port
-writes one format number past upstream's release (38 while upstream's 0.23.0 is 37) with
-`"format_pending": ["helical-threads"]`. The port opens every upstream design. Upstream's
+writes one format number past upstream's release (40 while upstream's 0.24.0 is 39) with
+`"format_pending": ["helical-thread-handedness", "helical-threads"]`. The port opens every upstream design. Upstream's
 releases refuse a design saved by the port ("saved by a newer SolidCraft") rather than opening
 it and quietly rebuilding its helical threads as faceted ones; designs to share with desktop
 SolidCraft are best exported as STEP. Deleting that one file would make the port's designs open
