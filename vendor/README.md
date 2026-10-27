@@ -60,6 +60,12 @@ Changes:
 ## truck-geometry 0.5.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
 Changes:
+- `nurbs/bspsurface.rs` (Android port): a B-spline surface's point and derivatives (`subs`,
+  `uder`, `vder`, `uuder`, `vvder`, `uvder`) skip the basis functions that are zero at the
+  parameter: only degree + 1 of them in each direction are not, and the others' terms add exactly
+  0.0, so the sum is unchanged. A gear flank's surface of 52 × 12 control points costs 16 terms a
+  point instead of 624; booleans on gears and helical threads, which evaluate those surfaces
+  millions of times, run 2–3 times faster. `scripts/android-sync.sh` checks it is still there.
 - `decorators/intersection_curve.rs`: `IntersectionCurve::parameter_division` divides as
   `algo::curve::parameter_division` does (the same split points, in the same order), but each
   point's projection onto the two surfaces starts from the parameters of the point that begins

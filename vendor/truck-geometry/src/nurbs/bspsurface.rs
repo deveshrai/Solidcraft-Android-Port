@@ -594,8 +594,14 @@ impl<P: ControlPoint<f64>> ParametricSurface for BSplineSurface<P> {
         } = self;
         let basis0 = uknot_vec.bspline_basis_functions(degree0, u);
         let basis1 = vknot_vec.bspline_basis_functions(degree1, v);
+        // SolidCraft: only the degree + 1 basis functions around the parameter are non-zero;
+        // the terms of the others add exactly 0.0, so they are skipped (a gear flank of 52 × 12
+        // control points costs 16 terms a point instead of 624; the sum is unchanged).
         let closure = move |sum: P, (vec, b0): (&Vec<P>, f64)| {
-            let closure = move |sum: P, (pt, b1): (&P, &f64)| sum + pt.to_vec() * (b0 * b1);
+            if b0 == 0.0 {
+                return sum;
+            }
+            let closure = move |sum: P, (pt, b1): (&P, &f64)| if *b1 == 0.0 { sum } else { sum + pt.to_vec() * (b0 * b1) };
             vec.iter().zip(&basis1).fold(sum, closure)
         };
         control_points.iter().zip(basis0).fold(P::origin(), closure)
@@ -630,9 +636,16 @@ impl<P: ControlPoint<f64>> ParametricSurface for BSplineSurface<P> {
         let (uknot_vec, vknot_vec) = self.knot_vecs();
         let basis0 = uknot_vec.bspline_basis_functions(degree0 - 1, u);
         let basis1 = vknot_vec.bspline_basis_functions(degree1, v);
+        // SolidCraft: zero basis terms skipped, as in `subs`.
         let closure = move |sum: P::Diff, (i, b0): (usize, f64)| {
+            if b0 == 0.0 {
+                return sum;
+            }
             let coef = inv_or_zero(uknot_vec[i + degree0] - uknot_vec[i]);
             let closure = |sum: P::Diff, (j, b1): (usize, &f64)| {
+                if *b1 == 0.0 {
+                    return sum;
+                }
                 sum + self.udelta_control_points(i, j) * coef * b0 * *b1
             };
             basis1.iter().enumerate().fold(sum, closure)
@@ -673,9 +686,16 @@ impl<P: ControlPoint<f64>> ParametricSurface for BSplineSurface<P> {
         let (uknot_vec, vknot_vec) = self.knot_vecs();
         let basis0 = uknot_vec.bspline_basis_functions(degree0, u);
         let basis1 = vknot_vec.bspline_basis_functions(degree1 - 1, v);
+        // SolidCraft: zero basis terms skipped, as in `subs`.
         let closure = move |sum: P::Diff, (i, b0): (usize, f64)| {
+            if b0 == 0.0 {
+                return sum;
+            }
             let coef = inv_or_zero(vknot_vec[i + degree1] - vknot_vec[i]);
             let closure = |sum: P::Diff, (j, b1): (usize, &f64)| {
+                if *b1 == 0.0 {
+                    return sum;
+                }
                 sum + self.vdelta_control_points(j, i) * coef * b0 * *b1
             };
             basis0.iter().enumerate().fold(sum, closure)
@@ -722,9 +742,16 @@ impl<P: ControlPoint<f64>> ParametricSurface for BSplineSurface<P> {
         let (uknot_vec, vknot_vec) = self.knot_vecs();
         let basis0 = uknot_vec.bspline_basis_functions(degree0 - 2, u);
         let basis1 = vknot_vec.bspline_basis_functions(degree1, v);
+        // SolidCraft: zero basis terms skipped, as in `subs`.
         let closure = move |sum: P::Diff, (i, b0): (usize, f64)| {
+            if b0 == 0.0 {
+                return sum;
+            }
             let coef = inv_or_zero(uknot_vec[i + degree0 - 1] - uknot_vec[i]);
             let closure = |sum: P::Diff, (j, b1): (usize, &f64)| {
+                if *b1 == 0.0 {
+                    return sum;
+                }
                 sum + self.udelta2_control_points(i, j) * coef * b0 * *b1
             };
             basis1.iter().enumerate().fold(sum, closure)
@@ -775,9 +802,16 @@ impl<P: ControlPoint<f64>> ParametricSurface for BSplineSurface<P> {
         let (uknot_vec, vknot_vec) = self.knot_vecs();
         let basis0 = uknot_vec.bspline_basis_functions(degree0, u);
         let basis1 = vknot_vec.bspline_basis_functions(degree1 - 2, v);
+        // SolidCraft: zero basis terms skipped, as in `subs`.
         let closure = move |sum: P::Diff, (j, b0): (usize, f64)| {
+            if b0 == 0.0 {
+                return sum;
+            }
             let coef = inv_or_zero(vknot_vec[j + degree1 - 1] - vknot_vec[j]);
             let closure = |sum: P::Diff, (i, b1): (usize, &f64)| {
+                if *b1 == 0.0 {
+                    return sum;
+                }
                 sum + self.vdelta2_control_points(i, j) * coef * b0 * *b1
             };
             basis0.iter().enumerate().fold(sum, closure)
@@ -830,7 +864,14 @@ impl<P: ControlPoint<f64>> ParametricSurface for BSplineSurface<P> {
             let coef0 = inv_or_zero(uknot_vec[i + degree0] - uknot_vec[i]);
             let coef1 = inv_or_zero(uknot_vec[i + degree0 + 1] - uknot_vec[i + 1]);
             let b0 = basis0[i] * coef0 - basis0[i + 1] * coef1;
+            // SolidCraft: zero basis terms skipped, as in `subs`.
+            if b0 == 0.0 {
+                return sum;
+            }
             let closure = |sum: P::Diff, (j, pt): (usize, &P)| {
+                if basis1[j] == 0.0 && basis1[j + 1] == 0.0 {
+                    return sum;
+                }
                 let coef0 = inv_or_zero(vknot_vec[j + degree1] - vknot_vec[j]);
                 let coef1 = inv_or_zero(vknot_vec[j + degree1 + 1] - vknot_vec[j + 1]);
                 sum + pt.to_vec() * (basis1[j] * coef0 - basis1[j + 1] * coef1) * b0
