@@ -5,7 +5,7 @@
 //! runs the server, reads the settings each frame and writes back what the server is doing.
 //! Hosts that don't set `SolveApp::mcp_server` show no such page.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use serde::{Deserialize, Serialize};
 
