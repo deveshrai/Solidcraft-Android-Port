@@ -63,6 +63,32 @@ fn a_spur_gear_has_its_standard_dimensions() {
     assert_eq!(stored["teeth"], 20);
 }
 
+/// The faces of a component's one body.
+fn face_count(s: &Session, comp: u64) -> usize {
+    let st = s.world_state();
+    st.bodies.iter().filter(|b| s.doc.model_body_component(b) == comp).map(|b| b.body.face_count()).sum()
+}
+
+/// A tooth is at most six faces (two flanks of a root fillet and an involute each, its tip and the
+/// root after it), not one a spline span: each
+/// face makes every boolean on the gear slower, and a flank through nine points was seven faces
+/// (a worm wheel's hub took over 25 minutes to join on a tablet).
+#[test]
+fn a_flank_is_one_face_a_curve() {
+    for (ty, z) in [("spur", 18), ("helical", 18), ("worm_wheel", 18), ("internal", 30)] {
+        let mut s = Session::default();
+        let (comp, _) = gear(&mut s, json!({"type": ty, "module": 1.5, "teeth": z, "face_width": 10, "worm_diameter": 15, "starts": 3}));
+        let n = face_count(&s, comp);
+        // The two ends, an internal gear's outside, and an end split where a sweep is built in
+        // pieces.
+        assert!(n <= 6 * z + 6, "{ty}: {n} faces for {z} teeth");
+    }
+    let mut s = Session::default();
+    let (comp, _) = gear(&mut s, json!({"type": "worm", "module": 1.5, "starts": 3, "face_width": 20, "worm_diameter": 15}));
+    let n = face_count(&s, comp);
+    assert!(n <= 4 * 3 * 2 + 6, "worm: {n} faces");
+}
+
 /// The helix turns the right way: a right-hand gear's teeth turn counter-clockwise going up.
 #[test]
 fn helical_teeth_turn_with_their_hand() {

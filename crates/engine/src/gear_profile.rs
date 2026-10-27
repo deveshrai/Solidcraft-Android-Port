@@ -313,6 +313,13 @@ pub fn outline(t: &Tooth, count: usize, angle_scale: f64, map: Option<Map>) -> V
         None => polar(r, a),
     };
     let pitch = TAU / count as f64;
+    // A flank's Bézier follows its points to a thousandth of the tooth's height (the points
+    // themselves are that close to the true involute).
+    let tol = 1e-3 * (t.ra - t.rf).abs().max(1e-6);
+    // Every tooth's flanks have tooth 0's shape: plan their pieces once.
+    let right0: Vec<Vec2> = t.flank.iter().map(|(r, a)| place(*r, -a * angle_scale)).collect();
+    let left0: Vec<Vec2> = t.flank.iter().rev().map(|(r, a)| place(*r, a * angle_scale)).collect();
+    let (right_plan, left_plan) = (flank_plan(&right0, tol, 3), flank_plan(&left0, tol, 3));
     let mut out = Vec::new();
     let (inner_r, outer_r) = (t.flank.first().map_or(t.rf, |f| f.0), t.flank.last().map_or(t.ra, |f| f.0));
     let (inner_half, outer_half) = (t.flank.first().map_or(0.0, |f| f.1) * angle_scale, t.flank.last().map_or(0.0, |f| f.1) * angle_scale);
@@ -322,17 +329,197 @@ pub fn outline(t: &Tooth, count: usize, angle_scale: f64, map: Option<Map>) -> V
         // along the near circle to the next tooth.
         let right: Vec<Vec2> = t.flank.iter().map(|(r, a)| place(*r, c - a * angle_scale)).collect();
         let left: Vec<Vec2> = t.flank.iter().rev().map(|(r, a)| place(*r, c + a * angle_scale)).collect();
-        out.push(Geom2::Spline { pts: resample(&right, 8), control: false, degree: 3 });
+        out.extend(flank_curves(&right, right_plan.as_deref()));
         if outer_half > 1e-9 {
             out.push(arc(c - outer_half, c + outer_half, &place, outer_r));
         }
-        out.push(Geom2::Spline { pts: resample(&left, 8), control: false, degree: 3 });
+        out.extend(flank_curves(&left, left_plan.as_deref()));
         let (a0, a1) = (c + inner_half, c + pitch - inner_half);
         if a1 - a0 > 1e-9 {
             out.push(arc(a0, a1, &place, inner_r));
         }
     }
     out
+}
+
+/// A flank as few curves as follow it: one Bézier when one does (degree 3 to 9), else two or a
+/// few end to end, else a spline through its points. Every curve becomes a face of the gear, and
+/// every face makes each boolean on it slower: a spline through points makes a face for each
+/// span between them. `plan` is [`flank_plan`]'s for a flank of the same shape (every tooth's).
+fn flank_curves(pts: &[Vec2], plan: Option<&[Piece]>) -> Vec<Geom2> {
+    let curves: Option<Vec<Geom2>> = plan.and_then(|plan| {
+        plan.iter()
+            .map(|&(a, b, n)| {
+                let ctrl = fit_bezier(pts.get(a..=b)?, n)?.0;
+                Some(Geom2::Spline { pts: ctrl, control: true, degree: n as u8 })
+            })
+            .collect()
+    });
+    curves.unwrap_or_else(|| vec![Geom2::Spline { pts: resample(pts, 8), control: false, degree: 3 }])
+}
+
+/// A Bézier piece of a flank: its first and last point's index, and its degree.
+type Piece = (usize, usize, usize);
+
+/// Highest degree of a flank's Bézier: the sketch's highest exact one.
+const MAX_FLANK_DEGREE: usize = solidcraft_geom::MAX_BEZIER_DEGREE;
+
+/// The lowest degree whose Bézier follows `pts` to within `tol`.
+fn lowest_degree(pts: &[Vec2], tol: f64) -> Option<usize> {
+    (3..=MAX_FLANK_DEGREE).take_while(|n| pts.len() >= n + 3).find(|&n| fit_bezier(pts, n).is_some_and(|(_, err)| err <= tol))
+}
+
+/// The pieces that follow a flank's points to within `tol`: one if one does, else the two that
+/// split it where their degrees add up lowest (the root fillet and the involute), else halves of
+/// halves, at most `depth` times. None when that isn't enough.
+fn flank_plan(pts: &[Vec2], tol: f64, depth: u32) -> Option<Vec<Piece>> {
+    plan_from(pts, 0, tol, depth)
+}
+
+fn plan_from(pts: &[Vec2], at: usize, tol: f64, depth: u32) -> Option<Vec<Piece>> {
+    let last = pts.len().checked_sub(1)?;
+    if let Some(n) = lowest_degree(pts, tol) {
+        return Some(vec![(at, at + last, n)]);
+    }
+    if depth == 0 || pts.len() < 12 {
+        return None;
+    }
+    let step = (pts.len() / 24).max(1);
+    let best = (6..last.saturating_sub(5))
+        .step_by(step)
+        .filter_map(|k| {
+            let (a, b) = (lowest_degree(pts.get(..=k)?, tol)?, lowest_degree(pts.get(k..)?, tol)?);
+            Some((a + b, k, a, b))
+        })
+        .min_by_key(|x| x.0);
+    if let Some((_, k, a, b)) = best {
+        return Some(vec![(at, at + k, a), (at + k, at + last, b)]);
+    }
+    let mid = pts.len() / 2;
+    let mut out = plan_from(pts.get(..=mid)?, at, tol, depth - 1)?;
+    out.extend(plan_from(pts.get(mid..)?, at + mid, tol, depth - 1)?);
+    Some(out)
+}
+
+/// The degree-`n` Bézier closest to `pts` (least squares, its ends on the first and last point),
+/// and how far the farthest point is from it.
+fn fit_bezier(pts: &[Vec2], n: usize) -> Option<(Vec<Vec2>, f64)> {
+    let (first, last) = (*pts.first()?, *pts.last()?);
+    // Chord-length parameters, then each point's nearest parameter on the last fit.
+    let mut t = vec![0.0];
+    for w in pts.windows(2) {
+        if let [a, b] = w {
+            t.push(t.last().copied().unwrap_or(0.0) + a.dist(*b));
+        }
+    }
+    let total = t.last().copied().unwrap_or(0.0);
+    if !(total > 0.0) {
+        return None;
+    }
+    t.iter_mut().for_each(|x| *x /= total);
+    let mut ctrl = Vec::new();
+    for _ in 0..6 {
+        ctrl = least_squares(pts, &t, n, first, last)?;
+        for (ti, q) in t.iter_mut().zip(pts) {
+            for _ in 0..2 {
+                let (p, d1, d2) = bezier_eval(&ctrl, *ti);
+                let r = p - *q;
+                let den = d1.dot(d1) + r.dot(d2);
+                if den.abs() > 1e-300 {
+                    *ti = (*ti - r.dot(d1) / den).clamp(0.0, 1.0);
+                }
+            }
+        }
+    }
+    let err = t.iter().zip(pts).map(|(ti, q)| bezier_eval(&ctrl, *ti).0.dist(*q)).fold(0.0, f64::max);
+    err.is_finite().then_some((ctrl, err))
+}
+
+/// Least-squares inner control points of a degree-`n` Bézier through `first` and `last`, point
+/// `pts[i]` at parameter `t[i]`.
+fn least_squares(pts: &[Vec2], t: &[f64], n: usize, first: Vec2, last: Vec2) -> Option<Vec<Vec2>> {
+    let m = n - 1;
+    let mut a = vec![vec![0.0; m]; m];
+    let mut rhs = vec![Vec2::ZERO; m];
+    for (ti, q) in t.iter().zip(pts) {
+        let b = bernstein(n, *ti);
+        let (b0, bn) = (b.first().copied().unwrap_or(0.0), b.last().copied().unwrap_or(0.0));
+        let r = *q - first * b0 - last * bn;
+        for j in 0..m {
+            let bj = b.get(j + 1).copied().unwrap_or(0.0);
+            if let Some(x) = rhs.get_mut(j) {
+                *x += r * bj;
+            }
+            for k in 0..m {
+                if let Some(x) = a.get_mut(j).and_then(|row| row.get_mut(k)) {
+                    *x += bj * b.get(k + 1).copied().unwrap_or(0.0);
+                }
+            }
+        }
+    }
+    // Gaussian elimination with partial pivoting.
+    for col in 0..m {
+        let piv = (col..m).max_by(|&i, &j| {
+            let (x, y) = (a.get(i).and_then(|r| r.get(col)), a.get(j).and_then(|r| r.get(col)));
+            x.map(|v| v.abs()).partial_cmp(&y.map(|v| v.abs())).unwrap_or(std::cmp::Ordering::Equal)
+        })?;
+        a.swap(col, piv);
+        rhs.swap(col, piv);
+        let d = *a.get(col)?.get(col)?;
+        if !(d.abs() > 1e-14) {
+            return None;
+        }
+        let (pivot_row, pivot_rhs) = (a.get(col)?.clone(), *rhs.get(col)?);
+        for row in col + 1..m {
+            let f = a.get(row)?.get(col)? / d;
+            for (x, p) in a.get_mut(row)?.iter_mut().zip(&pivot_row) {
+                *x -= f * p;
+            }
+            let r = rhs.get_mut(row)?;
+            *r -= pivot_rhs * f;
+        }
+    }
+    let mut x = vec![Vec2::ZERO; m];
+    for row in (0..m).rev() {
+        let mut s = *rhs.get(row)?;
+        for k in row + 1..m {
+            s -= *x.get(k)? * *a.get(row)?.get(k)?;
+        }
+        *x.get_mut(row)? = s * (1.0 / a.get(row)?.get(row)?);
+    }
+    let mut ctrl = Vec::with_capacity(n + 1);
+    ctrl.push(first);
+    ctrl.extend(x);
+    ctrl.push(last);
+    ctrl.iter().all(|p| p.is_finite()).then_some(ctrl)
+}
+
+/// The `n + 1` Bernstein polynomials of degree `n` at `t`.
+fn bernstein(n: usize, t: f64) -> Vec<f64> {
+    let mut b = vec![0.0; n + 1];
+    if let Some(x) = b.first_mut() {
+        *x = 1.0;
+    }
+    for k in 1..=n {
+        for j in (0..=k).rev() {
+            let prev = if j > 0 { b.get(j - 1).copied().unwrap_or(0.0) } else { 0.0 };
+            let cur = b.get(j).copied().unwrap_or(0.0);
+            if let Some(x) = b.get_mut(j) {
+                *x = cur * (1.0 - t) + prev * t;
+            }
+        }
+    }
+    b
+}
+
+/// A Bézier's point and first two derivatives at `t`.
+fn bezier_eval(ctrl: &[Vec2], t: f64) -> (Vec2, Vec2, Vec2) {
+    let n = ctrl.len().saturating_sub(1);
+    let point = |c: &[Vec2], deg: usize| -> Vec2 { bernstein(deg, t).iter().zip(c).fold(Vec2::ZERO, |s, (b, p)| s + *p * *b) };
+    let diff = |c: &[Vec2], k: usize| -> Vec<Vec2> { c.iter().zip(c.iter().skip(1)).map(|(a, b)| (*b - *a) * k as f64).collect() };
+    let d1 = diff(ctrl, n);
+    let d2 = diff(&d1, n.saturating_sub(1));
+    (point(ctrl, n), if n >= 1 { point(&d1, n - 1) } else { Vec2::ZERO }, if n >= 2 { point(&d2, n - 2) } else { Vec2::ZERO })
 }
 
 /// A counter-clockwise arc about the origin between two angles at a tooth radius, its ends
@@ -440,8 +627,8 @@ pub fn worm_section(k: &Rack, r1: f64, starts: usize, lead: f64) -> Result<(Vec<
     if !(ang(rf) < half) {
         return Err("the worm's threads leave no root between them".into());
     }
-    // The flank is an Archimedean spiral (its angle linear in the radius): four spans follow it.
-    let flank: Vec<(f64, f64)> = (0..=4).map(|i| rf + (ra - rf) * f64::from(i) / 4.0).map(|r| (r, ang(r))).collect();
+    // The flank is an Archimedean spiral (its angle linear in the radius), sampled for its Bézier.
+    let flank: Vec<(f64, f64)> = (0..=32).map(|i| rf + (ra - rf) * f64::from(i) / 32.0).map(|r| (r, ang(r))).collect();
     let tooth = Tooth { z: starts as f64, rf, ra, flank, pointed: false, undercut: false };
     Ok((outline(&tooth, starts, 1.0, None), ra, rf))
 }
@@ -553,5 +740,35 @@ mod tests {
                 assert!(f.0.dist(l.1) < 1e-6);
             }
         }
+    }
+
+    /// A flank is at most two Béziers (its root fillet and its involute; one face of the gear
+    /// each, not one a span; three with an undercut), and each follows the generated flank to a thousandth of the tooth
+    /// height.
+    #[test]
+    fn a_flank_is_two_beziers_on_the_generated_points() {
+        for (z, x) in [(18.0, 0.0), (8.0, 0.0), (40.0, 0.3), (12.0, 0.5)] {
+            let k = Rack { x, ..Rack::iso(1.5, deg(20.0)) };
+            let t = generate(z, &k, 1.5 * z / 2.0 + (1.0 + x) * 1.5).unwrap_or_else(|e| panic!("{z}: {e}"));
+            let o = outline(&t, z as usize, 1.0, None);
+            let splines: Vec<_> = o.iter().filter(|g| matches!(g, Geom2::Spline { .. })).collect();
+            // An undercut tooth's flank has a corner between its fillet and its involute.
+            let most = if t.undercut { 3 } else { 2 };
+            assert!(splines.len() <= 2 * most * z as usize, "z {z} x {x}: {} flank curves", splines.len());
+            let flank: Vec<Vec2> = t.flank.iter().map(|(r, a)| polar(*r, -a)).collect();
+            let pieces = flank_plan(&flank, 1e-3 * (t.ra - t.rf), 3).unwrap_or_else(|| panic!("z {z} x {x}: no fit"));
+            assert!(pieces.len() <= most, "z {z} x {x}: {} pieces", pieces.len());
+            for &(a, b, n) in &pieces {
+                let err = flank.get(a..=b).and_then(|p| fit_bezier(p, n)).map_or(f64::MAX, |f| f.1);
+                assert!(err <= 1e-3 * (t.ra - t.rf), "z {z} x {x}: {err}");
+            }
+            for g in splines {
+                let Geom2::Spline { pts, control: true, degree } = g else { panic!("z {z}: not a Bézier") };
+                assert_eq!(pts.len(), *degree as usize + 1);
+            }
+        }
+        let k = Rack::iso(1.5, deg(20.0));
+        let (worm, _, _) = worm_section(&k, 7.5, 3, 3.0 * PI * 1.5).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(worm.iter().filter(|g| matches!(g, Geom2::Spline { control: true, .. })).count(), 6);
     }
 }

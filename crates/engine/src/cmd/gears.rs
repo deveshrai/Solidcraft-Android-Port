@@ -693,8 +693,9 @@ fn build(s: &mut Session, sp: &Spec) -> Result<Plan> {
     let straight = sp.twist() == 0.0 && !matches!(sp.ty, Type::Bevel | Type::Miter);
     let hub = sp.hub_d > 0.0 && sp.hub_len > 0.0;
     // A hub joined to swept teeth must reach into them (a join on their flat face alone is very
-    // slow), so the bore is then cut through both afterwards.
-    let bore_in_profile = sp.bore > 0.0 && sp.ty.round() && !matches!(sp.ty, Type::Internal | Type::Bevel | Type::Miter) && (straight || !hub);
+    // slow). With a hub the bore is cut through both afterwards, once: a hub with a bore of its
+    // own would meet the teeth's bore face on face, which the kernel handles slowly.
+    let bore_in_profile = sp.bore > 0.0 && sp.ty.round() && !matches!(sp.ty, Type::Internal | Type::Bevel | Type::Miter) && !hub;
     if bore_in_profile {
         pl.outline.extend(bore_loop(sp, sp.keyway && straight));
     }
@@ -770,11 +771,8 @@ fn build(s: &mut Session, sp: &Spec) -> Result<Plan> {
     }
     if sp.ty.round() && sp.ty != Type::Internal {
         if hub && straight {
-            // A ring below z = 0, its hole the bore (with the keyway where the teeth have theirs).
-            let mut ring = vec![Geom2::Circle(Vec2::ZERO, sp.hub_d / 2.0)];
-            if bore_in_profile {
-                ring.extend(bore_loop(sp, sp.keyway));
-            }
+            // A disc below z = 0; the bore goes through it and the teeth below.
+            let ring = vec![Geom2::Circle(Vec2::ZERO, sp.hub_d / 2.0)];
             let hub = profile(s, &ring, 0.0, "Hub")?;
             run(
                 s,

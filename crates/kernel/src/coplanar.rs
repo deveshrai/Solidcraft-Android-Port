@@ -1167,16 +1167,25 @@ fn imprinted(body: Body, mut h: Option<History>, n: Vec3, d: f64, tool: &Body, t
     // along it again re-traces the line already there, leaving a sliver (or not) depending
     // on how the second trace falls.
     let mut used: Vec<Option<crate::FaceSurface>> = Vec::new();
+    let tool_faces: Vec<&mt::Face> = tool.solid.face_iter().collect();
     for t in beside {
         let surface = crate::face_surface(tool, t);
         if used.iter().any(|u| same_surface(u, &surface, tol)) {
             continue;
         }
-        used.push(surface);
         let faces = near(&body, faces_in(&body, n, d, tol));
         if faces.is_empty() {
             break;
         }
+        // SolidCraft (Android port): a side face clear of the faces it would split can't
+        // imprint on them; tracing it costs a nearest-point search on its surface at every
+        // point of every one of those faces (a gear's 80 flank faces on a hub's end face
+        // inside its root circle: minutes).
+        let clear = tool_faces.get(t).and_then(|f| hull_box(f)).zip(faces_box(&body, &faces, gap)).is_some_and(|(a, b)| boxes_separate(a, b, gap));
+        if clear {
+            continue;
+        }
+        used.push(surface);
         // Faces the tool's face does not cross stay as they are; none crossed is an error.
         let Ok((split, _)) = crate::splitface::split_any(&body, &faces, &crate::SplitTool::Face { body: tool, face: t }) else { continue };
         h = crate::boolean_record::through(&split, 0, h.as_ref());
