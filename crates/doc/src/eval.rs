@@ -502,7 +502,20 @@ pub fn helical_thread_on(st: &ModelState, p: Vec3, h: &HelicalInputs) -> Result<
                             show_mm(major - pitch)
                         )));
                     }
-                    fit(d)
+                    // A shallower groove would not reach the bolt's crests, and no bolt would go in:
+                    // when the clearance leaves no crest between the turns at this hole's size, the
+                    // hole must be wider (as a tap drill is for a printed part), not the thread shallower.
+                    let most = kernel::HelicalThread::basic_depth(pitch, angle, clearance);
+                    if d > most + 1e-9 {
+                        let drill = (((major - 2.0 * most) * 100.0).ceil() / 100.0).max(dia);
+                        return Err(DocError::Invalid(format!(
+                            "with a {} mm clearance an {m} thread leaves no crest in a {} mm hole, and a shallower thread would not take the bolt: drill {} mm, or make the clearance smaller",
+                            show_mm(clearance),
+                            show_mm(dia),
+                            show_mm(drill)
+                        )));
+                    }
+                    d
                 }
                 None => {
                     // The shaft is the major diameter: down to the basic root.

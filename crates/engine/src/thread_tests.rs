@@ -881,3 +881,31 @@ fn helical_thread_in_a_boss_under_a_hollow_shells_ceiling() {
     assert!((removed - 1.21).abs() < 0.1, "removed {removed} mm³");
     assert!(s.model.state().body("Top").unwrap().body.validity().is_empty());
 }
+
+/// An ISO thread with a clearance in a tapped hole too small to keep a crest: refused with the
+/// drill size that works, rather than made so shallow that the bolt can't go in (an M2 with
+/// 0.05 mm clearance in a 1.6 mm tap drill was built 0.127 mm deep, short of the bolt's 0.2 mm
+/// crests). In the hole it names, the groove reaches the major diameter and the clearance past it.
+#[test]
+fn an_iso_thread_with_clearance_in_too_small_a_hole_names_the_drill() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 6, "corner": [-5, -5, 0], "body_name": "Blk"}));
+    run(&mut s, "solid.hole", json!({"position": [0, 0, 0], "direction": [0, 0, 1], "diameter": 1.6, "depth": 4, "targets": ["Blk"]}));
+    let thread = json!({"face": [0.8, 0, 2], "designation": "M2", "helical": true, "clearance": "0.05 mm"});
+    let e = s.execute("solid.thread", &thread).unwrap_err().to_string();
+    assert!(e.contains("drill 1.85 mm"), "{e}");
+    // No clearance: the same hole takes the plain M2, out to the major diameter.
+    run(&mut s, "solid.thread", json!({"face": [0.8, 0, 2], "designation": "M2", "helical": true}));
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 6, "corner": [-5, -5, 0], "body_name": "Blk"}));
+    run(&mut s, "solid.hole", json!({"position": [0, 0, 0], "direction": [0, 0, 1], "diameter": 1.85, "depth": 4, "targets": ["Blk"]}));
+    let st = s.model.state();
+    let (_, _, t) = solidcraft_doc::helical_thread_on(
+        &st,
+        Vec3::new(0.925, 0.0, 2.0),
+        &solidcraft_doc::HelicalInputs { designation: Some("M2"), pitch: None, clearance: Some(0.05), ..custom(0.4) },
+    )
+    .unwrap();
+    assert!((0.925 + t.depth + t.clearance - 1.05).abs() < 1e-9, "root at r {}", 0.925 + t.depth + t.clearance);
+    run(&mut s, "solid.thread", json!({"face": [0.925, 0, 2], "designation": "M2", "helical": true, "clearance": "0.05 mm"}));
+}
