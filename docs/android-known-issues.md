@@ -4,7 +4,7 @@ What is wrong or missing in the current port release, and what is planned for th
 entry says how to work around it today. Fixed entries move to [Fixed](#fixed) with the release that
 fixed them.
 
-Current: **port 0.24.0a** (upstream 0.24.0). Next: **0.24.0b**, or **0.25.0a** if upstream releases
+Current: **port 0.24.0b** (upstream 0.24.0). Next: **0.24.0c**, or **0.25.0a** if upstream releases
 first. See also [android-vs-upstream.md](android-vs-upstream.md) for what upstream has that the port
 doesn't, and the reverse.
 
@@ -21,7 +21,7 @@ doesn't, and the reverse.
 |---|---|---|---|
 | **The helical thread is hard to find.** Thread opens as upstream's does: Modeled off, and once ticked, Geometry on Faceted. The port's Helical B-rep, Custom and Clearance look missing until you know where they are. | Galaxy Z Fold, 0.23.0a; still so in 0.24.0a | Tick **Modeled**, set **Geometry** to **Helical B-rep** ([android-threads.md](android-threads.md#opening-thread)) | Decide whether the port opens Thread with Modeled ticked and Helical B-rep chosen |
 | **A file saved to a device folder can lose its extension.** Save As writes the name typed in Android's picker; type *gear* and the file is `gear`, not `gear.solidcraft`. The app itself names the tab and its copy correctly and opens the file again, but file managers and other apps don't know what it is. | Pixel 9 and Galaxy Z Fold, 0.23.0a and b | Type the extension: *gear.solidcraft*, *part.stl* | Ask the picker for the name with its extension kept, or rename the saved document through the provider |
-| **The version shown in the app is upstream's.** The title bar shows *v0.24.0*; the port letter (a) is only in Android's app info and the APK name. | All, every port release | Settings › Apps › SolidCraft shows *0.24.0a* | Show the port version next to upstream's |
+| **The version shown in the app is upstream's.** The title bar shows *v0.24.0*; the port letter (a) is only in Android's app info and the APK name. | All, every port release | Settings › Apps › SolidCraft shows *0.24.0b* | Show the port version next to upstream's |
 | **Samsung's window handle covers the new-tab button.** On Samsung devices the handle at the top centre sits over the tab strip; a tap there can open Samsung's window menu instead of **+**. | Galaxy Z Fold | **Ctrl+N** or **File › New Design** | Keep the tab strip's buttons out of the handle's area on Samsung devices |
 | **Designs saved by 0.22.0a open as "Untitled (n)".** That release's Save As didn't store the typed name in the design (fixed in 0.23.0a), and Open names the tab from the design. | Any, files from 0.22.0a | **Save As** once to rename it | Fall back to the file's name when a design's name is a default "Untitled" one |
 

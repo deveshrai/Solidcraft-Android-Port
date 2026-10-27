@@ -5,7 +5,7 @@
 **This is the Android port of SolidCraft.** It is upstream
 [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with every
 upstream release (now 0.24.0), plus an Android app and **features upstream doesn't have yet**. Current
-release: **0.24.0a** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
+release: **0.24.0b** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
 
 | Added in this port | What it gives you | Guide |
 |---|---|---|
@@ -20,8 +20,15 @@ cassette housing in two halves with five M2 screws on real threads, checked to f
 
 ![A cassette housing built over the MCP server on a Galaxy Z Fold](docs/screenshots/android/mcp-cassette-fold.gif)
 
+**New in 0.24.0b:** gears are simple B-rep (110 faces for 18 teeth instead of 326), booleans on them are
+much faster, and the app stays responsive through an agent's long command. A worm gearbox built by Claude
+Code on a Galaxy Tab, and what changed: [android-speed](docs/android-speed.md).
+
+![A worm gearbox built over MCP on a Galaxy Tab](docs/screenshots/android/mcp-worm-gearbox-tab.gif)
+
 How the port differs from upstream, feature by feature: [android-vs-upstream](docs/android-vs-upstream.md) ·
 what's new in each release: [android-whats-new](docs/android-whats-new.md) ·
+faster gears and agents (0.24.0b): [android-speed](docs/android-speed.md) ·
 known issues: [android-known-issues](docs/android-known-issues.md) ·
 how it works and how to build it: [android](docs/android.md) ·
 following upstream: [android-sync](docs/android-sync.md).

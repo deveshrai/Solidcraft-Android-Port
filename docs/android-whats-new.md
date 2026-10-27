@@ -5,11 +5,45 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.24.0b](#0240b): faster gears, a steadier MCP server
 - [0.24.0a](#0240a): upstream 0.24.0, the MCP server, thread fixes
 - [0.23.0b](#0230b): finger-scrolled menus
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.24.0b
+
+Still upstream 0.24.0. This release fixes a live session that went wrong: Claude Code in Termux on a
+Galaxy Tab, designing a worm gearbox, saw its calls time out, a hub join run for over 25 minutes, and the
+app closed as "not responding". The whole story, with before and after numbers:
+[android-speed.md](android-speed.md).
+
+![A worm gearbox built over MCP on a Galaxy Tab](screenshots/android/mcp-worm-gearbox-tab.gif)
+
+- **The app stays responsive during an agent's long command.** Agent commands, timed batches included,
+  compute off the window thread, with a chip saying what is computing and a **Stop** button; Android no
+  longer closes the app.
+- **Long MCP calls wait instead of timing out.** A call still running after a few minutes answers
+  *"still running: call `pending`"*, and the agent waits for the result through `pending` instead of
+  sending the command again. Each MCP session has its own thread, so one long call holds up no other.
+- **Gears are simple B-rep.** A tooth flank is one to three exact Béziers (root fillet and involute)
+  instead of a spline whose every span was a face: an 18-tooth spur gear has 110 faces instead of 326,
+  the same shape to within 3.4 µm. Every boolean on a gear does less work.
+
+  ![One tooth, before and after: each colour is one face](screenshots/android/gear-flank-faces.png)
+
+- **Joins flat on a gear's face are quick.** The hub join that never finished on the tablet takes 5.7 s:
+  the kernel no longer traces flank faces that can't reach the contact.
+- **`gear.create` with bore, keyway and hub: 161 s → 2.5 s.** The hub is a disc and the bore is cut once
+  through both, instead of two bores lying on each other.
+- **Booleans on gears and helical threads 2–3× faster**: B-spline surfaces skip the basis functions
+  that are zero, with the same results.
+- **`scripts/android-sync.sh` keeps these fixes through upstream merges**: it stops when one of them goes
+  missing ([android-sync.md](android-sync.md#the-ports-speed-fixes)).
+
+Still slow, in upstream's kernel: interference and clearance between two gears (a minute or two), and a
+few holes whose first boolean is retried ([known issues](android-known-issues.md)).
 
 ## 0.24.0a
 

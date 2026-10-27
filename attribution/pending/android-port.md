@@ -86,3 +86,7 @@
 | docs/screenshots/android/fold-mcp-cassette.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): the cassette housing's halves built over MCP | MIT OR Apache-2.0 |
 | docs/screenshots/android/fold-mcp-cassette-thread-section.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): a section through an M2 screw in its helical tapped thread | MIT OR Apache-2.0 |
 | docs/screenshots/android/fold-mcp-settings-another-computer.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Z Fold): Settings › MCP server for a computer on the same Wi-Fi | MIT OR Apache-2.0 |
+| docs/screenshots/android/mcp-worm-gearbox-tab.gif | SolidCraft contributors | recording of SolidCraft itself on Android (Galaxy Tab): a worm gearbox built over MCP, captioned in IBM Plex Sans (OFL) | MIT OR Apache-2.0 |
+| docs/screenshots/android/tab-mcp-worm-gearbox.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab): the worm gearbox, cut through the worm and the wheel | MIT OR Apache-2.0 |
+| docs/screenshots/android/tab-gear-faces.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab): a spur gear with each face coloured | MIT OR Apache-2.0 |
+| docs/screenshots/android/gear-flank-faces.png | SolidCraft contributors | diagram drawn from SolidCraft's own gear sketches (0.24.0a and 0.24.0b), labelled in IBM Plex Sans (OFL) | MIT OR Apache-2.0 |
