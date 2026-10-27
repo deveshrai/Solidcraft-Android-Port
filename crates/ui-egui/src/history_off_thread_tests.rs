@@ -452,6 +452,24 @@ fn a_computing_batch_says_its_step() {
     assert_eq!(reply_to(&mut h, &single)["ok"], true);
 }
 
+/// A timed batch (`"timings": true`) computes off the window thread too, and each step's time is
+/// the time it computed there: a tablet's minute-long gear boolean kept the window thread so long
+/// that Android closed the app as not responding.
+#[test]
+fn a_timed_batch_computes_off_the_window_thread() {
+    let (mut h, tx) = agent_harness();
+    let hole = |x: f64| json!({"command": "solid.cylinder", "params": {"base": [x, 10, -1], "axis": [0, 0, 1], "radius": 3, "height": 20, "operation": "cut"}});
+    let batch = ask(&tx, "engine.batch", json!({"timings": true, "commands": [hole(50.0), hole(30.0)]}));
+    h.frames(1);
+    assert!(h.app.agent_computing().is_some(), "a timed batch computes on the window thread");
+    let v = reply_to(&mut h, &batch);
+    assert_eq!(v["ok"], true, "{v}");
+    let rows = v["result"]["timings"].as_array().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 2, "{v}");
+    assert!(rows.iter().all(|r| r["ms"].as_f64().is_some_and(|ms| ms >= 0.0)), "{v}");
+    assert!(v["result"]["timings_measured"].is_string(), "{v}");
+}
+
 /// #1989: an agent's design change computes off the window thread. The window keeps answering
 /// (`ui.*`, inspection) while it computes and shows which command it is; the agent's next
 /// design change waits its turn; each lands as its own undo step with its usual reply.

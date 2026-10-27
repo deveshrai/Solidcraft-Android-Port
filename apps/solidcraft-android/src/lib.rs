@@ -218,8 +218,8 @@ mod android {
                 let checks = documents.clone();
                 let on_screen = Box::new(move || -> crate::mcp_http::Ready {
                     match &checks {
-                        Some(d) => Box::new(d.borrow().on_screen()),
-                        None => Box::new(|| true),
+                        Some(d) => std::sync::Arc::new(d.borrow().on_screen()),
+                        None => std::sync::Arc::new(|| true),
                     }
                 });
                 let mcp = McpHost::new(control, cc.egui_ctx.clone(), agent_folder, on_screen);
@@ -230,6 +230,12 @@ mod android {
                 if let Some(p) = cc.storage.and_then(|s| solidcraft_ui_egui::prefs::stored(|k| s.get_string(k))) {
                     app.load_prefs(&p);
                 }
+                // An agent's commands (the MCP server) compute off the window thread, always:
+                // Android closes an app whose window thread answers no input for 10 seconds, and a
+                // boolean on a gear can take minutes on a tablet. The window goes on drawing,
+                // shows the command computing with a Stop button, and answers `pending` and
+                // inspection meanwhile.
+                app.preferences.agent_off_thread = true;
                 if let Some(rs) = &cc.wgpu_render_state {
                     let info = rs.adapter.get_info();
                     let samples = scene_samples(info.backend, u32::from(MSAA), &rs.msaa_supported);

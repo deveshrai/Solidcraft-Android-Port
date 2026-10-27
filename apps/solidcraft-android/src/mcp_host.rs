@@ -117,14 +117,31 @@ impl McpHost {
         let control_port = match self.control_port {
             Some(p) => p,
             None => {
-                let p =
-                    crate::control_server::listen_agent(self.control.clone(), self.ctx.clone()).ok_or_else(|| tr("mcp.no_control").to_string())?;
+                // The desktop app's own control server, as it listens by default: a request still
+                // running after a minute is answered "running" and the MCP server waits for it
+                // through `control.pending` (and tells the agent to call `pending` after a few
+                // minutes more), so a long boolean never looks like an app that stopped
+                // answering. Its requests join the app's.
+                let requests = crate::control_server::start(solidcraft_engine::control_auth::Listen::Exact(0), self.ctx.clone());
+                let (forward, ctx) = (self.control.clone(), self.ctx.clone());
+                std::thread::Builder::new()
+                    .name("mcp-control".into())
+                    .spawn(move || {
+                        for request in requests {
+                            if forward.send(request).is_err() {
+                                break;
+                            }
+                            ctx.request_repaint();
+                        }
+                    })
+                    .map_err(|e| e.to_string())?;
+                let p = solidcraft_engine::control_auth::read_current_port().ok_or_else(|| tr("mcp.no_control").to_string())?;
                 self.control_port = Some(p);
                 p
             }
         };
         let folders = vec![self.folder.clone()];
-        let make: MakeServer = Box::new(move || {
+        let make: MakeServer = std::sync::Arc::new(move || {
             let remote = solidcraft_mcp::Remote::new(&format!("127.0.0.1:{control_port}"), None);
             solidcraft_mcp::Server::new(Box::new(remote)).with_path_scope(Some(solidcraft_mcp::agent_scope_with(None, folders.clone())))
         });

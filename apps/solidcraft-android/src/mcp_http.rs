@@ -10,7 +10,8 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -25,11 +26,13 @@ const MAX_SESSIONS: usize = 8;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// How often the listener looks whether it should stop.
 const POLL: Duration = Duration::from_millis(50);
+/// Connections being read at once, so a flood can't start threads without end.
+const MAX_CONNECTIONS: usize = 32;
 
-/// Makes the MCP server for a new session (on the endpoint's thread).
-pub type MakeServer = Box<dyn Fn() -> solidcraft_mcp::Server + Send>;
+/// Makes the MCP server for a new session (on that session's own thread).
+pub type MakeServer = Arc<dyn Fn() -> solidcraft_mcp::Server + Send + Sync>;
 /// Whether the app can run a tool call now (Android pauses it off screen).
-pub type Ready = Box<dyn Fn() -> bool + Send>;
+pub type Ready = Arc<dyn Fn() -> bool + Send + Sync>;
 
 /// How long a tool call waits for the app to come back on screen before it is answered.
 const READY_WAIT: Duration = Duration::from_secs(15);
@@ -65,7 +68,8 @@ impl Endpoint {
         let stop = Arc::new(AtomicBool::new(false));
         let activity = Arc::new(Mutex::new(Activity::default()));
         let (s, a) = (stop.clone(), activity.clone());
-        let thread = std::thread::Builder::new().name("mcp-http".into()).spawn(move || serve(listener, &token, &make, &ready, &s, &a))?;
+        let shared = Arc::new(Shared { token, make, ready, activity: a, sessions: Mutex::new(HashMap::new()), open: AtomicUsize::new(0) });
+        let thread = std::thread::Builder::new().name("mcp-http".into()).spawn(move || serve(listener, &shared, &s))?;
         Ok(Endpoint { port, stop, activity, thread: Some(thread) })
     }
 
@@ -113,20 +117,65 @@ pub fn lan_address() -> Option<IpAddr> {
     (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
 }
 
+/// A session: its own thread, which owns its MCP server and answers its calls in turn. A long
+/// tool call holds up only its own session's next call; the endpoint goes on taking connections,
+/// and answers other sessions, pings and `DELETE`s at once.
 struct Session {
-    server: solidcraft_mcp::Server,
+    calls: Sender<Call>,
     used: Instant,
 }
 
-fn serve(listener: TcpListener, token: &str, make: &MakeServer, ready: &Ready, stop: &AtomicBool, activity: &Mutex<Activity>) {
-    let mut sessions: HashMap<String, Session> = HashMap::new();
+/// A call for a session's thread: the request's body, and where its reply goes.
+struct Call {
+    body: String,
+    stream: TcpStream,
+    /// Sent back as `Mcp-Session-Id` (none for the default session).
+    id: Option<String>,
+}
+
+/// What the endpoint's threads share.
+struct Shared {
+    token: String,
+    make: MakeServer,
+    ready: Ready,
+    activity: Arc<Mutex<Activity>>,
+    sessions: Mutex<HashMap<String, Session>>,
+    /// Connections being read.
+    open: AtomicUsize,
+}
+
+impl Shared {
+    fn sessions(&self) -> std::sync::MutexGuard<'_, HashMap<String, Session>> {
+        self.sessions.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn count_sessions(&self) {
+        let n = self.sessions().len();
+        self.activity.lock().unwrap_or_else(PoisonError::into_inner).sessions = n;
+    }
+}
+
+fn serve(listener: TcpListener, shared: &Arc<Shared>, stop: &AtomicBool) {
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _)) => {
-                if let Err(e) = connection(stream, token, make, ready, &mut sessions, activity) {
-                    log::info!("mcp: connection: {e}");
+                if shared.open.load(Ordering::Relaxed) >= MAX_CONNECTIONS {
+                    let mut w = stream;
+                    let _ = write_reply(&mut w, &Reply::error(503, "too many connections at once"));
+                    continue;
                 }
-                activity.lock().unwrap_or_else(PoisonError::into_inner).sessions = sessions.len();
+                shared.open.fetch_add(1, Ordering::Relaxed);
+                let mine = shared.clone();
+                let spawned = std::thread::Builder::new().name("mcp-conn".into()).spawn(move || {
+                    if let Err(e) = connection(stream, &mine) {
+                        log::info!("mcp: connection: {e}");
+                    }
+                    mine.open.fetch_sub(1, Ordering::Relaxed);
+                });
+                if let Err(e) = spawned {
+                    log::warn!("mcp: no thread for a connection: {e}");
+                    shared.open.fetch_sub(1, Ordering::Relaxed);
+                }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(POLL),
             Err(e) => {
@@ -135,6 +184,8 @@ fn serve(listener: TcpListener, token: &str, make: &MakeServer, ready: &Ready, s
             }
         }
     }
+    // Stopped: the sessions' threads end once their calls in hand are answered.
+    shared.sessions().clear();
 }
 
 /// A request as read off the connection.
@@ -172,6 +223,7 @@ impl Reply {
 fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        503 => "Service Unavailable",
         202 => "Accepted",
         204 => "No Content",
         400 => "Bad Request",
@@ -184,20 +236,22 @@ fn reason(status: u16) -> &'static str {
     }
 }
 
-fn connection(
-    stream: TcpStream,
-    token: &str,
-    make: &MakeServer,
-    ready: &Ready,
-    sessions: &mut HashMap<String, Session>,
-    activity: &Mutex<Activity>,
-) -> std::io::Result<()> {
+fn connection(stream: TcpStream, shared: &Shared) -> std::io::Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(READ_TIMEOUT))?;
     let mut writer = stream.try_clone()?;
     let mut reader = BufReader::new(stream);
     let reply = match read_request(&mut reader) {
-        Ok(request) => handle(&request, token, make, ready, sessions, activity),
+        Ok(request) => match handle(&request, shared) {
+            Routed::Reply(reply) => reply,
+            // A session's thread answers it.
+            Routed::To(sender, body, id) => {
+                if sender.send(Call { body, stream: writer.try_clone()?, id }).is_ok() {
+                    return Ok(());
+                }
+                Reply::error(404, "session not found: start a new one")
+            }
+        },
         Err(reply) => reply,
     };
     write_reply(&mut writer, &reply)
@@ -251,41 +305,44 @@ fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn handle(
-    request: &Request,
-    token: &str,
-    make: &MakeServer,
-    ready: &Ready,
-    sessions: &mut HashMap<String, Session>,
-    activity: &Mutex<Activity>,
-) -> Reply {
+/// Where a request goes: answered here, or to a session's thread (its body and session id).
+enum Routed {
+    Reply(Reply),
+    To(Sender<Call>, String, Option<String>),
+}
+
+fn handle(request: &Request, shared: &Shared) -> Routed {
     if !matches!(request.path.trim_end_matches('/'), "/mcp" | "") {
-        return Reply::error(404, "the MCP endpoint is /mcp");
+        return Routed::Reply(Reply::error(404, "the MCP endpoint is /mcp"));
     }
     let bearer = request.header("authorization").and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")));
-    if token.is_empty() || !bearer.is_some_and(|b| same(b.trim(), token)) {
-        activity.lock().unwrap_or_else(PoisonError::into_inner).refused += 1;
+    if shared.token.is_empty() || !bearer.is_some_and(|b| same(b.trim(), &shared.token)) {
+        shared.activity.lock().unwrap_or_else(PoisonError::into_inner).refused += 1;
         let mut reply = Reply::error(401, "a valid access token is needed: copy the command from SolidCraft's Settings › MCP server again");
         reply.headers.push(("WWW-Authenticate", "Bearer".into()));
-        return reply;
+        return Routed::Reply(reply);
     }
     {
-        let mut a = activity.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut a = shared.activity.lock().unwrap_or_else(PoisonError::into_inner);
         a.requests += 1;
         a.last_request = Some(Instant::now());
     }
     let session_id = request.header("mcp-session-id").map(str::to_string);
     match request.method.as_str() {
-        "POST" => post(request, session_id, make, ready, sessions),
-        "DELETE" => match session_id.and_then(|id| sessions.remove(&id)) {
-            Some(_) => Reply::new(200, ""),
-            None => Reply::error(404, "no such session"),
-        },
+        "POST" => post(request, session_id, shared),
+        "DELETE" => {
+            let removed = session_id.and_then(|id| shared.sessions().remove(&id));
+            shared.count_sessions();
+            Routed::Reply(match removed {
+                Some(_) => Reply::new(200, ""),
+                None => Reply::error(404, "no such session"),
+            })
+        }
         // No event stream: everything comes back in the POST's own reply.
         _ => {
             let mut reply = Reply::new(405, "");
             reply.headers.push(("Allow", "POST, DELETE".into()));
-            reply
+            Routed::Reply(reply)
         }
     }
 }
@@ -321,44 +378,75 @@ fn not_on_screen(message: &serde_json::Value) -> String {
     .to_string()
 }
 
-fn post(request: &Request, session_id: Option<String>, make: &MakeServer, ready: &Ready, sessions: &mut HashMap<String, Session>) -> Reply {
-    let Ok(body) = std::str::from_utf8(&request.body) else { return Reply::error(400, "the body is not UTF-8") };
-    let message = serde_json::from_str::<serde_json::Value>(body).unwrap_or_default();
-    let initialize = message.get("method").and_then(|m| m.as_str()) == Some("initialize");
+fn post(request: &Request, session_id: Option<String>, shared: &Shared) -> Routed {
+    let Ok(body) = String::from_utf8(request.body.clone()) else { return Routed::Reply(Reply::error(400, "the body is not UTF-8")) };
+    let initialize = serde_json::from_str::<serde_json::Value>(&body).is_ok_and(|m| m.get("method").and_then(|m| m.as_str()) == Some("initialize"));
+    let mut sessions = shared.sessions();
     let id = if initialize {
         // A new session, even when the client sends an old id with it.
-        let Some(id) = new_token().map(|t| t.chars().take(32).collect::<String>()) else { return Reply::error(500, "no random session id") };
+        let Some(id) = new_token().map(|t| t.chars().take(32).collect::<String>()) else {
+            return Routed::Reply(Reply::error(500, "no random session id"));
+        };
         if sessions.len() >= MAX_SESSIONS
             && let Some(oldest) = sessions.iter().min_by_key(|(_, s)| s.used).map(|(k, _)| k.clone())
         {
             sessions.remove(&oldest);
         }
-        sessions.insert(id.clone(), Session { server: make(), used: Instant::now() });
+        let Some(session) = start_session(shared) else { return Routed::Reply(Reply::error(500, "no thread for a session")) };
+        sessions.insert(id.clone(), session);
         id
     } else {
         match session_id {
             Some(id) if sessions.contains_key(&id) => id,
             // The client re-initializes on 404 (the app was restarted, or the session evicted).
-            Some(_) => return Reply::error(404, "session not found: start a new one"),
+            Some(_) => return Routed::Reply(Reply::error(404, "session not found: start a new one")),
             // A client that doesn't keep sessions gets one of its own, kept as for any other.
             None => {
                 let id = String::from("-");
-                sessions.entry(id.clone()).or_insert_with(|| Session { server: make(), used: Instant::now() });
+                if !sessions.contains_key(&id) {
+                    let Some(session) = start_session(shared) else { return Routed::Reply(Reply::error(500, "no thread for a session")) };
+                    sessions.insert(id.clone(), session);
+                }
                 id
             }
         }
     };
-    let Some(session) = sessions.get_mut(&id) else { return Reply::error(500, "session lost") };
+    let Some(session) = sessions.get_mut(&id) else { return Routed::Reply(Reply::error(500, "session lost")) };
     session.used = Instant::now();
-    let answer = if reaches_app(&message) && !wait_ready(ready) { Some(not_on_screen(&message)) } else { session.server.handle_line(body) };
-    let mut reply = match answer {
-        Some(json) => Reply::new(200, json),
-        None => Reply::new(202, ""),
-    };
-    if id != "-" {
-        reply.headers.push(("Mcp-Session-Id", id));
-    }
-    reply
+    let to = session.calls.clone();
+    drop(sessions);
+    shared.count_sessions();
+    Routed::To(to, body, (id != "-").then_some(id))
+}
+
+/// A session's thread: its MCP server, made there, answers each call in turn until the session
+/// is closed or evicted.
+fn start_session(shared: &Shared) -> Option<Session> {
+    let (calls, rx) = channel::<Call>();
+    let (make, ready) = (shared.make.clone(), shared.ready.clone());
+    std::thread::Builder::new()
+        .name("mcp-session".into())
+        .spawn(move || {
+            let mut server = make();
+            for call in rx {
+                let message = serde_json::from_str::<serde_json::Value>(&call.body).unwrap_or_default();
+                let answer =
+                    if reaches_app(&message) && !wait_ready(&ready) { Some(not_on_screen(&message)) } else { server.handle_line(&call.body) };
+                let mut reply = match answer {
+                    Some(json) => Reply::new(200, json),
+                    None => Reply::new(202, ""),
+                };
+                if let Some(id) = call.id {
+                    reply.headers.push(("Mcp-Session-Id", id));
+                }
+                let mut stream = call.stream;
+                if let Err(e) = write_reply(&mut stream, &reply) {
+                    log::info!("mcp: reply: {e}");
+                }
+            }
+        })
+        .ok()?;
+    Some(Session { calls, used: Instant::now() })
 }
 
 fn write_reply(w: &mut impl Write, reply: &Reply) -> std::io::Result<()> {
@@ -382,8 +470,8 @@ mod tests {
     use serde_json::{Value, json};
 
     fn endpoint() -> Endpoint {
-        let make: MakeServer = Box::new(|| solidcraft_mcp::Server::new(Box::new(solidcraft_mcp::Headless::default())));
-        Endpoint::start("127.0.0.1:0".parse().unwrap(), "s3cret".into(), make, Box::new(|| true)).unwrap()
+        let make: MakeServer = Arc::new(|| solidcraft_mcp::Server::new(Box::new(solidcraft_mcp::Headless::default())));
+        Endpoint::start("127.0.0.1:0".parse().unwrap(), "s3cret".into(), make, Arc::new(|| true)).unwrap()
     }
 
     /// One request; the status, the headers (lower-case names) and the body.
@@ -477,18 +565,18 @@ mod tests {
         let again = Endpoint::start(
             SocketAddr::from(([127, 0, 0, 1], port)),
             "t".into(),
-            Box::new(|| solidcraft_mcp::Server::new(Box::new(solidcraft_mcp::Headless::default()))),
-            Box::new(|| true),
+            Arc::new(|| solidcraft_mcp::Server::new(Box::new(solidcraft_mcp::Headless::default()))),
+            Arc::new(|| true),
         );
         assert!(again.is_ok());
     }
 
     #[test]
     fn a_tool_call_while_the_app_is_off_screen_says_so_instead_of_hanging() {
-        let make: MakeServer = Box::new(|| solidcraft_mcp::Server::new(Box::new(solidcraft_mcp::Headless::default())));
+        let make: MakeServer = Arc::new(|| solidcraft_mcp::Server::new(Box::new(solidcraft_mcp::Headless::default())));
         let shown = Arc::new(AtomicBool::new(false));
         let s = shown.clone();
-        let ep = Endpoint::start("127.0.0.1:0".parse().unwrap(), "s3cret".into(), make, Box::new(move || s.load(Ordering::Relaxed))).unwrap();
+        let ep = Endpoint::start("127.0.0.1:0".parse().unwrap(), "s3cret".into(), make, Arc::new(move || s.load(Ordering::Relaxed))).unwrap();
         // Listing tools needs no app.
         let (status, _, body) = send(ep.port(), "POST", &[AUTH], &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string());
         assert_eq!(status, 200);
@@ -508,6 +596,36 @@ mod tests {
         assert_eq!(answer["id"], 3);
         assert_eq!(answer["result"]["isError"], true);
         assert!(answer["result"]["content"][0]["text"].as_str().unwrap().contains("back on screen"));
+    }
+
+    /// A long call holds up only its own session: another session, a ping and a `DELETE` are
+    /// answered meanwhile.
+    #[test]
+    fn a_long_call_holds_up_only_its_own_session() {
+        let gate = Arc::new(AtomicBool::new(false));
+        let g = gate.clone();
+        // Not ready until the gate opens: a tool call in the first session waits.
+        let make: MakeServer = Arc::new(|| solidcraft_mcp::Server::new(Box::new(solidcraft_mcp::Headless::default())));
+        let ep = Endpoint::start("127.0.0.1:0".parse().unwrap(), "s3cret".into(), make, Arc::new(move || g.load(Ordering::Relaxed))).unwrap();
+        let port = ep.port();
+        let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}}).to_string();
+        let (_, h1, _) = send(port, "POST", &[AUTH], &init);
+        let first = header(&h1, "mcp-session-id").unwrap().to_string();
+        let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "list_commands", "arguments": {}}}).to_string();
+        let waiting = std::thread::spawn(move || send(port, "POST", &[AUTH, ("Mcp-Session-Id", first.as_str())], &call));
+        std::thread::sleep(Duration::from_millis(300));
+        let t = Instant::now();
+        let (status, h2, _) = send(port, "POST", &[AUTH], &init);
+        assert_eq!(status, 200);
+        let second = header(&h2, "mcp-session-id").unwrap().to_string();
+        let ping = json!({"jsonrpc": "2.0", "id": 3, "method": "ping"}).to_string();
+        let (status, _, body) = send(port, "POST", &[AUTH, ("Mcp-Session-Id", second.as_str())], &ping);
+        assert_eq!((status, body.contains("result")), (200, true));
+        assert!(t.elapsed() < Duration::from_secs(2), "the other session waited {:?}", t.elapsed());
+        gate.store(true, Ordering::Relaxed);
+        let (status, _, body) = waiting.join().unwrap();
+        assert_eq!(status, 200);
+        assert!(body.contains("\"tools\"") || body.contains("commands"), "{body}");
     }
 
     #[test]

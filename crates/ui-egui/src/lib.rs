@@ -563,6 +563,8 @@ pub struct SolveApp {
     control_held: std::collections::VecDeque<ControlRequest>,
     /// An agent's design change computing off the window thread ([`control_job`]).
     control_job: Option<control_job::ControlJob>,
+    /// A timed batch computed ahead: each step's time there, for its reply (`control_job`).
+    pub(crate) ahead_step_ms: Option<Vec<f64>>,
     /// Agent exports computing on copies of the design.
     control_answering: Vec<control_job::ControlJob>,
     /// The agent cursor acting out control requests.
@@ -705,6 +707,7 @@ impl SolveApp {
             ai_connect: Default::default(),
             control_held: Default::default(),
             control_job: None,
+            ahead_step_ms: None,
             control_answering: Vec::new(),
             agent: Default::default(),
             pending_shots: Vec::new(),

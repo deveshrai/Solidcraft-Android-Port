@@ -375,7 +375,7 @@ impl Documents {
 
     /// A check, for any thread, of whether the app is on screen (and so runs control requests).
     /// Without the activity it says yes, as before.
-    pub fn on_screen(&self) -> impl Fn() -> bool + Send + 'static {
+    pub fn on_screen(&self) -> impl Fn() -> bool + Send + Sync + 'static {
         let activity = JavaVM::singleton().and_then(|vm| vm.attach_current_thread(|env| env.new_global_ref(&*self.activity)));
         let activity = activity.map_err(|e| log::error!("documents: on_screen: {e}")).ok();
         move || {

@@ -93,6 +93,30 @@ helical thread ([android-gears.md](android-gears.md), [android-threads.md](andro
 The agent works on the design in the active tab, as you would. Its changes are ordinary history
 steps: undo them, edit them or save them as usual.
 
+## Long operations
+
+Booleans on gears and helical threads can take seconds to minutes on a phone or tablet. Since
+0.24.0b:
+
+- **The app stays responsive.** An agent's command computes off the window thread: the view goes on
+  drawing, a chip at the bottom says what is computing (`Cylinder · Computing… 88 s`) with a
+  **Stop** button, and Android never closes the app as "not responding".
+- **A call still running after a few minutes answers *"still running: … call the `pending` tool"*.**
+  The command was not cancelled and was not lost: call `pending` (in the same session) until it
+  answers with the result. **Don't send the command again**; a second copy would wait for the first
+  and then run twice.
+- **`batch` with `"timings": true`** times each step as it computed off the window thread
+  (`timings_measured` says so).
+- One session's long call doesn't hold up another session or a ping.
+
+**Avoid faces that coincide with a gear's or a thread's faces.** The kernel handles a tool whose
+face lies exactly in a face of the body (a cut starting exactly on an end face) or a cylinder exactly
+on an existing bore through many retries, and on a gear's or thread's curved faces that is tens to
+hundreds of times slower, or fails. Start a cut a little outside the body (0.5–1 mm past the face it
+enters through), make a bore once through everything after the parts are joined rather than boring
+the same axis twice, and keep joined parts overlapping by more than a sliver. A live example, the
+timings and what changed: [android-mcp-live-test.md](android-mcp-live-test.md#a-worm-gearbox-on-a-galaxy-tab).
+
 ## Files
 
 **What the agent builds is the design in the open tab**, so you keep it the usual way: **File ›

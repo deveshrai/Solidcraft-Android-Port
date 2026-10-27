@@ -350,7 +350,27 @@ fn batch(app: &mut SolveApp, p: &Value) -> Outcome {
     if let Some(id) = checkpoint {
         let _ = app.run("edit.restore_checkpoint", json!({"checkpoint": id, "forget": true}));
     }
-    ok(with_timings(json!({"completed": results.len(), "results": results, "undone": 0}), timed, rows, clock.ms()))
+    let total = ahead_timings(app, &mut rows).unwrap_or_else(|| clock.ms());
+    let mut reply = with_timings(json!({"completed": results.len(), "results": results, "undone": 0}), timed, rows, total);
+    if timed && app.ahead_step_ms.is_some() {
+        reply["timings_measured"] = json!("off the window thread, as the batch computed");
+    }
+    ok(reply)
+}
+
+/// A timed batch computed ahead: its steps' times there ([`SolveApp::ahead_step_ms`]) replace
+/// the run's own, which found each result already computed. The total of the rows, or `None`.
+fn ahead_timings(app: &SolveApp, rows: &mut [Value]) -> Option<f64> {
+    let ahead = app.ahead_step_ms.as_ref()?;
+    let mut total = 0.0;
+    for row in rows.iter_mut() {
+        let at = row.get("index").and_then(Value::as_u64).and_then(|i| ahead.get(i as usize)).copied();
+        if let Some(ms) = at {
+            row["ms"] = json!(timing::round_ms(ms));
+        }
+        total += row.get("ms").and_then(Value::as_f64).unwrap_or(0.0);
+    }
+    Some(total)
 }
 
 /// A batch reply with `timings` and `total_ms` when they were asked for.

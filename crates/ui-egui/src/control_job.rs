@@ -187,13 +187,17 @@ pub(crate) struct Steps {
     now: AtomicUsize,
     labels: Vec<String>,
     total: usize,
+    /// Each step's time (ms) as computed ahead, when a batch asked for `timings`: the run on
+    /// the window thread then finds every result computed, and its own clock would read
+    /// nothing of the work.
+    pub(crate) ms: std::sync::Mutex<Vec<f64>>,
 }
 
 impl Steps {
     fn new(app: &SolveApp, request: &Value, commands: &[(String, Value)]) -> Arc<Steps> {
         // A batch counts all its steps, also those after the ones computed ahead.
         let total = request.get("commands").and_then(Value::as_array).map_or(commands.len(), Vec::len).max(commands.len());
-        Arc::new(Steps { now: AtomicUsize::new(0), labels: commands.iter().map(|(c, _)| label(app, c)).collect(), total })
+        Arc::new(Steps { now: AtomicUsize::new(0), labels: commands.iter().map(|(c, _)| label(app, c)).collect(), total, ms: Default::default() })
     }
 
     /// What the chip says: the command running, and in a batch which step it is
@@ -217,8 +221,39 @@ fn evaluate_ahead(
     let kept = ahead.kept();
     let steps = Steps::new(app, request, &commands);
     let counting = steps.clone();
+    let timed = request.get("timings").and_then(Value::as_bool) == Some(true);
     let rx = spawn(scope, move || {
+        // The counter moves on as each step starts; a watcher notes when, so each step's time is
+        // known (to about a millisecond) without the engine timing anything.
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = timed.then(|| {
+            let (stop, steps) = (stop.clone(), counting.clone());
+            std::thread::spawn(move || {
+                let clock = std::time::Instant::now();
+                let mut starts: Vec<f64> = Vec::new();
+                loop {
+                    let done = stop.load(Ordering::Relaxed);
+                    let now = steps.now.load(Ordering::Relaxed);
+                    let t = clock.elapsed().as_secs_f64() * 1e3;
+                    while starts.len() < now {
+                        starts.push(t);
+                    }
+                    if done {
+                        let ms: Vec<f64> = starts.iter().enumerate().map(|(i, s)| starts.get(i + 1).copied().unwrap_or(t) - s).collect();
+                        if let Ok(mut out) = steps.ms.lock() {
+                            *out = ms;
+                        }
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            })
+        });
         let _ = ahead.evaluate_counting(&commands, &counting.now);
+        stop.store(true, Ordering::Relaxed);
+        if let Some(w) = watcher {
+            let _ = w.join();
+        }
         None
     })?;
     Some((rx, kept, steps))
@@ -295,8 +330,9 @@ fn ahead_commands(method: &str, p: &Value) -> Vec<(String, Value)> {
             _ => Vec::new(),
         },
         "engine.batch" => {
-            // Timings measure the run here: it must do the work.
-            if ["timings", "profile"].iter().any(|k| p.get(*k).and_then(Value::as_bool) == Some(true)) {
+            // A profile splits out the kernel's share of the run here: it must do the work. Timings
+            // are taken ahead, step by step (`Steps::ms`), and replace the run's own.
+            if p.get("profile").and_then(Value::as_bool) == Some(true) {
                 return Vec::new();
             }
             let Some(steps) = p.get("commands").and_then(Value::as_array) else { return Vec::new() };
@@ -394,7 +430,9 @@ impl SolveApp {
         if within_wait(self, &job.done).is_some() {
             // Computed within the wait: it runs now, as before, finding what was computed.
             let Work::Ahead { kept, .. } = job.work else { return Some(job.req) };
+            self.ahead_step_ms = job.steps.as_ref().and_then(|s| s.ms.lock().ok().map(|m| m.clone())).filter(|m| !m.is_empty());
             self.run_with_kept(Some(kept), |app| app.run_control(ctx, job.req));
+            self.ahead_step_ms = None;
             return None;
         }
         self.control_job = Some(job);
@@ -491,7 +529,9 @@ impl SolveApp {
             }
         }
         self.big_operation |= crate::now_ms() - job.started >= crate::recovery_ui::BIG_OPERATION_MS;
+        self.ahead_step_ms = job.steps.as_ref().and_then(|s| s.ms.lock().ok().map(|m| m.clone())).filter(|m| !m.is_empty());
         self.run_with_kept(Some(kept), |app| app.run_control(ctx, job.req));
+        self.ahead_step_ms = None;
         ctx.request_repaint();
     }
 }
