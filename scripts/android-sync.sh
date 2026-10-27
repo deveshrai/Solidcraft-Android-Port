@@ -126,6 +126,18 @@ cargo test -q -p solidcraft-ui-egui --lib -- one_finger_drag_orbits two_fingers_
     a_tap_picks_a_profile a_finger_on_the_arrow_stem \
     || fail "touch tests"
 
+step "The port's speed fixes are still in place"
+# Upstream may re-vendor truck or rework the agent's control path: a merge that drops one of these
+# makes gear and thread booleans many times slower, or the app "not responding" on a long agent
+# call, without failing a build. Each is checked by its marker and its test.
+n=$(grep -cE "SolidCraft: (only the degree \+ 1 basis functions|zero basis terms skipped)" vendor/truck-geometry/src/nurbs/bspsurface.rs || true)
+[ "$n" -ge 6 ] || fail "vendor/truck-geometry/src/nurbs/bspsurface.rs lost the port's zero-basis skip ($n of 6 places): re-apply it (docs/android-sync.md, 'The port's speed fixes')"
+grep -q "agent_off_thread = true" apps/solidcraft-android/src/lib.rs \
+    || fail "apps/solidcraft-android/src/lib.rs no longer turns on agent_off_thread: agents' calls would block the window thread"
+cargo test -q -p solidcraft-engine --lib -- gear_profile a_flank_is_one_face_a_curve || fail "gear flanks are no longer one face a curve"
+cargo test -q -p solidcraft-ui-egui --lib -- a_timed_batch_computes_off_the_window_thread an_agent_design_change_computes_off_the_window_thread \
+    || fail "agents' commands no longer compute off the window thread"
+
 # ---- APK ---------------------------------------------------------------------------------------
 if [ "$build" = 1 ]; then
     step "Building the APK"

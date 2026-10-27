@@ -242,6 +242,10 @@ these docs). Upstream files changed, and why:
 | `crates/ui-egui/src/dialogs_thread.rs`, `dialogs.rs`, `dialogs_dense.rs` | The Thread dialog's Type, Geometry and Helical B-rep section |
 | `crates/*/src/thread_tests.rs`, `dialogs_all_tests.rs` | Tests for the helical threads; the Thread dialog's first row is now Type |
 | `crates/engine/src/gear_profile.rs`, `cmd/gears.rs`, `cmd/gears_tests.rs` (new), `cmd/mod.rs`, `lib.rs` | Port-only feature: the Gear commands `gear.create`, `gear.info`, `gear.edit` ([android-gears.md](android-gears.md)) |
+| `crates/engine/src/gear_profile.rs` (0.24.0b) | A gear flank is one exact Bézier (two or three where the root fillet meets the involute), not a spline through points: each span of that spline was a face, and every boolean on a gear paid for them |
+| `vendor/truck-geometry/src/nurbs/bspsurface.rs` | B-spline surface evaluation skips the basis functions that are zero (`vendor/README.md`) |
+| `crates/ui-egui/src/control_job.rs`, `control.rs`, `lib.rs` | A timed agent batch (`"timings": true`) computes off the window thread and times each step there |
+| `apps/solidcraft-android/src/lib.rs` (0.24.0b) | Agents' commands compute off the window thread (`agent_off_thread`), so a long one never trips Android's not-responding dialog |
 | `crates/engine/src/cmd/sketch_import.rs` | `add_to_active`, which the gears use to sketch their outlines |
 | `crates/kernel/src/sweep_path.rs` | Straight sweeps that twist or scale keep smooth walls with any number of segments and holes (before: ruled strips past 64 segments or with a hole) |
 | `apps/solidcraft-android/android/app/src/main/java/io/solidcraft/android/SolidCraftActivity.java` | `hideSystemBars`: the navigation bar and a tablet's taskbar hidden immersively (a swipe shows them), so they don't cover the History bar or a tall dialog's OK |

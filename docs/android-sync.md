@@ -114,7 +114,24 @@ code"](android.md#changes-to-upstream-code)), so conflicts are rare and usually 
   block, `touch_orbit`, the `lifted`/`over` test for `inside`, the `touch_gesture` field). The
   touch tests say whether they still work.
 
+- `vendor/truck-geometry` (upstream re-vendors truck) or `crates/ui-egui/src/control_job.rs` /
+  `control.rs` (upstream reworks the agent's control path): see [The port's speed fixes](#the-ports-speed-fixes).
+
 Then `git add` the files, `git commit`, and `scripts/android-sync.sh --check-only`.
+
+### The port's speed fixes
+
+Four port changes make gears, threads and agents' long calls quick on a phone. A merge can drop
+one without breaking the build, so `scripts/android-sync.sh` checks each after the tests and
+stops naming it. Take upstream's change when it does the same job better (the gear and timing
+tests still pass and the times don't get worse), else keep the port's:
+
+| Fix | Where | Checked by |
+|---|---|---|
+| B-spline surfaces skip zero basis terms | `vendor/truck-geometry/src/nurbs/bspsurface.rs`, six places marked `SolidCraft:` | the markers; re-apply them from `git show <the port's commit> -- vendor/truck-geometry` if upstream re-vendors truck |
+| A gear flank is one to three Béziers, not a spline of many faces | `crates/engine/src/gear_profile.rs` (`flank_plan`, `flank_curves`) | `gear_profile` tests, `a_flank_is_one_face_a_curve` |
+| Agents' commands, timed batches too, compute off the window thread | `apps/solidcraft-android/src/lib.rs` (`agent_off_thread = true`), `crates/ui-egui/src/control_job.rs` (`Steps::ms`), `control.rs` (`ahead_timings`) | `a_timed_batch_computes_off_the_window_thread`, `an_agent_design_change_computes_off_the_window_thread` |
+| One MCP session's long call doesn't hold up another | `apps/solidcraft-android/src/mcp_http.rs` (port-only) | `a_long_call_holds_up_only_its_own_session` |
 
 After merging an upstream release, or landing a port-only feature, update
 [android-vs-upstream.md](android-vs-upstream.md) (its last section says what to check).

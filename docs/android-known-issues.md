@@ -32,6 +32,8 @@ doesn't, and the reverse.
 | **The on-screen keyboard covers the lower half of the screen**; the app doesn't move above it, so a field low in a dialog is typed into blind. | Hide the keyboard with its ⌄ key to see the result; a hardware keyboard avoids it | Resize the window above the keyboard |
 | **No autosave recovery.** If Android ends the app in the background, unsaved work is lost. | Save often (Ctrl+S on a design opened from a file writes back to it) | Upstream's recovery folder on Android, offered at the next start |
 | **No "Open with".** Opening a `.solidcraft`, STEP or STL from a file manager or a mail doesn't offer SolidCraft. | **File › Open** inside the app | Register the file types and take the shared file as an Open |
+| **A cylinder exactly on an existing bore, or a cut starting exactly on a gear's end face, is slow or fails.** A second Ø8 bore on the axis of an existing one fails ("no result"); upstream's kernel retries such contacts many times. (Joins that touch a gear's flat end face are quick since 0.24.0b.) | Start cuts outside the body, bore once after joining ([android-mcp.md](android-mcp.md#long-operations)) | Upstream's kernel: a cheaper path for coincident faces |
+| **Interference and clearance between two gears take a minute or more.** Worm against worm wheel: 77 s on a Mac; the exact intersection of their helical flanks is meshed finely. | Check the gear pair once, at the end | Measure an interference from meshes first |
 | **Checks between large bodies are slow.** Interference and clearance between the two halves of the [cassette test](android-mcp-live-test.md) take about 38 s and 35 s on a Galaxy Z Fold (about 1 s each before its tape-path blocks were added). | Check the pairs that matter (`bodies`, `against`) | Find what makes those pairs slow |
 | **A thread's face can't name its body.** `solid.thread` picks the face by a point; with a screw already in its tapped hole the point is on both, and the wrong one is threaded ("something else of the body meets the thread"). | Thread the part before putting it in place | A `body` parameter, as other commands have |
 | **Helical threads against helical threads aren't intersected.** Interference and clearance list such pairs as not checked. | Check a thread fit on meshes ([how](android-mcp-live-test.md#how-the-fit-was-checked)) | Upstream's kernel |
@@ -77,6 +79,9 @@ reported or left to upstream, not patched in the port, so merges stay clean.
 
 | Issue | Fixed in |
 |---|---|
+| A slow agent command (a boolean on a gear) froze the app until Android closed it as not responding; the MCP client saw calls time out and sent them again | 0.24.0b: agent commands compute off the window thread, long calls answer "still running" and wait through `pending`, sessions don't block each other |
+| Booleans on gears and helical threads were 2–3× slower than needed (each B-spline surface point summed every control point) | 0.24.0b |
+| A gear's flank was a spline through nine points, so a gear had a face for every span (326 faces for 18 teeth) and every boolean on it was slow; a hub joined on a worm wheel hung for over 25 minutes on a tablet | 0.24.0b: a flank is one to three exact Béziers (110 faces for 18 teeth); a join touching a gear's flat face skips the flanks that can't reach it (a gear with bore, keyway and hub: 161 s → 2.5 s) |
 | Back with Settings open sent the app to the background instead of closing Settings | 0.24.0a |
 | A helical thread tapped into a boss under a hollow shell was refused ("the groove removes … mm³") | 0.24.0a |
 | An internal ISO thread with a clearance in too small a hole came out too shallow for its bolt, silently; it now names the drill | 0.24.0a |

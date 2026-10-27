@@ -16,6 +16,7 @@ operation running at that moment and how long it took.*
 - [What the test found](#what-the-test-found)
 - [Time per operation](#time-per-operation)
 - [Running it yourself](#running-it-yourself)
+- [A worm gearbox on a Galaxy Tab](#a-worm-gearbox-on-a-galaxy-tab)
 
 ## The part
 
@@ -262,3 +263,52 @@ MCP_URL=http://PHONE:27880/mcp MCP_TOKEN=<the token from the page> ADB_SERIAL=<a
 ```
 
 The fit check needs numpy, and adb to copy the exported meshes from the device.
+
+## A worm gearbox on a Galaxy Tab
+
+A second live test, from a session that went wrong: a NEMA17 right-angle gearbox (worm and worm
+wheel 1:6, a clamping hub, a housing and lid, a rod, the motor and eight M3 screws as reference
+parts), built by Claude Code in Termux on a Galaxy Tab (SM-X840) with 0.24.0a. The app was closed
+as "not responding", and its crash report named the command it was running: a Ø5.2 bore cut into
+the worm, starting exactly on the worm hub's end face.
+
+What was wrong, and what 0.24.0b changes:
+
+| Problem | Cause | Now |
+|---|---|---|
+| "SolidCraft isn't responding", then the app was gone | An agent's command ran on the window thread; Android closes an app whose window thread answers nothing for 10 s, and that cut took minutes | Agent commands compute off the window thread, with a chip and a Stop button |
+| Tool calls "timed out" and were sent again | The bridge to the app waited silently and gave up after 300 s | A call still running answers "still running: call `pending`" and waits through `pending` |
+| One long call blocked everything | The endpoint served one request at a time | Each MCP session has its own thread |
+| Booleans on gears 2–3× slower than needed | Every B-spline surface point summed all its control points, zero terms included | Zero terms skipped (the sums are unchanged) |
+| That bore cut: 199 s on a Mac | Its tool started in the plane of the hub's end face; coincident faces send the kernel through many retries, each meshing the gear's curved faces again | Start cuts outside the body: 1.3 s |
+| A Ø8 bore through the wheel and hub failed; joining a pre-bored hub hung | Two Ø8 bores on one axis are coincident cylinders | Create the wheel without a bore, join the hub, bore once: 1.7 s for all three |
+| Every boolean on a gear paid for 326 faces where about 100 describe it | A flank was a spline through nine points, and each span between them became a face | A flank is one to three exact Béziers: 110 faces for 18 teeth |
+| A hub joined flat against a gear's face hung | The kernel imprinted every flank face on the hub's end face, searching each flank's surface at every point, though none reached it | Faces that can't reach the contact are skipped: a gear with bore, keyway and hub 161 s → 2.5 s on a Mac |
+
+The same design afterwards, every call over MCP from a Mac through `adb forward` (as Termux on the
+tablet would), on the Galaxy Tab: **81 calls, all succeeded, 307 s**, no "not responding", nothing
+lost. The checks take most of it:
+
+| Stage | Galaxy Tab | Again, with the simpler gears |
+|---|---|---|
+| Worm and wheel, worm hub, journal, bore and key | 18 s | 17 s |
+| Wheel clamp hub, joined and bored | 33 s | 32 s |
+| Housing (block, fillets, cavities, 11 holes) | 106 s | 94 s |
+| Lid, rod, motor, eight screws | 7 s | 3 s |
+| Interference of the 12 simple bodies | 11 s | 11 s |
+| Clearance, gears against everything else | 74 s | 75 s |
+| Interference, worm against wheel | 72 s | 115 s |
+| Save | 0.6 s | 0.3 s |
+| **All 81 calls** | **307 s** | **349 s** |
+
+This recipe already avoided the contacts that hung, so the simpler gears change little in it;
+they matter where the session that went wrong stuck (a hub joined flat on a gear). What is left is
+upstream's kernel: housing holes whose first boolean comes out implausible and is retried at finer
+tolerances (one Ø6.5 hole: 38 s), and the exact intersection of the two helical gears in the checks
+([known issues](android-known-issues.md)).
+
+What the checks found in the design: the round part of the motor shaft touches the worm's key
+(0.44 mm³: start the key at z ≥ 4.5, where the shaft's flat begins), the worm's and wheel's flanks
+touch (0.21 mm³ over 15 mm², about 0.014 mm, within the 0.4 mm backlash), and the self-tapping
+screws overlap their Ø2.5 pilots as intended.
+
