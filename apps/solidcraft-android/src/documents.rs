@@ -373,6 +373,29 @@ impl Documents {
         });
     }
 
+    /// A check, for any thread, of whether the app is on screen (and so runs control requests).
+    /// Without the activity it says yes, as before.
+    pub fn on_screen(&self) -> impl Fn() -> bool + Send + 'static {
+        let activity = JavaVM::singleton().and_then(|vm| vm.attach_current_thread(|env| env.new_global_ref(&*self.activity)));
+        let activity = activity.map_err(|e| log::error!("documents: on_screen: {e}")).ok();
+        move || {
+            let Some(activity) = &activity else { return true };
+            let shown = JavaVM::singleton()
+                .and_then(|vm| vm.attach_current_thread(|env| env.call_method(activity, jni_str!("isOnScreen"), jni_sig!("()Z"), &[])?.z()));
+            shown.unwrap_or(true)
+        }
+    }
+
+    /// Put `text` on the system clipboard.
+    pub fn copy_text(&self, text: &str) {
+        let text = text.to_string();
+        self.call("copyText", move |env, activity| {
+            let text = string(env, &text)?;
+            env.call_method(activity, jni_str!("copyText"), jni_sig!("(Ljava/lang/String;)V"), &[JValue::Object(&text)])?;
+            Ok(())
+        });
+    }
+
     /// Copy out what is still settling now (the app is closing).
     pub fn flush(&mut self) {
         for l in &mut self.links {

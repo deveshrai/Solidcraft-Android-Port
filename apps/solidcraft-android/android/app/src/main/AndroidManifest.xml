@@ -3,6 +3,10 @@
 
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
 
+    <!-- Settings › MCP server: Claude Code in Termux or on a computer connects to the app. Nothing
+         listens until the user turns it on. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- Fullscreen: the system bars would otherwise draw over the title bar (Android 15 and later
          lay every app out edge to edge). -->
     <!-- The app is Rust, loaded by NativeActivity; SolidCraftActivity adds the document pickers. -->

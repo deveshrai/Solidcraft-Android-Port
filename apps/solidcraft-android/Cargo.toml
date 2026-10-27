@@ -22,16 +22,21 @@ neg_cmp_op_on_partial_ord = "allow"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[target.'cfg(target_os = "android")'.dependencies]
+# The MCP server on the network (src/mcp_http.rs), built and tested on every system.
+[dependencies]
 solidcraft-engine = { workspace = true }
+solidcraft-mcp = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+getrandom = "0.3"
+
+[target.'cfg(target_os = "android")'.dependencies]
 solidcraft-ui-egui = { workspace = true }
 # accesskit needs android-game-activity; NativeActivity is the one with no Java to ship.
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "android-native-activity"] }
 egui = { workspace = true }
 # The AndroidApp handed to android_main; the same winit eframe runs on.
 winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
-log = { workspace = true }
-serde_json = { workspace = true }
 # The document pickers (SolidCraftActivity) through JNI; the version the activity glue uses.
 jni = "0.22"
 # log → logcat (MIT OR Apache-2.0).

@@ -1,6 +1,8 @@
 package io.solidcraft.android;
 
 import android.app.NativeActivity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.database.Cursor;
@@ -13,6 +15,8 @@ import android.view.WindowInsetsController;
 import android.window.OnBackInvokedDispatcher;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
+import android.system.ErrnoException;
+import android.system.Os;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -49,12 +53,56 @@ public class SolidCraftActivity extends NativeActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // Before the Rust library loads (in super.onCreate): its temporary files (the MCP server's
+        // screenshots) go to the app's cache, and the control channel's token file to its private
+        // folder, as on the desktop. Android gives an app neither by default.
+        try {
+            Os.setenv("TMPDIR", getCacheDir().getAbsolutePath(), true);
+            File control = new File(getFilesDir(), "control");
+            control.mkdirs();
+            Os.setenv("SOLIDCRAFT_CONTROL_DIR", control.getAbsolutePath(), false);
+        } catch (ErrnoException e) {
+            // The MCP server then can't start; everything else works.
+        }
         super.onCreate(savedInstanceState);
         if (Build.VERSION.SDK_INT >= 33) {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                     OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> results.add(new String[] {"back"}));
         }
         hideSystemBars();
+    }
+
+    /** Started: on screen, in split screen or a pop-up window too. */
+    private volatile boolean onScreen;
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        onScreen = true;
+    }
+
+    @Override
+    protected void onStop() {
+        onScreen = false;
+        super.onStop();
+    }
+
+    /**
+     * Whether the app is on screen. The Rust app only runs while it is (Android stops drawing it in
+     * the background), so the MCP server tells a client to bring it back rather than hang.
+     */
+    public boolean isOnScreen() {
+        return onScreen;
+    }
+
+    /** Put text on the clipboard (egui's Copy: the MCP server's address and command). */
+    public void copyText(String text) {
+        runOnUiThread(() -> {
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard != null) {
+                clipboard.setPrimaryClip(ClipData.newPlainText("SolidCraft", text));
+            }
+        });
     }
 
     /** The system bars come back after a swipe, a dialog of the system's or another app. */

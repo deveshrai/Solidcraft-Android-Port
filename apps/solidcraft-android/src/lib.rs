@@ -5,8 +5,18 @@
 //! `android/` (see `android/README.md`); `cargo ndk` builds this crate into its `jniLibs`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+// The desktop app's loopback control server, unchanged: the MCP server's sessions reach the app
+// through it, as `solidcraft-cli mcp` reaches the desktop app.
+#[cfg(target_os = "android")]
+#[allow(dead_code)]
+#[path = "../../solidcraft/src/control_server.rs"]
+mod control_server;
 #[cfg(target_os = "android")]
 mod documents;
+#[cfg(target_os = "android")]
+mod mcp_host;
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+mod mcp_http;
 // Plain functions, built (and tested) on every system.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 mod names;
@@ -21,6 +31,7 @@ mod android {
     use winit::platform::android::activity::AndroidApp;
 
     use crate::documents::Documents;
+    use crate::mcp_host::McpHost;
 
     /// The viewport scene's depth and stencil buffers and anti-aliasing, as on the desktop: a
     /// 24-bit depth buffer is the one every Android GPU has. The scene draws offscreen with them;
@@ -37,12 +48,15 @@ mod android {
         documents: Option<Rc<RefCell<Documents>>>,
         /// Back closes what is open: Escape goes into the next frame's input.
         escape: bool,
+        /// Settings › MCP server.
+        mcp: McpHost,
     }
 
-    /// Whether Escape has something to close: a dialog, a tool, a sketch being edited, a menu or
-    /// popup, or a field with the keyboard.
+    /// Whether Escape has something to close: Preferences, a dialog, a tool, a sketch being
+    /// edited, a menu or popup, or a field with the keyboard.
     fn escape_closes(app: &SolveApp, ctx: &egui::Context) -> bool {
-        app.dialog.is_some()
+        app.prefs_window.open
+            || app.dialog.is_some()
             || app.tool.is_some()
             || app.session.active_sketch.is_some()
             || app.ui.palette_open
@@ -75,6 +89,7 @@ mod android {
                     }
                 }
             }
+            self.mcp.tick(&mut self.app);
             self.app.logic(ctx);
         }
         fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -93,9 +108,27 @@ mod android {
         }
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
             self.app.ui(ui);
+            // egui's Copy has no clipboard on Android: hand what it copied to the system's.
+            if let Some(d) = &self.documents {
+                let copied: Vec<String> = ui.ctx().output(|o| {
+                    o.commands
+                        .iter()
+                        .filter_map(|c| match c {
+                            egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                            _ => None,
+                        })
+                        .collect()
+                });
+                for text in copied {
+                    d.borrow().copy_text(&text);
+                }
+            }
         }
         fn save(&mut self, storage: &mut dyn eframe::Storage) {
             storage.set_string(solidcraft_ui_egui::prefs::STORAGE_KEY, self.app.prefs());
+            if let Some(mcp) = McpHost::stored(&self.app) {
+                storage.set_string(crate::mcp_host::STORAGE_KEY, mcp);
+            }
         }
         fn on_exit(&mut self) {
             // A save still being written ends before the app does.
@@ -145,6 +178,8 @@ mod android {
         android_logger::init_once(android_logger::Config::default().with_max_level(log::LevelFilter::Info).with_tag("SolidCraft"));
         // The app's own folder: crash reports and eframe's settings live there.
         let data = app.internal_data_path();
+        // The MCP agent's files: where a file manager or USB can reach them, when there is such a place.
+        let agent_folder = app.external_data_path().or_else(|| data.clone()).map(|d| d.join("Agent")).unwrap_or_default();
         let activity = app.activity_as_ptr();
         if let Some(dir) = data.as_ref().map(|d| d.join("crashes")) {
             let build = solidcraft_engine::crash::Build {
@@ -175,7 +210,19 @@ mod android {
                 solidcraft_ui_egui::fonts::load_system_fonts_in_background(&cc.egui_ctx);
                 // No updates or agent services: the host has none to offer.
                 let documents = data.as_deref().and_then(|d| Documents::new(d, activity)).map(|d| Rc::new(RefCell::new(d)));
-                let mut app = SolveApp::new(Session::default(), services(documents.as_ref()));
+                // Requests from the MCP server's sessions, through the loopback control channel.
+                let (control, requests) = std::sync::mpsc::channel();
+                let mut app = SolveApp::new(Session::default(), services(documents.as_ref())).with_control(requests);
+                let stored_mcp = cc.storage.and_then(|s| s.get_string(crate::mcp_host::STORAGE_KEY));
+                app.mcp_server = Some(Box::new(McpHost::page(stored_mcp)));
+                let checks = documents.clone();
+                let on_screen = Box::new(move || -> crate::mcp_http::Ready {
+                    match &checks {
+                        Some(d) => Box::new(d.borrow().on_screen()),
+                        None => Box::new(|| true),
+                    }
+                });
+                let mcp = McpHost::new(control, cc.egui_ctx.clone(), agent_folder, on_screen);
                 // OK evaluates off the window thread, as on the desktop: a feature that takes
                 // longer than Android's input timeout (a gear, a helical thread, a large boolean)
                 // would otherwise have the system offer to close the app as not responding.
@@ -196,7 +243,7 @@ mod android {
                         info.backend, info.name, info.driver
                     ));
                 }
-                Ok(Box::new(Shell { app, frames: 0, documents, escape: false }))
+                Ok(Box::new(Shell { app, frames: 0, documents, escape: false, mcp }))
             }),
         );
         if let Err(e) = result {

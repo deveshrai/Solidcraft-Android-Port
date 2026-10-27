@@ -23,6 +23,7 @@ mod design;
 mod general;
 mod graphics;
 mod interface;
+pub mod mcp_server;
 mod navigation;
 mod sketch;
 
@@ -220,6 +221,20 @@ pub const PAGE_SKETCH: usize = 5;
 pub const PAGE_GRAPHICS: usize = 6;
 pub const PAGE_AI: usize = 7;
 pub const PAGE_PLUGINS: usize = 8;
+/// Settings › MCP server, after the pages every host has: only where the host offers it
+/// (`SolveApp::mcp_server`, the Android port).
+pub const PAGE_MCP: usize = PAGES.len();
+const MCP_PAGE: ui_kit::WindowPage<SolveApp> =
+    ui_kit::WindowPage { icon: "agent_link", label: "prefs.mcp_server", group: None, handle: "prefs:page:MCP server", scroll: true, draw: mcp_page };
+
+fn mcp_page(ui: &mut egui::Ui, app: &mut SolveApp) {
+    if app.prefs_window.section != PAGE_MCP {
+        crate::keymap::stop_capture(app);
+        app.keymap.read_only = false;
+        app.prefs_window.section = PAGE_MCP;
+    }
+    mcp_server::show(app, ui);
+}
 const WINDOW_PAGES: [ui_kit::WindowPage<SolveApp>; 9] = [
     ui_kit::WindowPage { icon: "settings", label: "ui.general", group: None, handle: "prefs:page:General", scroll: true, draw: window_page::<0> },
     ui_kit::WindowPage {
@@ -810,7 +825,8 @@ pub struct PrefsWindow {
 /// Open the dialog at a page.
 pub fn open_at(app: &mut SolveApp, page: usize) {
     app.prefs_window.open = true;
-    app.prefs_window.section = page.min(PAGES.len() - 1);
+    let last = if app.mcp_server.is_some() { PAGE_MCP } else { PAGES.len() - 1 };
+    app.prefs_window.section = page.min(last);
 }
 
 /// Every setting the dialog changes, for Cancel and Restore Defaults.
@@ -1394,7 +1410,12 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         .actions("OK", "Cancel", Some("Apply"));
     let window = if capturing { window.keep_open_on_escape() } else { window };
     let mut selected = app.prefs_window.section;
-    let (closed, action) = window.show_pages(ctx, &mut selected, &WINDOW_PAGES, app, |ui| {
+    let pages: Vec<ui_kit::WindowPage<SolveApp>> = WINDOW_PAGES
+        .iter()
+        .chain(app.mcp_server.is_some().then_some(&MCP_PAGE))
+        .map(|p| ui_kit::WindowPage { icon: p.icon, label: p.label, group: p.group, handle: p.handle, scroll: p.scroll, draw: p.draw })
+        .collect();
+    let (closed, action) = window.show_pages(ctx, &mut selected, &pages, app, |ui| {
         if ui_kit::button(ui, crate::i18n::tr("ui.restore_defaults"), ui_kit::Button::Normal)
             .on_hover_text(crate::i18n::tr("ui.reset_the_settings_on_this_page"))
             .clicked()

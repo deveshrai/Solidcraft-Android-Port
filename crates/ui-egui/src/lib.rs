@@ -556,6 +556,8 @@ pub struct SolveApp {
     /// The modifiers of the synthetic press in progress (a Ctrl-drag keeps Ctrl while it moves).
     pub synthetic_mods: egui::Modifiers,
     control_rx: Option<Receiver<ControlRequest>>,
+    /// Settings › MCP server, when the host runs one (the Android port); `None` hides the page.
+    pub mcp_server: Option<Box<prefs::mcp_server::McpServerPage>>,
     /// Control requests that change the design, held while a file loads or an agent's design
     /// change computes.
     control_held: std::collections::VecDeque<ControlRequest>,
@@ -698,6 +700,7 @@ impl SolveApp {
             synthetic: Vec::new(),
             synthetic_mods: egui::Modifiers::default(),
             control_rx: None,
+            mcp_server: None,
             agent_chat: Default::default(),
             ai_connect: Default::default(),
             control_held: Default::default(),
