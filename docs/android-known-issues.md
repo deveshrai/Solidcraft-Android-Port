@@ -43,12 +43,18 @@ doesn't, and the reverse.
 These come with upstream's code and fail the same way on a clean upstream checkout. They are
 reported or left to upstream, not patched in the port, so merges stay clean.
 
-- Four UI tests fail on upstream 0.23.0 as well:
-  `dialogs_hole::tests::recessed_drill_point_total_depth_dimension_is_outside_partial_tapping`,
-  `dialogs_thread::contribution_tests::contribution_metric_designation_rendering_preserves_authored_legacy_and_custom_text`,
-  `dialogs_thread::contribution_tests::contribution_thread_catalogue_is_parseable_and_rendering_keeps_custom_designations`
-  and `toolbar::dropdown_tests::sketch_create_family_rows_paint_the_first_variants_icons`.
-  The app is unaffected.
+- On this port's build Mac, 15 tests fail on a clean upstream 0.24.0 checkout exactly as on the port,
+  so they are left to upstream. The app is unaffected.
+  - Engine (3): `prism_local_tests::a_ring_cut_round_a_counterbored_hole_in_a_chamfered_disc`,
+    `robustness_goldens::seed_36` and `seed_71`.
+  - UI (12), mostly egui's texture check in the test harness: `dialogs_hole::…recessed_drill_point_total_depth_dimension_is_outside_partial_tapping`,
+    the two `dialogs_thread::contribution_tests`, the three `edit_clipboard` middle-button tests,
+    `render_workspace::…product_preview_error_uses_shared_wrapped_surface_and_explicit_retry_target`,
+    `select_other::…long_names_stay_inside_the_popup_and_remain_available_on_hover`,
+    `toolbar::dropdown_tests::sketch_create_family_rows_paint_the_first_variants_icons`, and
+    `ui_kit`'s `positioned_shared_buttons_center_text_…`, `sample_grid_stretches_each_row_…` and
+    `square_theme_search_and_focus_ring_…`.
+  Everything else passes: 2532 engine tests and 2746 UI tests among them.
 
 ## By design
 
