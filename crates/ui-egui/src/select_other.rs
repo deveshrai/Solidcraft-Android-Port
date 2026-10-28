@@ -310,7 +310,8 @@ fn point_label(sk: &solidcraft_engine::sketch::Sketch, id: &str) -> String {
     }
 }
 
-/// A row's name: "Line 3", "Point (arc 2 centre)", "Edge 4 · Body1", "XY Plane"…
+/// A row's name: "Line 3", "Point (arc 2 centre)", "Edge 4 · Body1", "XY Plane" (an origin plane
+/// by the name the preferences give it)…
 pub fn label(app: &SolveApp, sel: &Sel) -> String {
     let st = app.session.world_state();
     let in_sketch =
@@ -331,7 +332,7 @@ pub fn label(app: &SolveApp, sel: &Sel) -> String {
         Sel::Occurrence { path } => format!("Occurrence {path:?}"),
         Sel::Feature { id } => app.session.doc.feature(*id).map(|f| f.name.clone()).unwrap_or_else(|| format!("Feature {id}")),
         Sel::Profile { sketch, index } => format!("Profile {} · {}", index + 1, sketch_name(app, *sketch)),
-        Sel::Plane { name } if matches!(name.as_str(), "XY" | "XZ" | "YZ") => format!("{name} Plane"),
+        Sel::Plane { name } if matches!(name.as_str(), "XY" | "XZ" | "YZ") => format!("{} Plane", app.preferences.origin_plane_names.label(name)),
         Sel::Axis { name } if matches!(name.as_str(), "X" | "Y" | "Z") => format!("{name} Axis"),
         Sel::Plane { name } | Sel::Axis { name } | Sel::ConstructionPoint { name } => name.clone(),
     }

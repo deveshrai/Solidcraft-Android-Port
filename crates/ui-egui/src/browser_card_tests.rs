@@ -3,6 +3,27 @@ use crate::scenario::{Harness, handle_at, rect_of};
 use crate::shell::{LayoutMode, SHELL_GAP};
 
 #[test]
+fn save_mesh_add_all_and_add_visible_bodies_fill_the_bodies_input() {
+    let mut h = Harness::new();
+    for (name, x) in [("One", 0), ("Two", 20), ("Three", 40)] {
+        h.app.run("solid.box", json!({"length":10,"width":10,"height":10,"corner":[x,0,0],"operation":"new_body","body_name":name})).unwrap();
+    }
+    h.app.run("browser.visibility", json!({"items":["Two"],"visible":false})).unwrap();
+    h.app.start("file.save_mesh");
+    h.settle();
+    for (button, expected) in [("Add all bodies", vec!["One", "Two", "Three"]), ("Add visible bodies", vec!["One", "Three"])] {
+        let handle = crate::scenario::handles("dialog:button:").into_iter().find(|(n, _)| n.ends_with(&format!(":{button}")));
+        let (handle, _) = handle.unwrap_or_else(|| panic!("{button} is shown"));
+        h.step(&json!({"click":{"handle":handle}})).unwrap();
+        let d = h.app.dialog.as_ref().unwrap();
+        let crate::dialogs::Kind::SaveMesh(k) = &d.kind else { panic!("Save as Mesh is open") };
+        let commands = crate::dialogs_save_mesh::commands(k, &d.inputs).unwrap();
+        assert_eq!(commands[0].1["bodies"], json!(expected), "{button}");
+        assert!(h.app.session.selection.is_empty(), "the buttons do not change the global selection");
+    }
+}
+
+#[test]
 fn browser_body_clicks_fill_and_toggle_save_mesh_inputs() {
     for mode in [LayoutMode::Floating, LayoutMode::Docked] {
         let mut h = Harness::new();

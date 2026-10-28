@@ -10,7 +10,7 @@ People trust SolidCraft with their designs. This outranks feature work.
 ## In non-test code
 - No `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!` or `unimplemented!`. Every production crate root carries `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]`; `cargo xtask ci` runs clippy with `-D warnings`.
 - No `unsafe` (`unsafe_code = "forbid"`). The exceptions, in the app crate and in `crates/threedx-client` (which deny it instead), have no safe API:
-  - macOS only: `crates/threedx-client/src/macos.rs` (loads the 3Dconnexion driver's client framework at run time and calls through its function pointers), and two functions in `apps/solidcraft/src/open_documents.rs` (macOS hands Finder files only to an Objective-C method)
+  - macOS only: `crates/threedx-client/src/macos.rs` (loads the 3Dconnexion driver's client framework at run time and calls through its function pointers), two functions in `apps/solidcraft/src/open_documents.rs` (macOS hands Finder files only to an Objective-C method), and `apps/solidcraft/src/native_crash_macos.rs` (the signal handler that records crashes inside native code, as `native_crash.rs` does on Windows)
   - Windows only: `apps/solidcraft/src/native_crash.rs` (the exception filter that records crashes inside native code such as graphics drivers), `apps/solidcraft/src/native_frame.rs` (the window procedure that answers the resize-border hit test of the window without OS decorations, and gives its class the icon the taskbar falls back on) and `apps/solidcraft/src/space_mouse/windows_hid.rs` (asks Plug and Play which HID interfaces are 3D mice, so no other device is sent anything)
   - Android only (this port): in `apps/solidcraft-android`, the `android_main` entry point (the activity glue finds it by its unmangled name) and `documents::activity` (the activity glue hands out the activity only as a raw JNI reference)
 - Errors are `Result<T, E>` through the crate's error type and `?`. An unfinished feature returns an error ("not supported yet: ..."); it never panics.
@@ -21,7 +21,7 @@ People trust SolidCraft with their designs. This outranks feature work.
 
 ## Proving a crash fix
 - Every crash fix lands with a regression test. `hostile_params_never_panic` in `crates/engine/src/tests.rs` runs every command with junk parameters; a new command gets this for free.
-- A crash report's `design.solidcraft` and `replay.json` are the test's starting point. Put the test in the area's existing test file (see `skills/solidcraft-tests/SKILL.md`).
+- A crash report's `design.sc` and `replay.json` are the test's starting point. Put the test in the area's existing test file (see `skills/solidcraft-tests/SKILL.md`).
 
 ## When someone says the app crashed
 The desktop app writes every panic and every unclean exit to a local crash folder, with the design and the commands that reproduce it (`solidcraft_engine::crash`, `docs/crash-reports.md`). Look there first:

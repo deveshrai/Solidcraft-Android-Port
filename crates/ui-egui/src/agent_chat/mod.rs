@@ -76,6 +76,9 @@ pub enum State {
     Busy,
     NeedsAuth,
     Exited,
+    /// The agent never got ready: none to start, it could not start, or it ended while starting.
+    /// Connect reads Retry.
+    Failed,
 }
 
 impl State {
@@ -87,6 +90,7 @@ impl State {
             State::Busy => "busy",
             State::NeedsAuth => "auth",
             State::Exited => "exited",
+            State::Failed => "failed",
         }
     }
     fn label(self) -> &'static str {
@@ -97,6 +101,7 @@ impl State {
             State::Busy => "ui.agent_chat_state_busy",
             State::NeedsAuth => "ui.agent_chat_state_auth",
             State::Exited => "ui.agent_chat_state_exited",
+            State::Failed => "ui.agent_chat_state_failed",
         })
     }
     fn running(self) -> bool {
@@ -417,6 +422,8 @@ pub struct AgentChat {
     pub control_starter: Option<ControlStarter>,
     /// The picker is unfolded (it folds to one line once an agent is connected).
     picking: Option<bool>,
+    /// This launch connects the agent started last once the installed agents are known ([`begin`]).
+    connect_at_start: bool,
     #[cfg(not(target_arch = "wasm32"))]
     detection: Option<discover::Detection>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -438,6 +445,7 @@ impl AgentChat {
         std::mem::swap(&mut self.control_starter, &mut other.control_starter);
         std::mem::swap(&mut self.models_cache, &mut other.models_cache);
         std::mem::swap(&mut self.window_placed, &mut other.window_placed);
+        std::mem::swap(&mut self.connect_at_start, &mut other.connect_at_start);
         #[cfg(not(target_arch = "wasm32"))]
         {
             std::mem::swap(&mut self.detection, &mut other.detection);
@@ -701,12 +709,14 @@ impl AgentChat {
             }
             Event::Error(e) => {
                 self.notice(e, true);
-                if !self.state().running() || self.state() == State::Starting {
-                    self.state = Some(State::Exited);
+                match self.state() {
+                    State::Starting | State::Failed => self.state = Some(State::Failed),
+                    s if !s.running() => self.state = Some(State::Exited),
+                    _ => {}
                 }
             }
             Event::Exited { tail } => {
-                self.state = Some(State::Exited);
+                self.state = Some(if matches!(self.state(), State::Starting | State::Failed) { State::Failed } else { State::Exited });
                 self.steering = false;
                 let last: Vec<String> = tail.into_iter().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect();
                 let detail = if last.is_empty() { String::new() } else { format!("\n{}", last.join("\n")) };
@@ -755,7 +765,7 @@ fn assistant_mark_for(state: State, login: &str, configured: bool, waiting: usiz
     if state == State::NeedsAuth {
         return AssistantMark::NeedsAuth;
     }
-    if state == State::Exited || stopped || failed {
+    if matches!(state, State::Exited | State::Failed) || stopped || failed {
         return AssistantMark::Stopped;
     }
     match state {
@@ -829,7 +839,11 @@ fn working_dir() -> std::path::PathBuf {
 pub fn connect(app: &mut SolveApp, ctx: &egui::Context) {
     disconnect(app);
     let Some(entry) = agents::current(app) else {
-        app.agent_chat.notice(tr("ui.agent_chat_none_found"), true);
+        let chat = &mut app.agent_chat;
+        chat.notice(panel::no_agents_message(), true);
+        chat.state = Some(State::Failed);
+        // The picker lists what to install (and, in the Flatpak, the permissions to grant).
+        chat.picking = Some(true);
         return;
     };
     // An API agent's key comes from the keychain for this connection only.
@@ -838,6 +852,7 @@ pub fn connect(app: &mut SolveApp, ctx: &egui::Context) {
             Some(Ok(k)) => k,
             Some(Err(e)) => {
                 app.agent_chat.notice(trf("ui.ai_keychain_error", &[("error", &e)]), true);
+                app.agent_chat.state = Some(State::Failed);
                 return;
             }
             None => None,
@@ -892,6 +907,7 @@ pub fn connect(app: &mut SolveApp, ctx: &egui::Context) {
     };
     match started {
         Ok(b) => {
+            app.preferences.agent_last = entry.id.clone();
             chat.backend = Some(b);
             chat.argv = entry.argv.clone();
             chat.running_id = entry.id.clone();
@@ -912,9 +928,50 @@ pub fn connect(app: &mut SolveApp, ctx: &egui::Context) {
         }
         Err(e) => {
             chat.notice(trf("ui.agent_chat_failed_start", &[("error", &e)]), true);
-            chat.state = Some(State::Exited);
+            chat.state = Some(State::Failed);
         }
     }
+}
+
+/// The launch, once the window is up (the desktop host; not for runs driven over `--control`):
+/// Settings → AI can open the panel and connect the agent started last (#7009).
+pub fn begin(app: &mut SolveApp) {
+    if !shown(app) {
+        return;
+    }
+    if app.preferences.agent_chat_open_at_start {
+        app.agent_chat.open = true;
+    }
+    app.agent_chat.connect_at_start = app.preferences.agent_connect_at_start;
+}
+
+/// Connect at start, once the installed agents are known (the one started last may be one of
+/// them). A missing agent is not swapped for another: the chat says so and shows Connection
+/// failed, whose Retry starts the agent the switcher shows. Nothing waits on it: discovery and
+/// the agent run in the background, and an agent connected by hand meanwhile stays.
+#[cfg(not(target_arch = "wasm32"))]
+fn connect_at_start(app: &mut SolveApp, ctx: &egui::Context) {
+    if !app.agent_chat.connect_at_start {
+        return;
+    }
+    if app.agent_chat.detection.is_none() {
+        refresh(app, ctx);
+        return;
+    }
+    app.agent_chat.connect_at_start = false;
+    if app.agent_chat.state.is_some() || !app.preferences.agent_connect_at_start {
+        return;
+    }
+    let last = app.preferences.agent_last.clone();
+    if !last.is_empty() {
+        if !agents::entries(app).iter().any(|e| e.id == last) {
+            app.agent_chat.notice(trf("ui.agent_chat_last_missing", &[("agent", &last)]), true);
+            app.agent_chat.state = Some(State::Failed);
+            return;
+        }
+        app.agent_chat.agent_id = Some(last);
+    }
+    connect(app, ctx);
 }
 
 /// Stop the agent (and everything it started); the conversation stays.
@@ -1677,6 +1734,8 @@ pub fn poll(app: &mut SolveApp, ctx: &egui::Context) {
     }
     // AI features turned off: nothing keeps running, nothing is looked for.
     if !shown(app) {
+        // Turned back on later, AI features don't connect as if SolidCraft were starting.
+        app.agent_chat.connect_at_start = false;
         crate::documents::disconnect_background_chats(app, false);
         if app.agent_chat.backend.is_some() || app.agent_chat.open {
             disconnect(app);
@@ -1709,7 +1768,10 @@ pub fn poll(app: &mut SolveApp, ctx: &egui::Context) {
         }
     }
     #[cfg(not(target_arch = "wasm32"))]
-    settings::poll_capabilities(app, ctx);
+    {
+        settings::poll_capabilities(app, ctx);
+        connect_at_start(app, ctx);
+    }
     pump_tools(app);
     if !app.agent_chat.held.is_empty() || app.agent_chat.state() == State::Busy {
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
@@ -1850,7 +1912,8 @@ pub fn set_mode(app: &mut SolveApp, mode: &str) {
     }
 }
 
-/// `ui.agent_chat` on the control channel (tests and screenshots): `enabled`, `command`, `open`,
+/// `ui.agent_chat` on the control channel (tests and screenshots): `enabled`, `command`,
+/// `connect_at_start` and `open_at_start` (the launch preferences), `open`,
 /// `side`, `minimized`, `width`, `refresh`, `connect`, `stop`, `attach` (a file's path, for the
 /// next message), `remove_file` (index), `send`, `attach_view`, `attach_selection`, `pick`,
 /// `permission` (an option id, or `"cancel"`), `approve` (`true`/`false`, the oldest held
@@ -1861,6 +1924,12 @@ pub fn control(app: &mut SolveApp, ctx: &egui::Context, p: &Value) -> Result<Val
     }
     if let Some(b) = p.get("toolbar_button").and_then(Value::as_bool) {
         app.preferences.ai_toolbar_button = b;
+    }
+    if let Some(b) = p.get("connect_at_start").and_then(Value::as_bool) {
+        app.preferences.agent_connect_at_start = b;
+    }
+    if let Some(b) = p.get("open_at_start").and_then(Value::as_bool) {
+        app.preferences.agent_chat_open_at_start = b;
     }
     if let Some(m) = p.get("permissions") {
         let Some(mode) = m.as_str().and_then(agents::Mode::parse) else { return Err("permissions must be ask, edits or all".into()) };
@@ -2053,6 +2122,9 @@ pub fn status(app: &SolveApp) -> Value {
     json!({
         "features": app.preferences.ai_features,
         "toolbarButton": app.preferences.ai_toolbar_button,
+        "connectAtStart": app.preferences.agent_connect_at_start,
+        "openAtStart": app.preferences.agent_chat_open_at_start,
+        "lastAgent": app.preferences.agent_last,
         "permissions": app.preferences.ai_permissions.id(),
         "agents": agents::entries(app).iter().map(|e| json!({"id": e.id, "name": e.name, "kind": e.kind.id(), "found": e.found, "version": e.version, "login": e.login, "request_timeout_s": e.kind.is_api().then_some(e.request_timeout_s)})).collect::<Vec<_>>(),
         "currentAgent": agents::current(app).map(|e| e.id),

@@ -285,6 +285,62 @@ fn smart_constrain_and_driven_toggle() {
     assert_eq!(r["driven"], false);
 }
 
+/// #7499: a circle's or an arc's dimension switches between its radius and its diameter, the
+/// circle keeping its size: the parameter is halved or doubled, an expression wrapped.
+#[test]
+fn a_radius_dimension_switches_to_a_diameter_and_back() {
+    use solidcraft_sketch::ConstraintKind;
+    let mut s = new_sketch();
+    let dim = |s: &Session, param: &str| sketch(s).constraints.iter().find(|c| c.param.as_deref() == Some(param)).unwrap().clone();
+    let c1 = ids(&run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 10}))["curves"])[0].clone();
+    let d = run(&mut s, "sketch.dimension", json!({"entities": [c1]}));
+    let p1 = d["param"].as_str().unwrap().to_string();
+    let did = dim(&s, &p1).id;
+    assert!(matches!(dim(&s, &p1).kind, ConstraintKind::Diameter { .. }), "a circle is dimensioned by its diameter");
+    let r = run(&mut s, "sketch.toggle_diameter", json!({"constraint": did}));
+    assert_eq!(r["diameter"], false, "{r}");
+    assert!(matches!(dim(&s, &p1).kind, ConstraintKind::Radius { value, .. } if (value - 10.0).abs() < 1e-9), "{:?}", dim(&s, &p1).kind);
+    assert_eq!(s.doc.param(&p1).unwrap().expr, "10 mm");
+    assert!((sketch(&s).radius(0).unwrap() - 10.0).abs() < 1e-9, "the circle keeps its size");
+    // Asking for what it already is changes nothing; then back to the diameter.
+    let r = run(&mut s, "sketch.toggle_diameter", json!({"constraint": did, "diameter": false}));
+    assert_eq!(r["diameter"], false, "{r}");
+    run(&mut s, "sketch.toggle_diameter", json!({"constraint": did}));
+    assert!(matches!(dim(&s, &p1).kind, ConstraintKind::Diameter { value, .. } if (value - 20.0).abs() < 1e-9));
+    assert_eq!(s.doc.param(&p1).unwrap().expr, "20 mm");
+
+    // An expression is wrapped, so it still reads the parameters it names.
+    run(&mut s, "parameters.add", json!({"name": "w", "expression": "30 mm"}));
+    let c2 = ids(&run(&mut s, "sketch.circle.center", json!({"center": [50, 0], "radius": 10}))["curves"])[0].clone();
+    let p2 = run(&mut s, "sketch.dimension", json!({"entities": [c2], "value": "w"}))["param"].as_str().unwrap().to_string();
+    let d2 = dim(&s, &p2).id;
+    run(&mut s, "sketch.toggle_diameter", json!({"constraint": d2}));
+    assert_eq!(s.doc.param(&p2).unwrap().expr, "(w) / 2");
+    assert!((sketch(&s).radius(1).unwrap() - 15.0).abs() < 1e-6, "{:?}", sketch(&s).radius(1));
+
+    // Another user of the parameter would change size with it: refused, nothing changes.
+    run(&mut s, "parameters.add", json!({"name": "k", "expression": format!("{p1} + 1 mm")}));
+    let e = s.execute("sketch.toggle_diameter", &json!({"constraint": did})).unwrap_err().to_string();
+    assert!(e.contains("also used by parameter k"), "{e}");
+    assert!(matches!(dim(&s, &p1).kind, ConstraintKind::Diameter { .. }));
+    assert_eq!(s.doc.param(&p1).unwrap().expr, "20 mm");
+
+    // An arc's driven radius becomes its driven diameter; a line's length is no radius.
+    let a = ids(&run(&mut s, "sketch.arc.center_point", json!({"center": [0, 80], "start": [20, 80], "sweep": 90}))["curves"])[0].clone();
+    run(&mut s, "sketch.dimension", json!({"entities": [a], "driven": true}));
+    let arc = sketch(&s).curves.iter().position(|c| c.id == a).unwrap();
+    let driven = sketch(&s).constraints.iter().find(|c| matches!(c.kind, ConstraintKind::Radius { c, .. } if c == arc)).unwrap().clone();
+    assert!(driven.driven && driven.param.is_none());
+    run(&mut s, "sketch.toggle_diameter", json!({"constraint": driven.id}));
+    let now = sketch(&s).constraints.iter().find(|c| c.id == driven.id).unwrap().clone();
+    assert!(now.driven && matches!(now.kind, ConstraintKind::Diameter { value, .. } if (value - 40.0).abs() < 1e-6), "{now:?}");
+    let l = ids(&run(&mut s, "sketch.line", json!({"points": [[0, -50], [10, -50]]}))["curves"])[0].clone();
+    let pl = run(&mut s, "sketch.dimension", json!({"entities": [l], "value": 10}))["param"].as_str().unwrap().to_string();
+    let dl = dim(&s, &pl).id;
+    let e = s.execute("sketch.toggle_diameter", &json!({"constraint": dl})).unwrap_err().to_string();
+    assert!(e.contains("is not a circle's or an arc's radius or diameter dimension"), "{e}");
+}
+
 /// #4691: a point put on a line's midpoint snap is held there (a MidPoint constraint), and one
 /// put on a curve stays on it, as a line's end does: they no longer move freely.
 #[test]

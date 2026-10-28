@@ -69,6 +69,29 @@ fn flange_follows_the_picks() {
     }
 }
 
+/// A click on the plate's bottom edge picks the edge, not the base flange's sketch line lying on
+/// it: the flange is an edge flange with a bend, not a flat contour wall (#6804).
+#[test]
+fn a_click_on_the_bottom_edge_makes_an_edge_flange() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.set_origin_shown(false);
+    h.app.run("sketch.create", json!({"plane": "XY", "name": "Base"})).unwrap();
+    h.app.run("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [100, 60]})).unwrap();
+    h.app.run("sketch.finish", json!({})).unwrap();
+    h.app.run("sheet.flange", json!({"sketch": "Base"})).unwrap();
+    h.step(&json!({"call": "ui.view", "params": {"view": "front"}})).unwrap();
+    h.settle();
+    h.app.start("sheet.flange");
+    h.frames(3);
+    // The bottom edge lies on the sketch plane, under the sketch's line from (0, 0) to (100, 0).
+    let at = h.at(&json!({"world": [50, 0, 0]})).unwrap();
+    h.step(&json!({"click": at})).unwrap();
+    let items = h.app.dialog.as_ref().unwrap().inputs[0].items.clone();
+    assert!(matches!(items.as_slice(), [Sel::Edge { point, .. }] if point.z.abs() < 1e-9 && point.y.abs() < 1e-9), "{items:?}");
+    let c = apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
+    assert_eq!(c[0].1["type"], "edge", "{:?}", c[0].1);
+}
+
 /// Hem takes edges and an optional gap; rules make and pick a rule with its expressions.
 #[test]
 fn hem_and_rules() {

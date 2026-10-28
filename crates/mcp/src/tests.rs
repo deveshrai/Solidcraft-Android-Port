@@ -826,6 +826,28 @@ fn legacy_design_files_and_resource_uris() {
     let _ = std::fs::remove_file(&path);
     let d = call(&mut s, 1, "resources/read", json!({"uri": "solvecraft://design"}));
     assert!(d["result"]["contents"][0]["text"].as_str().unwrap().contains("timeline"));
+
+    // `.sc` is what new designs are saved as; a `.solidcraft` file opens and `save {}` writes it
+    // back under its own name.
+    let dir = std::env::temp_dir().join(format!("solidcraft-mcp-ext-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (new, old) = (dir.join("part.sc"), dir.join("part.solidcraft"));
+    let mut s = server();
+    tool(&mut s, "execute", json!({"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10}}));
+    tool(&mut s, "save", json!({"path": new.to_string_lossy()}));
+    assert!(new.is_file());
+    std::fs::rename(&new, &old).unwrap();
+    tool(&mut s, "open", json!({"path": old.to_string_lossy()}));
+    tool(&mut s, "execute", json!({"command": "solid.box", "params": {"length": 5, "width": 5, "height": 5}}));
+    tool(&mut s, "save", json!({}));
+    assert!(old.is_file() && !new.exists(), "save keeps the opened file's name");
+    assert_eq!(solidcraft_engine::io::read_design(&std::fs::read(&old).unwrap()).unwrap().features.len(), 2);
+    tool(&mut s, "open", json!({"path": old.to_string_lossy()}));
+    tool(&mut s, "save", json!({"path": new.to_string_lossy()}));
+    tool(&mut s, "open", json!({"path": new.to_string_lossy()}));
+    assert!(old.is_file() && new.is_file(), "save as leaves the old file");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The default folders (#205): the recovery folder works out of the box, `screenshot` without a

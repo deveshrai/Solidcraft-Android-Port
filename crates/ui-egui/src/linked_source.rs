@@ -36,7 +36,7 @@ pub(crate) fn start(app: &mut SolveApp, component: u64) {
         return;
     }
     let document = app.session.doc.clone();
-    app.pick_open_for(&["solidcraft"], move |app, path| {
+    app.pick_open_for(&solidcraft_engine::io::DESIGN_EXTS, move |app, path| {
         let Some(path) = path else { return };
         // A host or programmatic caller can replace/edit a design while a native picker is
         // pending. Never apply that old component id to a different design or newer revision.
@@ -68,14 +68,15 @@ pub(crate) fn extract(app: &mut SolveApp, component: u64) {
     }
     let Some(name) = app.session.doc.components.iter().find(|c| c.id == component).map(|c| c.name.clone()) else { return };
     let document = app.session.doc.clone();
-    app.pick_save(&format!("{name}.solidcraft"), &["solidcraft"], move |app, path| {
+    let ext = solidcraft_engine::io::DESIGN_EXT;
+    app.pick_save(&format!("{name}.{ext}"), &[ext], move |app, path| {
         let Some(mut path) = path else { return };
         if !Arc::ptr_eq(&document, &app.session.doc) {
             app.set_status(app.tr_label("ui.extract_design_changed").to_string(), true);
             return;
         }
         if std::path::Path::new(&path).extension().is_none() {
-            path.push_str(".solidcraft");
+            path = format!("{path}.{ext}");
         }
         if let Ok(result) = app.run("component.extract", json!({"component": component, "path": path})) {
             report(app, &result, "ui.extract_done");
@@ -177,7 +178,7 @@ mod tests {
 
     fn answer(app: &mut SolveApp, path: Option<String>) {
         app.services.pick_open = Some(Box::new(move |extensions| {
-            assert_eq!(extensions, &["solidcraft"]);
+            assert_eq!(extensions, &["sc", "solidcraft", "solvecraft"], "a design of any release");
             let result = path.clone();
             Box::pin(async move { result })
         }));
@@ -271,15 +272,15 @@ mod tests {
         let item = find(&app, component).unwrap();
         let chosen = folder.join("bracket").to_string_lossy().into_owned();
         app.services.pick_save = Some(Box::new(move |name, extensions| {
-            assert_eq!((name, extensions), ("Bracket.solidcraft", &["solidcraft"][..]));
+            assert_eq!((name, extensions), ("Bracket.sc", &["sc"][..]));
             let result = Some(chosen.clone());
             Box::pin(async move { result })
         }));
         context_menu::run_item(&mut app, &item, egui::Pos2::ZERO);
         assert!(app.file_picker_busy());
         crate::file_picker::tick(&mut app, &egui::Context::default());
-        assert!(folder.join("bracket.solidcraft").is_file());
-        assert!(app.session.doc.links[&component].path.ends_with("bracket.solidcraft"));
+        assert!(folder.join("bracket.sc").is_file());
+        assert!(app.session.doc.links[&component].path.ends_with("bracket.sc"));
         assert!(app.status.as_ref().is_some_and(|(s, _, error)| s.contains("its own design") && !error));
         assert!(find(&app, component).is_none(), "a linked component is not extracted again");
         assert!(menu(&app, Target::Component { id: component }).is_some());

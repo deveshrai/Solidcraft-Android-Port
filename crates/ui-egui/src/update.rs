@@ -56,7 +56,7 @@ const MAX_ASSETS: usize = 400;
 const TAB_ROOM: f32 = 300.0;
 
 /// The Linux app ID (Flatpak, desktop files).
-pub const APP_ID: &str = "ai.storyteller.solidcraft";
+pub const APP_ID: &str = "io.tangencylabs.solidcraft";
 
 /// Why a check failed. Automatic checks never show it; Check now does.
 #[derive(Clone, Debug, PartialEq)]

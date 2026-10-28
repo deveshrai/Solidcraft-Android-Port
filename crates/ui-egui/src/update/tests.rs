@@ -191,7 +191,7 @@ fn each_installation_gets_its_own_file() {
         InstallKind::Snap { store: false }.update_command(Some("solidcraft-linux-x86_64.snap")).as_deref(),
         Some("sudo snap install --dangerous ./solidcraft-linux-x86_64.snap")
     );
-    assert_eq!(InstallKind::Flatpak(APP_ID.into()).update_command(None).as_deref(), Some("flatpak update ai.storyteller.solidcraft"));
+    assert_eq!(InstallKind::Flatpak(APP_ID.into()).update_command(None).as_deref(), Some("flatpak update io.tangencylabs.solidcraft"));
     assert_eq!(
         InstallKind::Deb.update_command(Some("solidcraft-linux-x86_64.deb")).as_deref(),
         Some("sudo apt install ./solidcraft-linux-x86_64.deb")

@@ -127,3 +127,33 @@ fn beveled_segments_share_fill_corners_at_internal_joins() {
         }
     }
 }
+
+#[test]
+fn stage_chips_reserve_the_selected_weight_for_complete_labels_in_all_five_catalogs() {
+    let ctx = crate::fonts::test_context();
+    let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 120.0));
+    for language in ["en", "ja", "zh", "de", "ko"] {
+        let locale = crate::i18n::Locale::for_language(language);
+        let labels: Vec<_> = ["render.stage_look", "render.stage_light", "render.stage_frame", "render.stage_output"]
+            .iter()
+            .map(|key| locale.text(key).to_string())
+            .collect();
+        for selected in 0..4 {
+            let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(bounds), ..Default::default() }, |ui| {
+                StageBar::row(ui, bounds, false, |ui| StageBar::header(ui, selected, &labels.iter().map(String::as_str).collect::<Vec<_>>(), &[]));
+            });
+            output.textures_delta.clear();
+            let search = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("sc_ribbon_search"))).unwrap();
+            assert!((search.right() - (bounds.right() - crate::theme::Tokens::get().space_6)).abs() < 1.0);
+            for label in &labels {
+                assert!(
+                    output
+                        .shapes
+                        .iter()
+                        .any(|shape| { matches!(&shape.shape,egui::Shape::Text(text) if text.galley.rows.iter().any(|row|row.text()==*label)) }),
+                    "{language}, selected {selected}: complete stage label {label}"
+                );
+            }
+        }
+    }
+}

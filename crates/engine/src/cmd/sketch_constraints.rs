@@ -8,7 +8,11 @@ use solidcraft_sketch::{ConstraintKind, CurveKind, Sketch};
 use super::sketch::{add_c, constraint_result, dof_now, edit, listed, redundancy, residual_of};
 use super::{CommandSpec, in_sketch};
 use crate::params::{bad, num, req_vec2, str_, string_list, vec2};
+use crate::schema::sketch_constraints::{ToggleDiameterParams, ToggleDiameterResult};
+use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session};
+
+const TOGGLE_DIAMETER_CONTRACT: TypedContract<ToggleDiameterParams> = TypedContract::new();
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("sketch.constraint.curvature", "Curvature", c_smooth)
@@ -44,6 +48,12 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("sketch.toggle_driven", "Toggle Driven Dimension", toggle_driven).icon("dimension")
         .enabled(in_sketch)
         .params("constraint: dimension id, driven?: bool (default toggles); a driving dimension gets a parameter with its current value"),
+    CommandSpec::new("sketch.toggle_diameter", "Toggle Radius / Diameter", crate::checked!("sketch.toggle_diameter", toggle_diameter))
+        .icon("dimension")
+        .enabled(in_sketch)
+        .contract(&TOGGLE_DIAMETER_CONTRACT)
+        .output(output_schema_for::<ToggleDiameterResult>)
+        .params("constraint: a circle's or an arc's radius or diameter dimension id; diameter?: bool (default: the other one); sketch?: id|name (default: the one being edited). The circle stays the same size: its parameter is halved or doubled (a plain value is rewritten, an expression becomes `(e) / 2` or `2 * (e)`); refused when anything else uses that parameter"),
     CommandSpec::new("sketch.glyphs", "Constraint Glyphs", glyphs).icon("eye")
         .enabled(in_sketch)
         .noundo()
@@ -406,6 +416,60 @@ fn toggle_driven(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.doc_mut().prune_model_params();
     Ok(json!({"constraint": cid, "driven": driven, "sketch": info}))
+}
+
+fn toggle_diameter(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "sketch.toggle_diameter";
+    let cid = str_(p, "constraint").ok_or_else(|| bad(cmd, "`constraint` must be a dimension id"))?.to_string();
+    let want = crate::params::bool_(p, "diameter");
+    let sketch = super::sketch::target_sketch(s, p, cmd)?;
+    let (diameter, info) = edit(s, p, cmd, true, |sk, doc| {
+        let c = sk.constraints.iter().find(|c| c.id == cid).cloned().ok_or_else(|| bad(cmd, format!("no constraint `{cid}`")))?;
+        let round = |curve: usize| matches!(sk.curves.get(curve).map(|c| &c.kind), Some(CurveKind::Circle { .. } | CurveKind::Arc { .. }));
+        let (curve, value, now) = match c.kind {
+            ConstraintKind::Radius { c, value } if round(c) => (c, value, false),
+            ConstraintKind::Diameter { c, value } if round(c) => (c, value, true),
+            _ => return Err(bad(cmd, format!("`{cid}` is not a circle's or an arc's radius or diameter dimension"))),
+        };
+        let diameter = want.unwrap_or(!now);
+        if diameter == now {
+            return Ok(diameter);
+        }
+        let (kind, value) = if diameter {
+            (ConstraintKind::Diameter { c: curve, value: 2.0 * value }, 2.0 * value)
+        } else {
+            (ConstraintKind::Radius { c: curve, value: value / 2.0 }, value / 2.0)
+        };
+        // Its parameter now holds the other measure, so the circle keeps its size; another user
+        // of that parameter would change size with it.
+        if let Some(name) = &c.param {
+            let others: Vec<String> = doc
+                .param_users(name)
+                .into_iter()
+                .filter(
+                    |u| !matches!(u, solidcraft_doc::ParamUser::Dimension { feature, constraint, .. } if *feature == sketch && *constraint == cid),
+                )
+                .map(|u| u.describe())
+                .collect();
+            if !others.is_empty() {
+                return Err(bad(cmd, format!("`{name}` is also used by {}; switching `{cid}` would change them", others.join(", "))));
+            }
+            let e = doc.param(name).map(|p| p.expr.clone()).ok_or_else(|| bad(cmd, format!("no parameter `{name}`")))?;
+            let e = if solidcraft_doc::expr::references(&e).is_empty() {
+                doc.design_length(value).1
+            } else if diameter {
+                format!("2 * ({e})")
+            } else {
+                format!("({e}) / 2")
+            };
+            doc.set_param(name, &e, None, None).map_err(|e| bad(cmd, e.to_string()))?;
+        }
+        let slot = sk.constraints.iter_mut().find(|c| c.id == cid).ok_or_else(|| bad(cmd, "constraint"))?;
+        slot.kind = kind;
+        Ok(diameter)
+    })?;
+    let reply = ToggleDiameterResult { constraint: cid, diameter, sketch: info, param_warnings: Vec::new() };
+    serde_json::to_value(reply).map_err(|e| EngineError::Other(e.to_string()))
 }
 
 /// Where a constraint's glyph goes (sketch coordinates): beside the middle of its first curve,

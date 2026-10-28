@@ -14,6 +14,34 @@ The current integrated GPU renderer shows a separate product scene. Return to De
 restores its camera, projection preference and existing viewport drawing policy.
 The live product preview remains independent of the selected image method.
 
+## Stage bar and floating docks
+
+Render has no ribbon. A shared 88 pt two-row stage bar sits 8 pt to the right of
+the 104 × 88 pt workspace card, with matching top and bottom edges. The icon sits
+above the Render label and Workspace caption. The header is 36 pt; the remaining
+52 pt contains the tools, centred vertically below a 1 pt divider. Numbered **Look**, **Light**, **Frame** and **Output** chips
+run `view.render_stage {stage: look|light|frame|output}`. The selection belongs to the
+open document tab's view state; it is not saved in the design. Opening a stage never
+applies or saves settings or starts an image job. It focuses the existing Inspector
+page, while every Inspector page and registered Render command remains reachable.
+The headless command validates and echoes the request without changing the document.
+
+Render, Cancel and the shared command search (S) occupy the top row. The former Pick
+HUD, icon-text Body/Face/Component segments, Paint/Pick Up actions and direct-light
+preview information chip occupy Look's second row with 8 pt side padding. Picking and changing the
+light coordinate frame remain disabled with their reason in this checkout. Frame
+uses the existing explicit camera command for projection; Output shows the current
+size/format and directs edits to the Output Inspector. No completion ticks are inferred.
+
+The Browser and Inspector float in both shell layouts, share top and bottom edges,
+and clear the bar and Shots strip by 8 pt. Their default outer widths are 266 pt and 305 pt, with the shared resize bounds.
+The 48 pt Shots strip has an 8 pt gap from the docks. The 110 pt compass uses the
+free canvas beside the Inspector and the navigation bar keeps its shared navigation handler. Narrow
+rows scroll horizontally; docks shrink together or disappear if no usable space
+remains. The Shots strip's independent `view.shots_strip` preference is unchanged.
+The current model/library Browser can reveal model bodies for Look; scene-specific
+Lights, Shots and Output expansion awaits the scene Browser change.
+
 ## Image methods and controls
 
 **CPU raster** produces the existing preview PNG with approximate transparency.

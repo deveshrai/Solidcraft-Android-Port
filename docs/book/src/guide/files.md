@@ -2,7 +2,7 @@
 
 | Format | Read | Write |
 |---|---|---|
-| `.solidcraft` (versioned container or JSON design) | yes | yes |
+| `.sc` (versioned container or JSON design; `.solidcraft` files from earlier releases still open) | yes | yes |
 | `.json` (self-contained plain JSON design) | yes | yes |
 | STEP (AP203, AP214, AP242) | solids, assemblies, units, names, colours | AP242 with names, colours and the component tree |
 | IGES 5.3 | manifold solids, or trimmed surfaces sewn into solids | manifold solids with names and colours |
@@ -44,10 +44,51 @@ negative volumes come in as ordinary solid geometry.
 
 **File → Export STL…** and **File → Export 3MF…** (also **Save As Mesh** on the Insert tab's Files
 panel, and in the right-click menu of a body) open the same dialog with that format chosen; it saves
-the selected bodies as STL, 3MF or 3MF with face tags (below), and you can change the format there. With **Send to slicer** ticked, it writes the file to
-a temporary folder and opens it in the chosen slicer instead of asking for a file name. The slicer
-list shows the slicers found on the computer with their icons; **Custom…** adds any other program
-to the top of the list (kept between runs; hover an entry you added and press Delete to remove it).
+the selected bodies as STL, 3MF or 3MF with face tags (below) to a file you name, and you can change
+the format there.
+
+**File → Send to Slicer** (also on the Insert tab's Files panel, and in the right-click menu of a
+body) is the short way: it saves the selected bodies as a 3MF in millimetres, without face tags,
+and sends it to a slicer. It always asks which one and pre-selects the slicer you used last time,
+so the usual case is one click or Enter. The list shows the slicers found on the computer with their
+icons; **Custom…** adds any other program to the top of the list (kept between runs; hover an entry
+you added and press Delete to remove it). On Linux only, a program whose desktop entry says it opens
+3MF or STL files is listed even if SolidCraft doesn't know it by name. Windows and macOS list the
+known slicers only, found in the usual program folders and on `PATH`. It falls back to an STL if the
+3MF can't be written. Scripts and the control channel use `file.send_to_slicer`
+with a `slicer`, which sends without a dialog. They can start only the slicers in the
+list and programs you added under **Custom…**; any other program path is refused, and an AI agent's
+request to save a mesh or send it to a slicer asks first and names the slicer.
+
+The list also has a plain **EasyPrint (Printables, in the browser)** row, and it is the one entry
+that works in the browser build too. EasyPrint is Printables' slicer, so choosing it uploads the
+selected bodies (a 3MF, 100 MB at most) to Printables' servers and opens the model there in your
+browser. The link expires after 30 minutes, and you need to be signed in to Printables. SolidCraft
+asks once before the first upload and remembers that you agreed. Nothing is uploaded unless you pick
+this row. SolidCraft isn't affiliated with Printables. Scripts use `file.open_in_easyprint`, which refuses unless it gets `consent: true`,
+and an AI agent's request to use it asks first.
+
+Files sent to a slicer go to a folder only you can
+read: `~/.cache/solidcraft/slicer` on Linux, `~/Library/Caches/SolidCraft/slicer` on macOS and
+`%LOCALAPPDATA%\SolidCraft\slicer` on Windows. The name stays the same for the same design and
+the same bodies, so sending again **replaces the file the slicer has open**: use the slicer's
+Reload from disk to pick it up. If Windows won't let the file be replaced because the slicer holds
+it, the new copy gets a number (`name-2.3mf`) and the status line says so. Files older than seven days are
+deleted the next time SolidCraft starts.
+
+If the slicer is already running, PrusaSlicer, SuperSlicer and Cura load the file in
+the open window instead of starting another one (they are started with `--single-instance`).
+Other slicers, Bambu Studio and OrcaSlicer among them, are started as they are, so they may open a
+second window. You can turn this off in
+Preferences → General, except for PrusaSlicer 3.0, whose launcher can't hand a file to a running
+window without it. Scripts pass `single_instance: false` to `file.send_to_slicer` or `file.save_mesh`.
+
+PrusaSlicer 2 and 3 behave differently, so SolidCraft reads which one an install is from the
+version in its installed metadata (a Flatpak's own files, or the `metainfo` file of a package); it
+never runs the program to ask. PrusaSlicer 2 is sent the file with `--single-instance`. PrusaSlicer 3
+is started on its own first, SolidCraft waits up to ten seconds for it to be ready, and then sends the
+file. If the version can't be read, the command decides: the `slic3r-app-launcher` launcher is
+treated as PrusaSlicer 3, and any other entry is left as it is.
 
 Closed mechanical meshes with a constant cross-section can be rebuilt as solids with the
 `mesh.convert` command (command palette, scripts and the control channel).
@@ -76,7 +117,7 @@ from a newer version are refused with a message.
 desktop; **Save As JSON** is also available in the File menu on desktop and web. Choose
 the `.json` extension for plain JSON. **Export Design as JSON** writes an independent,
 self-contained copy without changing the current file. Scripts can explicitly pass
-`"format": "json"` to `file.save` or `file.save_as` even with a `.solidcraft` name.
+`"format": "json"` to `file.save` or `file.save_as` even with a `.sc` name.
 Opening detects the format from the contents, so existing JSON designs keep working.
 Containers favor fast reading and saving by default. Scripts can request
 `"compression": "compact"` when file size matters more than CPU time.
@@ -191,7 +232,7 @@ over a file that changed on disk fails with an error until it is given `overwrit
 ## Saving in the web app
 
 In Chrome, Edge and Opera, **Save As** opens your browser's save dialog and writes the
-`.solidcraft` file to the folder you choose, and **Open** opens the browser's open dialog.
+`.sc` file to the folder you choose, and **Open** opens the browser's open dialog.
 **Save** then writes back to that same file. The browser remembers the file, so after you
 reload the page the first **Save** asks once for permission to write to it, and carries on.
 A design you open from your computer saves back to the file you opened.

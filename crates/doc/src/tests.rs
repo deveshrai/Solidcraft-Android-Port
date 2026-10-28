@@ -436,6 +436,7 @@ fn primitives_and_combine() {
             radius: "2".into(),
             height: "20".into(),
             operation: Operation::NewBody,
+            references: Vec::new(),
         },
         None,
     )
@@ -562,25 +563,41 @@ fn feature_inserted_at_a_marker_inside_a_timeline_folder_joins_it() {
     assert!(Document::from_json(&doc.to_json()).is_ok(), "the inserted feature must leave a reopenable design");
 }
 
+/// A marker after the last feature leaves every feature active, as no marker does, so a feature
+/// added then is active too, not added rolled back (#7741: editing the last feature from the
+/// History runs its command with the marker there).
+#[test]
+fn feature_added_with_the_marker_at_the_end_is_active() {
+    let mut doc = Document::new("marker at the end");
+    let first = doc.add_feature(FeatureKind::Sketch { plane: PlaneRef::Origin { name: "XY".into() }, sketch: Sketch::new() }, Some("First")).unwrap();
+    doc.marker = Some(1);
+
+    let added = doc.add_feature(FeatureKind::Sketch { plane: PlaneRef::Origin { name: "XY".into() }, sketch: Sketch::new() }, Some("Added")).unwrap();
+
+    assert_eq!(doc.features.iter().map(|feature| feature.id).collect::<Vec<_>>(), vec![first, added]);
+    assert_eq!(doc.marker, Some(2), "the marker stays after the last feature");
+}
+
 /// A construction plane that is its own side resolves through the model and back into the
 /// document. The depth count has to survive that hop, or the recursion overflows the stack and
 /// aborts the process, which no panic guard can intercept.
 #[test]
 fn self_referencing_construction_planes_are_errors() {
-    let selfref = |name: &str| Box::new(construct::GeoRef::Plane { plane: PlaneRef::Construction { name: name.into() } });
+    // Feature ids are assigned from 1, so each design below knows its own feature's id.
+    let selfref = |id: u64| Box::new(construct::GeoRef::Plane { plane: PlaneRef::Construction { feature: id.into() } });
     let xz = || Box::new(construct::GeoRef::Plane { plane: PlaneRef::Origin { name: "XZ".into() } });
 
     // Directly its own first side.
     let mut doc = Document::new("selfplane");
-    doc.add_feature(FeatureKind::ConstructionPlane { plane: PlaneRef::Midplane { a: selfref("P1"), b: xz() } }, Some("P1")).unwrap();
+    doc.add_feature(FeatureKind::ConstructionPlane { plane: PlaneRef::Midplane { a: selfref(1), b: xz() } }, Some("P1")).unwrap();
     let mut m = Model::new();
     m.evaluate(&doc);
     assert!(m.results.iter().any(|r| r.error.is_some()), "a plane that is its own side must report an error: {:?}", m.results);
 
     // Two planes that are each other's side.
     let mut doc = Document::new("twoplanes");
-    doc.add_feature(FeatureKind::ConstructionPlane { plane: PlaneRef::Midplane { a: selfref("P2"), b: xz() } }, Some("P1")).unwrap();
-    doc.add_feature(FeatureKind::ConstructionPlane { plane: PlaneRef::Midplane { a: selfref("P1"), b: xz() } }, Some("P2")).unwrap();
+    doc.add_feature(FeatureKind::ConstructionPlane { plane: PlaneRef::Midplane { a: selfref(2), b: xz() } }, Some("P1")).unwrap();
+    doc.add_feature(FeatureKind::ConstructionPlane { plane: PlaneRef::Midplane { a: selfref(1), b: xz() } }, Some("P2")).unwrap();
     let mut m = Model::new();
     m.evaluate(&doc);
     assert!(m.results.iter().any(|r| r.error.is_some()), "a two-plane cycle must report an error: {:?}", m.results);
@@ -588,8 +605,8 @@ fn self_referencing_construction_planes_are_errors() {
     // A perpendicular plane whose base is itself, and a sketch placed on it.
     let mut doc = Document::new("perpplane");
     let line = Box::new(construct::GeoRef::World { axis: "X".into() });
-    doc.add_feature(FeatureKind::ConstructionPlane { plane: PlaneRef::Perpendicular { plane: selfref("P1"), line } }, Some("P1")).unwrap();
-    doc.add_feature(FeatureKind::Sketch { plane: PlaneRef::Construction { name: "P1".into() }, sketch: Sketch::new() }, Some("Sketch1")).unwrap();
+    doc.add_feature(FeatureKind::ConstructionPlane { plane: PlaneRef::Perpendicular { plane: selfref(1), line } }, Some("P1")).unwrap();
+    doc.add_feature(FeatureKind::Sketch { plane: PlaneRef::Construction { feature: 1.into() }, sketch: Sketch::new() }, Some("Sketch1")).unwrap();
     let mut m = Model::new();
     m.evaluate(&doc);
     assert!(m.results.iter().any(|r| r.error.is_some()), "a cyclic perpendicular plane must report an error: {:?}", m.results);

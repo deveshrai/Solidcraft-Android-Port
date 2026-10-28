@@ -1,4 +1,4 @@
-//! File formats. Designs use JSON or versioned containers (`.solidcraft`); the authoritative
+//! File formats. Designs use JSON or versioned containers (`.sc`; `.solidcraft` and `.solvecraft` still open); the authoritative
 //! document rebuilds on load and optional display caches remain provisional. Bodies export
 //! as STL (binary or ASCII), OBJ, STEP and 3MF, and assemblies as URDF ([`urdf()`]); STEP, IGES,
 //! FreeCAD and Rhino files import as a base feature (see [`step_import_feature`]), 3MF and
@@ -32,7 +32,7 @@ pub mod vfs;
 
 pub use dxf::{read_dxf, write_dxf};
 pub use dxf_out::{DxfEntity, DxfLayer, DxfLinetype, DxfShape, loop_shapes, seg_shape, write_dxf_drawing};
-pub use legacy_dir::{APP_ID, LEGACY_APP_ID, adopt_legacy_dir, legacy_flatpak_path};
+pub use legacy_dir::{APP_ID, LEGACY_APP_ID, PREVIOUS_APP_IDS, adopt_legacy_dir, legacy_flatpak_paths};
 pub use safe_write::{backup_path, write_atomic};
 pub use sketch2d::{Geom2, MAX_DRAWING_BYTES};
 pub use svg::read_svg;
@@ -46,27 +46,35 @@ pub use urdf::{UrdfOptions, UrdfPackage, urdf};
 use solidcraft_doc::{Document, Metadata, ModelState};
 use solidcraft_geom::{Mesh, Vec3};
 
-/// Design file extension.
-pub const DESIGN_EXT: &str = "solidcraft";
-/// The design extension of earlier releases. Compatibility shim (docs/compatibility.md): such
-/// files still open everywhere a design opens; new designs are saved as [`DESIGN_EXT`].
-pub const LEGACY_DESIGN_EXT: &str = "solvecraft";
+/// Design file extension: new designs, autosaves and recovery files are written as `.sc`.
+pub const DESIGN_EXT: &str = "sc";
+/// The design extensions of earlier releases, newest first. Compatibility shim
+/// (docs/compatibility.md): such files still open everywhere a design opens, and Save keeps
+/// writing an opened file under its own name; new designs are saved as [`DESIGN_EXT`].
+pub const LEGACY_DESIGN_EXTS: [&str; 2] = ["solidcraft", "solvecraft"];
 /// Every extension a design file may have, current first.
-pub const DESIGN_EXTS: [&str; 2] = [DESIGN_EXT, LEGACY_DESIGN_EXT];
+pub const DESIGN_EXTS: [&str; 3] = [DESIGN_EXT, LEGACY_DESIGN_EXTS[0], LEGACY_DESIGN_EXTS[1]];
 
-/// Is this a design file name (`.solidcraft`, or the legacy extension), any case?
+/// Is this extension (without the dot) one a design file may have (`sc` or a legacy one), any case?
+pub fn is_design_ext(ext: &str) -> bool {
+    DESIGN_EXTS.iter().any(|x| ext.eq_ignore_ascii_case(x))
+}
+
+/// Is this a design file name (`.sc`, a legacy extension, or plain `.json`), any case?
 pub fn is_design_path(path: &str) -> bool {
-    std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| DESIGN_EXTS.iter().chain(["json"].iter()).any(|x| e.eq_ignore_ascii_case(x)))
+    std::path::Path::new(path).extension().and_then(|e| e.to_str()).is_some_and(|e| is_design_ext(e) || e.eq_ignore_ascii_case("json"))
+}
+
+/// Is this a design container file (`.sc` or a legacy extension, not plain JSON), any case?
+pub fn is_design_container_path(path: &std::path::Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(is_design_ext)
 }
 /// Largest design file we read.
 pub const MAX_DESIGN_BYTES: usize = 256 << 20;
 
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
-    #[error("unsupported format `{0}` (use stl, obj, step, 3mf, urdf or solidcraft)")]
+    #[error("unsupported format `{0}` (use stl, obj, step, 3mf, urdf or sc)")]
     Format(String),
     #[error("nothing to export: the design has no bodies")]
     Empty,
@@ -346,7 +354,7 @@ impl Format {
             "3mf" => Format::ThreeMf,
             "3mf-tagged" => Format::ThreeMfTagged,
             "urdf" => Format::Urdf,
-            "solidcraft" | "solvecraft" | "json" => Format::Design,
+            e if e == "json" || is_design_ext(e) => Format::Design,
             _ => return Err(IoError::Format(ext)),
         })
     }
@@ -577,7 +585,7 @@ pub fn export_with_quality(
             let objs: Vec<MeshObject> = sel.iter().map(|b| mesh_object(b, format == Format::ThreeMfTagged, quality)).collect::<Result<_>>()?;
             write_3mf_with(&objs, &threemf_metadata(meta))?
         }
-        Format::Design => return Err(IoError::Format("solidcraft (save the document instead)".into())),
+        Format::Design => return Err(IoError::Format("sc (save the document instead)".into())),
         Format::Urdf => return Err(IoError::Format("urdf (an assembly package; use file.export)".into())),
     })
 }
@@ -944,10 +952,14 @@ mod tests {
         assert!(step_import_feature(b"ISO-10303-21;", "x.step").is_err());
         assert!(step_import_feature(&[0xff, 0xfe, 0x00], "x.step").is_err());
         assert!(Format::from_name("a.dwg").is_err());
-        // Compatibility shim: the legacy design extension is still a design.
+        // Compatibility shim: the legacy design extensions are still designs.
         assert_eq!(Format::from_name("old.solvecraft").unwrap(), Format::Design);
-        assert_eq!(Format::from_name("new.solidcraft").unwrap(), Format::Design);
-        assert!(is_design_path("/d/old.SOLVECRAFT") && is_design_path("new.solidcraft") && !is_design_path("a.step"));
+        assert_eq!(Format::from_name("older.solidcraft").unwrap(), Format::Design);
+        assert_eq!(Format::from_name("new.sc").unwrap(), Format::Design);
+        assert_eq!(Format::from_name("NEW.SC").unwrap(), Format::Design);
+        assert!(is_design_path("/d/old.SOLVECRAFT") && is_design_path("older.solidcraft") && is_design_path("new.sc") && !is_design_path("a.step"));
+        assert_eq!(DESIGN_EXT, "sc");
+        assert_eq!(DESIGN_EXTS, ["sc", "solidcraft", "solvecraft"], "new extension first, then every older one");
         assert!(read_stl(&[0u8; 10]).is_err());
         let mut fake = vec![0u8; 84];
         fake[80..84].copy_from_slice(&u32::MAX.to_le_bytes());
@@ -1059,6 +1071,7 @@ mod tests {
                 radius: "6".into(),
                 height: "15".into(),
                 operation: Operation::NewBody,
+                references: Vec::new(),
             },
             None,
         )

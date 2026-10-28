@@ -69,6 +69,9 @@ fn representative(h: &Harness, command: &str) -> Dialog {
         if command == "solid.coil" {
             continue; // an empty Profile input keeps the primitive section, which this form checks
         }
+        if command == "solid.cylinder" {
+            continue; // its face and reference edges place it (cylinder reference tests); this form checks its fields
+        }
         if matches!(input.label, "Rail" | "Second Rail" | "Pass through" | "Direction" | "Roller (optional)" | "Tip (optional)") {
             continue;
         }
@@ -367,6 +370,7 @@ form_case!(primitive_box, "solid.box", ["length", "width", "height", "Operation"
 form_case!(cylinder, "solid.cylinder", ["diameter", "height", "Operation"]);
 form_case!(sphere, "solid.sphere", ["diameter", "Operation"]);
 form_case!(torus, "solid.torus", ["major", "minor", "Operation"]);
+form_case!(cone, "solid.cone", ["diameter", "top_diameter", "height", "Operation"]);
 form_case!(coil, "solid.coil", ["diameter", "revolutions", "pitch", "section_size", "Operation"]);
 form_case!(combine, "solid.combine", ["Operation"]);
 form_case!(surface_extrude, "surface.extrude", ["Distance", "Direction"]);
@@ -480,6 +484,85 @@ fn remaining_dialogs_keep_kit_chrome_and_cancel_restores_preview() {
     }
 }
 
+/// Interface › Dialog buttons › Top (#6708): every card made by the shared panel moves its
+/// actions into the header row, with the footer's enabled states, handles and close behaviour.
+#[test]
+fn top_dialog_buttons_keep_every_cards_states_handles_and_close() {
+    for command in [
+        "solid.revolve",
+        "solid.shell",
+        "solid.box",
+        "joint.create",
+        "solid.thread",
+        "inspect.measure",
+        "contact.create",
+        "motion.study",
+        "explode.create",
+        "parts.insert",
+        "joint.drive",
+        "inspect.interference",
+        "file.save_mesh",
+        "file.export_view_dxf",
+        "sheet.flat_pattern",
+    ] {
+        let mut seen = Vec::new();
+        for placement in ["bottom", "top"] {
+            let mut h = fixture();
+            h.call("ui.resize", json!({"width":1600,"height":1200}));
+            h.call("ui.prefs", json!({"dialog_buttons": placement}));
+            let design = h.app.session.doc.to_json();
+            h.app.start(command);
+            h.frames(4);
+            let header = scenario::rect_of("dialog:header").unwrap_or_else(|| panic!("{command} {placement}: no header"));
+            let cancel = scenario::handle_at("dialog:cancel").unwrap_or_else(|| panic!("{command} {placement}: no cancel"));
+            seen.push((
+                scenario::count_of("dialog:ok:enabled"),
+                scenario::rect_of("dialog:ok").is_some(),
+                scenario::rect_of("dialog:apply").is_some(),
+            ));
+            if placement == "top" {
+                assert!(scenario::rect_of("dialog:footer").is_none(), "{command}: no footer row");
+                assert!(header.contains(cancel), "{command}: cancel in the header {header:?}");
+                assert!(scenario::rect_of("dialog:ok").is_none_or(|ok| header.contains_rect(ok)), "{command}: OK in the header");
+                assert_eq!(scenario::handle_at("dialog:close"), Some(cancel), "{command}: Cancel is the close");
+            } else {
+                assert!(scenario::rect_of("dialog:footer").unwrap().contains(cancel), "{command}: cancel in the footer");
+            }
+            h.step(&json!({"click":{"handle":"dialog:close"}})).unwrap();
+            assert!(h.app.dialog.is_none(), "{command} {placement}: closed");
+            assert_eq!(h.app.session.doc.to_json(), design, "{command} {placement}: closing keeps the design");
+        }
+        assert_eq!(seen.first(), seen.get(1), "{command}: OK and Apply as at the bottom");
+    }
+}
+
+/// With the buttons at the top, OK, Enter and Esc do what they do with them at the bottom.
+#[test]
+fn top_dialog_buttons_apply_and_cancel_like_the_footer() {
+    for how in ["click", "enter", "escape"] {
+        let mut h = fixture();
+        h.call("ui.resize", json!({"width":1600,"height":1200}));
+        h.call("ui.prefs", json!({"dialog_buttons": "top"}));
+        h.app.dialog = Some(representative(&h, "solid.revolve"));
+        h.settle();
+        assert_eq!(scenario::count_of("dialog:ok:enabled"), Some(1.0));
+        let (design, bodies) = (h.app.session.doc.to_json(), h.app.session.world_state().bodies.len());
+        let step = match how {
+            "click" => json!({"click":{"handle":"dialog:OK"}}),
+            "enter" => json!({"key":"Enter"}),
+            _ => json!({"key":"Escape"}),
+        };
+        h.step(&step).unwrap();
+        h.settle();
+        assert!(h.app.dialog.is_none(), "{how}: the dialog closes");
+        if how == "escape" {
+            assert_eq!(h.app.session.doc.to_json(), design, "Esc leaves the design as it was");
+        } else {
+            assert_eq!(h.app.session.world_state().bodies.len(), bodies + 1, "{how}: the revolve is made");
+        }
+    }
+}
+
 /// OK and Cancel in the view's corner (#6709) do what the dialog's own do: the check applies and
 /// closes, the cross cancels without a change, and the check is grey (and does nothing) whenever
 /// the dialog's OK is.
@@ -525,6 +608,41 @@ fn view_corner_ok_and_cancel_answer_the_dialog_like_its_own_buttons() {
     h.step(&json!({"click":{"handle":"view:confirm:cancel"}})).unwrap();
     h.settle();
     assert!(h.app.dialog.is_none(), "the cross closes Measure");
+}
+
+/// Both options at once (#6708 with #6709): the check in the view's corner greys out with the OK
+/// in the title row, the pair keeps clear of the dialog, and either OK applies it.
+#[test]
+fn top_dialog_buttons_and_the_view_corner_agree() {
+    let open = |command: &str| {
+        let mut h = fixture();
+        h.call("ui.resize", json!({"width":1600,"height":1200}));
+        h.call("ui.prefs", json!({"dialog_buttons": "top", "view_confirm_corner": true}));
+        if command == "solid.revolve" {
+            h.app.dialog = Some(representative(&h, command));
+        } else {
+            h.app.start(command);
+        }
+        h.settle();
+        h
+    };
+    for (command, enabled) in [("solid.revolve", 1.0), ("solid.shell", 0.0)] {
+        let _h = open(command);
+        let header = scenario::rect_of("dialog:header").unwrap();
+        assert!(scenario::rect_of("dialog:footer").is_none(), "{command}");
+        assert!(header.contains_rect(scenario::rect_of("dialog:ok").unwrap()), "{command}: OK in the title row");
+        assert_eq!(scenario::count_of("dialog:ok:enabled"), Some(enabled), "{command}");
+        assert_eq!(scenario::count_of("view:confirm:ok:enabled"), Some(enabled), "{command}: the check follows the title row's OK");
+        assert!(!scenario::rect_of("view:confirm").unwrap().intersects(header), "{command}: the pair keeps clear of the dialog");
+    }
+    for handle in ["dialog:ok", "view:confirm:ok"] {
+        let mut h = open("solid.revolve");
+        let bodies = h.app.session.world_state().bodies.len();
+        h.step(&json!({"click":{"handle":handle}})).unwrap();
+        h.settle();
+        assert!(h.app.dialog.is_none(), "{handle}: the dialog closes");
+        assert_eq!(h.app.session.world_state().bodies.len(), bodies + 1, "{handle}: the revolve is made");
+    }
 }
 
 fn resized_box_editor(command: &str, params: Value) -> (Harness, u64) {

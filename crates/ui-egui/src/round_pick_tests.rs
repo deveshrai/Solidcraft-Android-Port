@@ -182,7 +182,9 @@ fn move_rotates_about_a_cylinder_wall_and_moves_from_a_circle_centre() {
     let a: Vec<f64> = serde_json::from_value(p["axis"].clone()).unwrap();
     assert!((a[2].abs() - 1.0).abs() < 1e-9, "about the shaft's axis: {a:?}");
     // The chips say what the round picks stand for.
-    let label = |d: &crate::dialogs::Dialog, i: usize, sel: &Sel| crate::dialogs::selection_label(&h.app.session, d, &d.inputs[i], sel);
+    let label = |d: &crate::dialogs::Dialog, i: usize, sel: &Sel| {
+        crate::dialogs::selection_label(&h.app.session, crate::prefs::OriginPlaneNames::Xyz, d, &d.inputs[i], sel)
+    };
     let wall_label = label(&d, 1, &wall);
     assert!(wall_label.starts_with("Shaft · face ") && wall_label.ends_with(" axis"), "{wall_label}");
     assert!(label(&d, 1, &rim).ends_with("· circle axis"), "{}", label(&d, 1, &rim));

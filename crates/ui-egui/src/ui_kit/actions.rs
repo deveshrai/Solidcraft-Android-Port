@@ -121,20 +121,7 @@ pub(super) fn footer_with_left(
     let inner = band.shrink2(vec2(t.space_12, t.space_10));
     scenario::publish_rect("dialog:footer:actions", inner);
     let mut action = if ui.is_enabled() { keyboard(ui.ctx(), ok_enabled) } else { Action::None };
-    let primary_fill = if t.borders.bevel.is_some() && !danger {
-        t.control_fill
-    } else if danger {
-        t.form_error
-    } else {
-        t.form_primary
-    };
-    let primary_ink = if t.borders.bevel.is_some() && !danger {
-        t.form_ink
-    } else if danger && crate::theme::contrast_ratio(t.on_accent, primary_fill) < 4.5 {
-        t.tab_on_fill_dark
-    } else {
-        t.on_accent
-    };
+    let look = ActionLook::new(ok_enabled, selected, danger);
     let mut actions_left = inner.right();
     let row = ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -143,49 +130,16 @@ pub(super) fn footer_with_left(
                 if (kind == Action::Apply && (apply_label.is_none() || confirm)) || (kind == Action::Ok && ok_label.is_empty()) || label.is_empty() {
                     continue;
                 }
-                let marked = selected == Some(kind);
-                let primary = kind == Action::Ok && selected.is_none_or(|s| s == Action::Ok);
-                let live = kind == Action::Cancel || ok_enabled;
-                ui.spacing_mut().button_padding = vec2(if primary { t.space_16 } else { t.space_12 }, 0.0);
-                let text = RichText::new(crate::i18n::tr_label(label)).size(t.font_label).color(if primary && ok_enabled {
-                    primary_ink
-                } else if primary {
-                    t.form_dim
-                } else {
-                    t.form_ink
-                });
-                let response = ui.add_enabled(
-                    live,
-                    egui::Button::new(if primary && ok_enabled { text.bold_face() } else { text })
-                        .selected(marked && !primary)
-                        .fill(if primary && ok_enabled {
-                            primary_fill
-                        } else if marked {
-                            t.selected_bg
-                        } else {
-                            t.control_fill
-                        })
-                        .stroke(if primary && ok_enabled {
-                            egui::Stroke::NONE
-                        } else if marked && !primary {
-                            egui::Stroke::new(1.0, t.form_primary)
-                        } else {
-                            t.control_border_stroke(t.control_border)
-                        })
-                        .wrap_mode(egui::TextWrapMode::Extend)
-                        .corner_radius(t.control_radius)
-                        .min_size(vec2(if primary { t.space_24 * 3.0 } else { 0.0 }, t.form_button_height)),
+                let primary = look.primary(kind);
+                let response = action_button(
+                    ui,
+                    label,
+                    kind,
+                    &look,
+                    if primary { t.space_16 } else { t.space_12 },
+                    if primary { t.space_24 * 3.0 } else { 0.0 },
                 );
-                t.button_bevel(ui, &response, false);
-                pointer_on_hover(ui, &response);
                 actions_left = actions_left.min(response.rect.left());
-                let key = match kind {
-                    Action::Ok => "dialog:ok",
-                    Action::Apply => "dialog:apply",
-                    _ => "dialog:cancel",
-                };
-                scenario::publish_target(key, response.rect);
-                scenario::publish_handle(&format!("dialog:{label}"), response.rect.center());
                 if response.clicked() {
                     action = kind;
                 }
@@ -223,6 +177,154 @@ pub(super) fn footer_with_left(
         ui.put(rect, egui::Label::new(RichText::new(status).medium().color(t.form_dim)).truncate());
     }
     action
+}
+
+/// What every OK, Apply and Cancel button shares, wherever the row of them sits.
+struct ActionLook {
+    ok_enabled: bool,
+    selected: Option<Action>,
+    primary_fill: egui::Color32,
+    primary_ink: egui::Color32,
+}
+
+impl ActionLook {
+    fn new(ok_enabled: bool, selected: Option<Action>, danger: bool) -> Self {
+        let t = Tokens::get();
+        let primary_fill = if t.borders.bevel.is_some() && !danger {
+            t.control_fill
+        } else if danger {
+            t.form_error
+        } else {
+            t.form_primary_fill
+        };
+        let primary_ink = if t.borders.bevel.is_some() && !danger {
+            t.form_ink
+        } else if danger && crate::theme::contrast_ratio(t.on_accent, primary_fill) < 4.5 {
+            t.tab_on_fill_dark
+        } else {
+            t.on_accent
+        };
+        Self { ok_enabled, selected, primary_fill, primary_ink }
+    }
+
+    /// OK carries the accent unless the keyboard marks another action.
+    fn primary(&self, kind: Action) -> bool {
+        kind == Action::Ok && self.selected.is_none_or(|s| s == Action::Ok)
+    }
+}
+
+/// One OK, Apply or Cancel button, `padding` at its sides and at least `min_width` wide, with its
+/// scenario handles (`dialog:ok`, `dialog:apply`, `dialog:cancel` and `dialog:<label>`).
+fn action_button(ui: &mut Ui, label: &str, kind: Action, look: &ActionLook, padding: f32, min_width: f32) -> Response {
+    let t = Tokens::get();
+    let ok_enabled = look.ok_enabled;
+    let marked = look.selected == Some(kind);
+    let primary = look.primary(kind);
+    let live = kind == Action::Cancel || ok_enabled;
+    ui.spacing_mut().button_padding = vec2(padding, 0.0);
+    let text = RichText::new(crate::i18n::tr_label(label)).size(t.font_label).color(if primary && ok_enabled {
+        look.primary_ink
+    } else if primary {
+        t.form_dim
+    } else {
+        t.form_ink
+    });
+    let response = ui.add_enabled(
+        live,
+        egui::Button::new(if primary && ok_enabled { text.bold_face() } else { text })
+            .selected(marked && !primary)
+            .fill(if primary && ok_enabled {
+                look.primary_fill
+            } else if marked {
+                t.selected_bg
+            } else {
+                t.control_fill
+            })
+            .stroke(if primary && ok_enabled {
+                egui::Stroke::NONE
+            } else if marked && !primary {
+                egui::Stroke::new(1.0, t.form_primary)
+            } else {
+                t.control_border_stroke(t.control_border)
+            })
+            .wrap_mode(egui::TextWrapMode::Extend)
+            .corner_radius(t.control_radius)
+            .min_size(vec2(min_width, t.form_button_height)),
+    );
+    t.button_bevel(ui, &response, false);
+    pointer_on_hover(ui, &response);
+    let key = match kind {
+        Action::Ok => "dialog:ok",
+        Action::Apply => "dialog:apply",
+        _ => "dialog:cancel",
+    };
+    scenario::publish_target(key, response.rect);
+    scenario::publish_handle(&format!("dialog:{label}"), response.rect.center());
+    response
+}
+
+/// A panel's OK, Apply and Cancel in its header row (`DialogButtons::Top`): the footer's buttons,
+/// in the footer's order, with its enabled states, keyboard and scenario handles. Each is as wide
+/// as its label in the bold face, so the row keeps its place whatever the panel's inputs do.
+/// Tokens: `form_button_height`, `font_label`, `space_4/8`, and the footer's button tokens.
+pub(crate) struct HeaderActions<'a> {
+    /// Right to left: OK, Apply, Cancel (those with a label).
+    slots: Vec<(Action, &'a str, egui::Rect)>,
+}
+
+impl<'a> HeaderActions<'a> {
+    /// Lays the buttons out right to left from `right`, centred on `band`, never past its left.
+    pub(crate) fn new(ui: &Ui, band: egui::Rect, right: f32, ok: &'a str, apply: Option<&'a str>, cancel: &'a str) -> Self {
+        let t = Tokens::get();
+        let mut slots = Vec::new();
+        let mut x = right;
+        for (label, kind) in [(ok, Action::Ok), (apply.unwrap_or(""), Action::Apply), (cancel, Action::Cancel)] {
+            if label.is_empty() {
+                continue;
+            }
+            let text = ui.painter().layout_no_wrap(crate::i18n::tr_label(label).to_owned(), crate::fonts::bold(t.font_label), t.form_ink);
+            let width = (text.size().x.ceil() + t.space_8 * 2.0).min((x - band.left()).max(0.0));
+            let rect = egui::Rect::from_min_max(
+                egui::pos2(x - width, band.center().y - t.form_button_height / 2.0),
+                egui::pos2(x, band.center().y + t.form_button_height / 2.0),
+            );
+            slots.push((kind, label, rect));
+            x = (rect.left() - t.space_4).max(band.left());
+        }
+        Self { slots }
+    }
+
+    /// Where the buttons start; `right` when there are none.
+    pub(crate) fn left(&self, right: f32) -> f32 {
+        self.slots.iter().map(|(_, _, rect)| rect.left()).fold(right, f32::min)
+    }
+
+    pub(crate) fn rect(&self, kind: Action) -> Option<egui::Rect> {
+        self.slots.iter().find(|(k, _, _)| *k == kind).map(|(_, _, rect)| *rect)
+    }
+
+    /// Draws the buttons; returns what was clicked, or what Enter and Esc ask for.
+    pub(crate) fn show(&self, ui: &mut Ui, ok_enabled: bool) -> Action {
+        let ok_enabled = ok_enabled && self.rect(Action::Ok).is_some();
+        scenario::publish_count("dialog:ok:enabled", f64::from(ok_enabled && ui.is_enabled()));
+        let mut action = if ui.is_enabled() { keyboard(ui.ctx(), ok_enabled) } else { Action::None };
+        let look = ActionLook::new(ok_enabled, None, false);
+        let padding = Tokens::get().space_8;
+        for (kind, label, rect) in &self.slots {
+            let builder = egui::UiBuilder::new()
+                .id_salt(("header_action", *kind as u8))
+                .max_rect(*rect)
+                .layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight));
+            let response = ui.scope_builder(builder, |ui| action_button(ui, label, *kind, &look, padding, 0.0)).inner;
+            if response.clicked() {
+                action = *kind;
+            }
+        }
+        if let Some(all) = self.slots.iter().map(|(_, _, rect)| *rect).reduce(|a, b| a.union(b)) {
+            scenario::publish_rect("dialog:header:actions", all);
+        }
+        action
+    }
 }
 
 /// One equal-width secondary action, with optional existing icon master.
@@ -307,8 +409,8 @@ fn button_widget(label: egui::WidgetText, options: Button) -> egui::Button<'stat
     match options {
         Button::Small => egui::Button::new(label).small(),
         Button::Primary => {
-            let ink = if crate::theme::contrast_ratio(t.on_accent, t.form_primary) >= 4.5 { t.on_accent } else { t.tab_on_fill_dark };
-            egui::Button::new(label.color(ink)).fill(t.form_primary)
+            let ink = if crate::theme::contrast_ratio(t.on_accent, t.form_primary_fill) >= 4.5 { t.on_accent } else { t.tab_on_fill_dark };
+            egui::Button::new(label.color(ink)).fill(t.form_primary_fill)
         }
         Button::Ghost => egui::Button::new(label).frame(false),
         Button::SmallSelected => {
@@ -321,6 +423,9 @@ fn button_widget(label: egui::WidgetText, options: Button) -> egui::Button<'stat
 pub fn button(ui: &mut Ui, label: impl Into<egui::WidgetText>, options: Button) -> Response {
     let label = label.into();
     let key = label.text().to_owned();
+    if crate::prefs_search::suppress_chrome(ui) && !crate::prefs_search::texts_hit(ui, &[&key]) {
+        return crate::prefs_search::hidden_response(ui);
+    }
     let response = match options {
         Button::Enabled(enabled) => ui.add_enabled_ui(enabled, |ui| ui.add(button_widget(crate::i18n::tr_label(&key).into(), options))).inner,
         _ => ui.add(button_widget(label, options)),
@@ -378,7 +483,7 @@ pub(crate) fn wide_primary_button(ui: &mut Ui, label: &str) -> Response {
         .inner_margin(egui::Margin::symmetric(t.space_10 as i8, t.space_6 as i8))
         .show(ui, |ui| {
             let button = egui::Button::new(crate::fonts::RichTextExt::bold_face(text))
-                .fill(if bevel { t.control_fill } else { t.form_primary })
+                .fill(if bevel { t.control_fill } else { t.form_primary_fill })
                 .stroke(egui::Stroke::NONE)
                 .corner_radius(t.control_radius);
             ui.add_sized(vec2(dimension(ui.available_width()), t.form_button_height), button)
@@ -447,37 +552,90 @@ pub(crate) fn compact_button(ui: &mut Ui, glyph: &str, tooltip: &str, enabled: b
 
 /// Secondary action with an existing icon, optionally using the danger ink. Keeps button handles.
 pub(crate) fn icon_label_button(ui: &mut Ui, label: &str, icon: &str, enabled: bool, danger: bool) -> Response {
+    icon_label_presentation(ui, crate::i18n::tr_label(label), Some(icon), enabled, false, danger, false)
+}
+
+/// Compact stage actions share the icon-label button's frame, typography and hit target.
+pub(super) fn icon_label_width(ui: &Ui, label: &str, icon: Option<&str>, primary: bool) -> f32 {
     let t = Tokens::get();
-    let label = crate::i18n::tr_label(label);
-    let text_width = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(t.font_label), t.form_ink).size().x;
+    let font = if primary { crate::fonts::semibold(t.font_button) } else { egui::FontId::proportional(t.font_label) };
+    ui.painter().layout_no_wrap(label.into(), font, t.form_ink).size().x.ceil()
+        + 2.0
+            * if primary {
+                t.space_16
+            } else if icon.is_some() {
+                t.space_10
+            } else {
+                t.space_12
+            }
+        + if icon.is_some() { t.space_14 + t.space_6 } else { 0.0 }
+}
+
+pub(super) fn icon_label_action(ui: &mut Ui, label: &str, icon: Option<&str>, enabled: bool, primary: bool) -> Response {
+    icon_label_presentation(ui, label, icon, enabled, primary, false, false)
+}
+
+pub(crate) fn compact_icon_label_button(ui: &mut Ui, label: &str, icon: &str, enabled: bool) -> Response {
+    icon_label_presentation(ui, label, Some(icon), enabled, false, false, true)
+}
+
+fn icon_label_presentation(ui: &mut Ui, label: &str, icon: Option<&str>, enabled: bool, primary: bool, danger: bool, dense: bool) -> Response {
+    let t = Tokens::get();
+    let width = icon_label_width(ui, label, icon, primary);
     let response = ui
         .add_enabled_ui(enabled, |ui| {
             let (rect, response) =
-                ui.allocate_exact_size(vec2(text_width + t.space_10 * 2.0 + t.space_14 + t.space_6, t.control_height), egui::Sense::click());
-            let ink = if danger { t.form_error } else { t.form_ink };
+                ui.allocate_exact_size(vec2(width, if dense { t.control_height - t.space_2 } else { t.control_height }), egui::Sense::click());
+            let ink = if danger {
+                t.form_error
+            } else if primary {
+                t.on_accent
+            } else {
+                t.form_ink
+            };
             ui.painter().rect(
                 rect,
                 t.control_radius,
-                if response.hovered() { t.hover } else { t.control_fill },
-                t.control_border_stroke(t.control_border),
+                if primary {
+                    t.form_primary
+                } else if response.hovered() {
+                    t.hover
+                } else {
+                    t.control_fill
+                },
+                if primary { egui::Stroke::NONE } else { t.control_border_stroke(t.control_border) },
                 egui::StrokeKind::Inside,
             );
-            let icon_rect =
-                egui::Rect::from_center_size(egui::pos2(rect.left() + t.space_10 + t.space_14 / 2.0, rect.center().y), vec2(t.space_14, t.space_14));
-            crate::icons::paint_ink(ui.painter(), icon_rect, icon, ink);
+            let mut left = rect.left()
+                + if primary {
+                    t.space_16
+                } else if icon.is_some() {
+                    t.space_10
+                } else {
+                    t.space_12
+                };
+            if let Some(icon) = icon {
+                crate::icons::paint_ink(
+                    ui.painter(),
+                    egui::Rect::from_center_size(egui::pos2(left + t.space_14 / 2.0, rect.center().y), vec2(t.space_14, t.space_14)),
+                    icon,
+                    ink,
+                );
+                left += t.space_14 + t.space_6;
+            }
             super::text::paint_text(
                 ui,
-                egui::Rect::from_min_max(egui::pos2(icon_rect.right() + t.space_6, rect.top()), rect.max),
+                egui::Rect::from_min_max(egui::pos2(left, rect.top()), rect.max),
                 label,
-                egui::FontId::proportional(t.font_label),
+                if primary { crate::fonts::semibold(t.font_button) } else { egui::FontId::proportional(t.font_label) },
                 ink,
                 false,
             );
             response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+            pointer_on_hover(ui, &response);
             response
         })
         .inner;
-    pointer_on_hover(ui, &response);
     let key = format!("dialog:button:{}:{label}", super::layout::label(ui));
     scenario::publish_handle(&key, response.rect.center());
     scenario::publish_rect(&key, response.rect);

@@ -246,6 +246,25 @@ fn overlapping_bodies_list_both_and_the_hidden_one_can_be_picked() {
     assert_eq!(h.app.session.selection, [Sel::Body { name: "Inner".into() }]);
 }
 
+/// Origin plane names (#6491): the list names an origin plane as the preferences do, and picking
+/// it still selects the plane by its id.
+#[test]
+fn origin_planes_are_listed_by_the_names_the_preferences_give_them() {
+    let mut h = Harness::new();
+    h.call("ui.view", json!({"view":"top"}));
+    h.settle();
+    h.step(&json!({"hold": {"plane": "XY"}})).unwrap();
+    assert!(labels(&h).iter().any(|r| r == "XY Plane"), "{:?}", labels(&h));
+    h.step(&json!({"key": "Escape"})).unwrap();
+    h.call("ui.prefs", json!({"origin_plane_names": "top_front_right"}));
+    h.step(&json!({"hold": {"plane": "XY"}})).unwrap();
+    let rows = labels(&h);
+    let row = rows.iter().position(|r| r == "Top Plane").unwrap_or_else(|| panic!("{rows:?}"));
+    assert!(!rows.iter().any(|r| r == "XY Plane"), "{rows:?}");
+    h.step(&json!({"click": {"handle": format!("select_other:{row}")}})).unwrap();
+    assert_eq!(h.app.session.selection, vec![Sel::Plane { name: "XY".into() }]);
+}
+
 #[test]
 fn long_names_stay_inside_the_popup_and_remain_available_on_hover() {
     let mut h = Harness::new();

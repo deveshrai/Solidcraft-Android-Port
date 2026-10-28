@@ -20,7 +20,9 @@ use egui::{FontId, Pos2, Rect, Shape, Stroke, vec2};
 use serde_json::json;
 use solidcraft_engine::Sel;
 use solidcraft_engine::geom::Vec2;
-use solidcraft_engine::sketch::{ConstraintKind, DimFrame, chain_centres, default_text, dim_frame, dim_layout_reaching, dim_reach};
+use solidcraft_engine::sketch::{
+    ConstraintKind, DimFrame, chain_centres, default_text, default_text_offset, dim_frame, dim_layout_reaching, dim_reach,
+};
 
 use crate::SolveApp;
 use crate::theme::Tokens;
@@ -627,6 +629,9 @@ pub fn show(app: &mut SolveApp, ui: &egui::Ui, painter: &egui::Painter, proj: &P
         let ours = |c: &&solidcraft_engine::sketch::Constraint| c.param.as_deref() == Some(param.as_str()) || (c.driven && c.id == *param);
         constraints.extend(source.sketch.constraints.iter().filter(ours).map(|c| (source, c, true)));
     }
+    // Text boxes already drawn this frame, in draw order: a later dimension that would land
+    // on one of them steps clear of it (#44).
+    let mut placed: Vec<Rect> = Vec::new();
     for (source, c, is_draft) in constraints {
         if ss.sketch.view.hide_dimensions && !is_draft {
             continue;
@@ -665,7 +670,25 @@ pub fn show(app: &mut SolveApp, ui: &egui::Ui, painter: &egui::Painter, proj: &P
         let half = Vec2::new(f64::from(size.x) * 0.5 * px, f64::from(size.y) * 0.5 * px);
         // Unplaced linear dimensions sit outside the shape they measure.
         let away = first_point(sk, &c.kind).and_then(|p| centres.get(p).copied()).unwrap_or(anchor);
-        let lay = dim_layout_reaching(&frame, c.text.or_else(|| default_text(&frame, away, px)), px, half, dim_reach(sk, &c.kind));
+        let reach = dim_reach(sk, &c.kind);
+        let mut text = c.text.or_else(|| default_text(&frame, away, px));
+        let mut lay = dim_layout_reaching(&frame, text, px, half, reach);
+        // #44: a text that would land on an already-drawn dimension's text steps to the next
+        // row — across the dimension line for a linear one, out from the centre for the rest —
+        // so stacked dimensions read as rows instead of one overwriting the next.
+        for _ in 0..6 {
+            let Some(t) = to(lay.text) else { break };
+            if !placed.iter().any(|q| q.expand(-0.5).intersects(Rect::from_center_size(t, size).expand(-0.5))) {
+                break;
+            }
+            let row = (f64::from(size.y) + 2.0) * px;
+            let base = text.unwrap_or_else(|| default_text_offset(&frame, px));
+            text = Some(match frame {
+                DimFrame::Linear { .. } => base + Vec2::new(0.0, row * if base.y < 0.0 { -1.0 } else { 1.0 }),
+                _ => base + base.normalized().unwrap_or(Vec2::X) * row,
+            });
+            lay = dim_layout_reaching(&frame, text, px, half, reach);
+        }
         let stroke = Stroke::new(1.0, col);
         let mut segs = Vec::new();
         for line in &lay.lines {
@@ -682,6 +705,7 @@ pub fn show(app: &mut SolveApp, ui: &egui::Ui, painter: &egui::Painter, proj: &P
         }
         let Some(tc) = to(lay.text) else { continue };
         let r = Rect::from_center_size(tc, size);
+        placed.push(r);
         painter.rect_filled(r, tk.radius_sm / 2, tk.viewport_top.gamma_multiply(0.85));
         painter.galley(r.min + vec2(3.0, 1.0), galley, col);
         if matches!(frame, DimFrame::ArcLength { .. }) {
@@ -1190,6 +1214,60 @@ mod tests {
         assert_eq!(h.app.session.doc.to_json(), baseline);
         assert_eq!(h.app.session.undo.len(), undo);
         cancel();
+    }
+
+    /// Two dimensions whose texts were placed on the same spot: the later one steps to the
+    /// next row instead of sitting on the first (#44).
+    #[test]
+    fn dimension_texts_placed_on_each_other_step_clear() {
+        cancel();
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+        h.app.run("sketch.line", json!({"points":[[0,10],[20,10]],"infer":false})).unwrap();
+        h.app.run("sketch.line", json!({"points":[[0,0],[20,0]],"infer":false})).unwrap();
+        // Both texts are placed at the same sketch point: unnudged, they would coincide.
+        h.app.run("sketch.dimension", json!({"entities":["l1"],"text_at":[10,20]})).unwrap();
+        h.app.run("sketch.dimension", json!({"entities":["l2"],"text_at":[10,20]})).unwrap();
+        h.call("ui.view", json!({"view":"top"}));
+        h.app.cam.distance = 90.;
+        h.app.cam.target = solidcraft_engine::geom::Vec3::new(10., 10., 0.);
+        h.settle();
+        let rects = crate::dim_view::text_rects();
+        assert_eq!(rects.len(), 2, "{rects:?}");
+        let want = h.at(&json!({"world":[10., 20., 0.]})).unwrap();
+        let first = rects[0].1.center();
+        assert!((first.x as f64 - want[0]).abs() < 1.5 && (first.y as f64 - want[1]).abs() < 1.5, "the first text stays where it was clicked");
+        assert!(!rects[0].1.expand(-0.5).intersects(rects[1].1.expand(-0.5)), "the second text stepped clear: {:?} {:?}", rects[0].1, rects[1].1);
+    }
+
+    /// Editing a dimension's value moves the geometry it measures; its placed text keeps its
+    /// offset from that geometry rather than jumping to the default place (#44).
+    #[test]
+    fn a_dimension_text_keeps_its_offset_from_the_geometry_when_edited() {
+        cancel();
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+        h.app.run("sketch.line", json!({"points":[[0,10],[20,10]],"infer":false})).unwrap();
+        let param = h.app.run("sketch.dimension", json!({"entities":["l1"],"text_at":[10,25]})).unwrap()["param"].as_str().unwrap().to_string();
+        h.call("ui.view", json!({"view":"top"}));
+        h.app.cam.distance = 120.;
+        h.app.cam.target = solidcraft_engine::geom::Vec3::new(10., 12., 0.);
+        h.settle();
+        h.app.run("parameters.change", json!({"name":param,"expression":"30"})).unwrap();
+        h.settle();
+        let state = h.app.session.world_state();
+        let solved = state.sketch(h.app.session.active_sketch.unwrap()).unwrap();
+        let c = solved.sketch.constraints.iter().find(|c| c.param.as_deref() == Some(param.as_str())).unwrap();
+        // The placed offset (15 above the measured line) is kept with the dimension.
+        assert_eq!(c.text, Some(Vec2::new(0.0, 15.0)), "{c:?}");
+        // And the text draws at that offset from the edited geometry, not at the default place.
+        let DimFrame::Linear { p0, p1, dir } = dim_frame(&solved.sketch, &c.kind).unwrap() else { panic!("a length dimension is linear") };
+        let t = c.text.unwrap();
+        let want = h
+            .at(&json!({"world":[(p0 + p1).x * 0.5 + dir.x * t.x + dir.perp().x * t.y, (p0 + p1).y * 0.5 + dir.y * t.y + dir.perp().y * t.y, 0.]}))
+            .unwrap();
+        let shown = crate::dim_view::text_at(&param).unwrap();
+        assert!((shown.x as f64 - want[0]).abs() < 1.5 && (shown.y as f64 - want[1]).abs() < 1.5, "the text stayed put relative to the geometry");
     }
 
     #[test]

@@ -1546,7 +1546,7 @@ mod tests {
         h.frames(3);
         h.settle();
         assert!(!h.app.home.open);
-        assert_eq!(h.app.session.path.as_deref(), h.dir.join("Copy.solidcraft").to_str());
+        assert_eq!(h.app.session.path.as_deref(), h.dir.join("Copy.sc").to_str());
         assert_eq!(std::fs::read(source).unwrap(), bytes);
     }
 

@@ -634,7 +634,7 @@ fn state_color(state: State) -> Color32 {
     let t = Tokens::get();
     match state {
         State::Ready | State::Busy => t.accent,
-        State::NeedsAuth | State::Exited => t.warning,
+        State::NeedsAuth | State::Exited | State::Failed => t.warning,
         _ => t.text_dim,
     }
 }
@@ -703,7 +703,7 @@ fn header(app: &mut SolveApp, ui: &mut egui::Ui, left: bool) {
                             State::Ready => ui_kit::AssistantTone::Success,
                             State::Busy => ui_kit::AssistantTone::Working,
                             State::NeedsAuth => ui_kit::AssistantTone::Warning,
-                            State::Exited => ui_kit::AssistantTone::Error,
+                            State::Exited | State::Failed => ui_kit::AssistantTone::Error,
                             _ => ui_kit::AssistantTone::Neutral,
                         }
                     },
@@ -1170,7 +1170,8 @@ fn switcher(app: &mut SolveApp, ui: &mut egui::Ui) {
         let b = if app.agent_chat.state().running() {
             ui_kit::button(ui, tr("ui.agent_chat_stop"), ui_kit::Button::Normal).on_hover_text(tr("ui.agent_chat_stop_tip"))
         } else {
-            ui_kit::button(ui, tr("ui.agent_chat_connect"), ui_kit::Button::Normal)
+            let label = if app.agent_chat.state() == State::Failed { "ui.agent_chat_retry" } else { "ui.agent_chat_connect" };
+            ui_kit::button(ui, tr(label), ui_kit::Button::Normal)
         };
         crate::scenario::publish_handle("agent_chat:connect", b.rect.center());
         if b.clicked() {
@@ -1187,10 +1188,10 @@ fn switcher(app: &mut SolveApp, ui: &mut egui::Ui) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const FLATPAK_OVERRIDE: &str = "flatpak override --user ai.storyteller.solidcraft --filesystem=~/.nvm:ro --filesystem=~/.local/bin:ro --filesystem=~/.local/share/claude:ro --filesystem=~/.claude --filesystem=~/.claude.json --share=network";
+const FLATPAK_OVERRIDE: &str = "flatpak override --user io.tangencylabs.solidcraft --filesystem=~/.nvm:ro --filesystem=~/.local/bin:ro --filesystem=~/.local/share/claude:ro --filesystem=~/.claude --filesystem=~/.claude.json --share=network";
 
 #[cfg(not(target_arch = "wasm32"))]
-fn no_agents_message() -> String {
+pub(super) fn no_agents_message() -> String {
     if std::env::var_os("FLATPAK_ID").is_some() { tr("ui.agent_chat_flatpak_none_found") } else { tr("ui.agent_chat_none_found") }.to_string()
 }
 
@@ -1977,7 +1978,7 @@ mod tests {
             child.args(["--exact", "agent_chat::panel::tests::empty_discovery_explains_flatpak_permissions", "--nocapture"]);
             child.env(CHILD, case);
             if case == "flatpak" {
-                child.env("FLATPAK_ID", "ai.storyteller.solidcraft");
+                child.env("FLATPAK_ID", "io.tangencylabs.solidcraft");
             } else {
                 child.env_remove("FLATPAK_ID");
             }

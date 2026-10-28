@@ -178,7 +178,7 @@ pub static FORMATS: &[FormatSpec] = &[
     FormatSpec {
         id: "design",
         label: "SolidCraft design",
-        extensions: &[crate::DESIGN_EXT, crate::LEGACY_DESIGN_EXT, "json"],
+        extensions: &[crate::DESIGN_EXTS[0], crate::DESIGN_EXTS[1], crate::DESIGN_EXTS[2], "json"],
         role: Role::Design,
         import: Some(ImportSpec { target: ImportTarget::Design, options: &[], native_only: false }),
         export: None,
@@ -470,7 +470,7 @@ mod tests {
     fn import_filter_groups_hold_the_expected_extensions() {
         let native = import_filters(true);
         let find = |label: &str| native.iter().find(|(l, _)| *l == label).map(|(_, e)| e.clone()).unwrap_or_default();
-        assert_eq!(find("SolidCraft design (container or JSON)"), vec![crate::DESIGN_EXT, crate::LEGACY_DESIGN_EXT, "json"]);
+        assert_eq!(find("SolidCraft design (container or JSON)"), vec!["sc", "solidcraft", "solvecraft", "json"]);
         assert_eq!(find("STEP"), vec!["step", "stp"]);
         assert_eq!(find("IGES"), vec!["igs", "iges"]);
         assert_eq!(find("FreeCAD and Rhino"), vec!["fcstd", "3dm"]);

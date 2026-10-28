@@ -1,4 +1,5 @@
 {
+  "Base Center": "Base Centre",
   "Center X": "Centre X",
   "Center Y": "Centre Y",
   "Center of mass": "Centre of mass",
@@ -16,6 +17,12 @@
   "cmd.sketch_slot_center_point": "Centre Point Slot",
   "cmd.sketch_slot_center_to_center": "Centre to Centre Slot",
   "pattern.alignment_hint": "Counts include the original. Centre balances copies; Flip chooses the extra side for even totals.",
+  "prefs.theme_follow": "Follow a theme file",
+  "prefs.theme_follow_error": "Not applied: {error}. The last good theme stays on.",
+  "prefs.theme_follow_launch": "Followed for this run only (--theme-file); reloaded whenever another tool rewrites it.",
+  "prefs.theme_follow_note": "Reloaded whenever another tool rewrites it. Choosing a theme stops following it.",
+  "prefs.theme_follow_off": "Off",
+  "prefs.theme_follow_stop": "Stop following",
   "render.aging_add": "Add aging layer",
   "render.aging_airborne": "Airborne dust / participating medium",
   "render.aging_airborne_help": "Airborne dust is a separate finite homogeneous scattering volume. It changes transport and raw EXR, not the surface-aging stack. Existing volume/glass/denoising restrictions remain explicit; no atmosphere is added automatically.",

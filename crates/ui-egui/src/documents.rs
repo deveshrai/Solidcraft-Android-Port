@@ -37,6 +37,12 @@ pub struct DocSlot {
 #[derive(Clone, Debug, Default)]
 struct DocView {
     render: crate::render_workspace::ViewState,
+    /// Bodies and components copied or cut in this design: their names and paths mean nothing
+    /// in another one (copied features stay with the session the same way).
+    copied_bodies: Vec<String>,
+    copied_placements: Vec<Vec<u64>>,
+    cut_bodies: Vec<String>,
+    cut_placements: Vec<Vec<u64>>,
 }
 
 impl DocSlot {
@@ -92,7 +98,13 @@ impl Documents {
 }
 
 fn take_view(app: &mut SolveApp) -> DocView {
-    DocView { render: std::mem::take(&mut app.render_workspace.view) }
+    DocView {
+        render: std::mem::take(&mut app.render_workspace.view),
+        copied_bodies: std::mem::take(&mut app.copied_bodies),
+        copied_placements: std::mem::take(&mut app.copied_placements),
+        cut_bodies: std::mem::take(&mut app.cut_bodies),
+        cut_placements: std::mem::take(&mut app.cut_placements),
+    }
 }
 
 fn put_view(app: &mut SolveApp, v: DocView) {
@@ -100,6 +112,10 @@ fn put_view(app: &mut SolveApp, v: DocView) {
     crate::render_workspace::invalidate_images(app);
     crate::render_workspace::invalidate_scene(app);
     crate::render_workspace::sync_backend(app);
+    app.copied_bodies = v.copied_bodies;
+    app.copied_placements = v.copied_placements;
+    app.cut_bodies = v.cut_bodies;
+    app.cut_placements = v.cut_placements;
 }
 
 /// Put `slot` into the app and return what was there.
@@ -387,6 +403,13 @@ pub fn close(app: &mut SolveApp, i: usize, force: bool) {
 
 /// A replacement design starts a fresh conversation while retaining the window's chat services.
 pub(crate) fn reset_chat(app: &mut SolveApp) {
+    // A chat not asked anything yet (an agent connected at start, say) holds nothing of the old
+    // design: it starts over in place, and its agent stays connected.
+    if !app.agent_chat.items.iter().any(|i| matches!(i, crate::agent_chat::Item::User { .. })) {
+        crate::agent_chat::new_chat(app);
+        app.agent_chat.input.clear();
+        return;
+    }
     crate::agent_chat::leave_document(app);
     app.agent_chat.swap_document(&mut crate::agent_chat::AgentChat::default());
 }
@@ -461,6 +484,12 @@ fn quit_step(app: &mut SolveApp) {
             }
             app.docs.quitting = None;
             app.quit_requested = true;
+            // The next launch reopens the designs saved to a file (#5542).
+            let sessions: Vec<&solidcraft_engine::Session> = match app.docs.slots.is_empty() {
+                true => vec![&app.session],
+                false => app.docs.slots.iter().map(|s| s.as_ref().map_or(&app.session, |d| &d.session)).collect(),
+            };
+            app.preferences.open_designs = sessions.into_iter().filter_map(|s| s.path.clone()).collect();
         }
     }
 }
@@ -505,6 +534,15 @@ fn tab_paths(app: &SolveApp) -> Vec<Option<String>> {
 fn tab_tooltip(name: &str, path: Option<&str>, cut: bool) -> String {
     let place = path.map_or_else(|| crate::i18n::tr_label("Not saved yet").to_string(), crate::home::friendly_path);
     if cut { format!("{name}\n{place}") } else { place }
+}
+
+/// The designs a launch with no file to open reopens: those open at the last quit that still
+/// exist, when Preferences › General asks for it (#5542).
+pub fn designs_to_reopen(app: &SolveApp) -> Vec<String> {
+    if !app.preferences.reopen_designs {
+        return Vec::new();
+    }
+    app.preferences.open_designs.iter().filter(|p| std::path::Path::new(p.as_str()).is_file()).take(MAX_OPEN).cloned().collect()
 }
 
 /// The control channel's `ui.documents`: list, `new`, `switch`, `close` (by index; `force`
@@ -1393,7 +1431,15 @@ mod tests {
         assert_eq!(a.docs.closing, None);
         assert!(a.quit_requested, "every design answered: quit");
         assert!(!any_dirty(&a), "Don't Save discards: nothing is kept for recovery");
+        // The next launch reopens the saved design; the never-saved one has no file (#5542).
+        let path = file.to_string_lossy().to_string();
+        assert_eq!(a.preferences.open_designs, vec![path.clone()]);
+        assert_eq!(designs_to_reopen(&a), vec![path]);
+        a.preferences.reopen_designs = false;
+        assert!(designs_to_reopen(&a).is_empty(), "turned off in Preferences");
+        a.preferences.reopen_designs = true;
         let _ = std::fs::remove_file(&file);
+        assert!(designs_to_reopen(&a).is_empty(), "a file that is gone is skipped");
     }
 
     /// Cancel, Esc's answer, or a Save that saves nothing (a never-saved design whose Save As

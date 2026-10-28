@@ -5,12 +5,12 @@ GenericName=3D CAD
 Comment=Parametric 3D CAD: sketch, constrain, extrude, and change a parameter to rebuild
 Exec=solidcraft %f
 TryExec=solidcraft
-Icon=ai.storyteller.solidcraft
+Icon=io.tangencylabs.solidcraft
 Terminal=false
 StartupNotify=true
-StartupWMClass=ai.storyteller.solidcraft
+StartupWMClass=io.tangencylabs.solidcraft
 Categories=Graphics;3DGraphics;Engineering;
 Keywords=cad;3d;parametric;sketch;step;stl;modelling;modeling;
 MimeType=application/x-solidcraft;model/step;model/iges;model/stl;model/3mf;
-# Releases before 0.8 used this desktop id; launchers keep pinned entries across the rename.
-X-Flatpak-RenamedFrom=ai.storyteller.solvecraft.desktop;
+# Desktop ids of earlier releases; launchers keep pinned entries across the renames.
+X-Flatpak-RenamedFrom=ai.storyteller.solidcraft.desktop;ai.storyteller.solvecraft.desktop;

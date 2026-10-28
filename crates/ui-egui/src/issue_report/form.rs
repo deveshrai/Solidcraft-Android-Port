@@ -45,12 +45,11 @@ fn screenshot_actions(app: &mut SolveApp, draft: &mut Draft, ui: &mut Ui) -> boo
             {
                 app.pick_save(&format!("solidcraft-issue-{}.png", app.shot_token), &["png"], move |app, path| {
                     let Some(path) = path else { return };
-                    let result = crate::control::save_screenshot(&image, Some(&path));
+                    let result = crate::control::write_screenshot(&image, &path);
                     if let Some(draft) = app.issue_report.draft.as_mut() {
-                        draft.note = if result.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
-                            "Screenshot saved. Attach the PNG in the GitHub draft.".into()
-                        } else {
-                            format!("Could not save screenshot: {}", super::debug(&result.get("error"), 1000))
+                        draft.note = match result {
+                            Ok(()) => "Screenshot saved. Attach the PNG in the GitHub draft.".into(),
+                            Err(e) => format!("Could not save screenshot: {}", super::limited(&e, 1000)),
                         };
                     }
                 });
@@ -90,7 +89,21 @@ pub(super) fn show(app: &mut SolveApp, draft: &mut Draft, ctx: &egui::Context) -
     let t = crate::theme::Tokens::get();
     let screen = ctx.content_rect();
     let cards = ((screen.width() - 2.0 * t.space_16) / t.form_card_width).clamp(0.5, 2.6);
-    let (closed, action) = ui_kit::Window::new(Id::new("sc_issue_report"), "bug_report", tr_label("Report a bug"))
+    // Ctrl+Enter (⌘Enter on a Mac) in any field continues on GitHub. Read before the fields see
+    // it, so it adds no line break. Only the press counts: the repeats of a held key are dropped,
+    // so holding it opens GitHub once.
+    let submit = ctx.input_mut(|i| {
+        let mut pressed_now = false;
+        i.events.retain(|e| match e {
+            egui::Event::Key { key: egui::Key::Enter, pressed, repeat, modifiers, .. } if modifiers.command => {
+                pressed_now |= *pressed && !*repeat;
+                false
+            }
+            _ => true,
+        });
+        pressed_now
+    });
+    let (closed, mut action) = ui_kit::Window::new(Id::new("sc_issue_report"), "bug_report", tr_label("Report a bug"))
         .cards(cards)
         .anchor(egui::Align2::CENTER_TOP, vec2(0.0, t.space_16))
         .fields()
@@ -153,7 +166,7 @@ pub(super) fn show(app: &mut SolveApp, draft: &mut Draft, ctx: &egui::Context) -
                             draft.opened_github = false;
                         }
                         crate::scenario::publish_rect("report:description", response.rect);
-                        if !draft.focus_requested || draft.missing_description {
+                        if !draft.focus_requested {
                             response.scroll_to_me(Some(egui::Align::Center));
                             response.request_focus();
                             draft.focus_requested = true;
@@ -165,6 +178,7 @@ pub(super) fn show(app: &mut SolveApp, draft: &mut Draft, ctx: &egui::Context) -
                                 draft.missing_description = false;
                             }
                         }
+                        ui_kit::text(ui, tr_label(shortcut_hint(ui.ctx().os())), ui_kit::Text::Note("shortcut"));
                         let steps = answer(
                             ui,
                             "Steps to reproduce (optional)",
@@ -195,6 +209,9 @@ pub(super) fn show(app: &mut SolveApp, draft: &mut Draft, ctx: &egui::Context) -
                     });
             });
         });
+    if submit && action == ui_kit::Action::None {
+        action = ui_kit::Action::Ok;
+    }
     // TextEdit applies this frame's events while it is drawn. Export only after every editor
     // has processed its input, including diagnostic redactions.
     match action {
@@ -217,5 +234,15 @@ pub(super) fn show(app: &mut SolveApp, draft: &mut Draft, ctx: &egui::Context) -
         }
         _ => {}
     }
+    // Found empty, the description takes the focus once more, not every frame: the other
+    // fields stay free to type in (#7190).
+    if action == ui_kit::Action::Ok && draft.missing_description {
+        draft.focus_requested = false;
+    }
     (retake, closed || action == ui_kit::Action::Cancel)
+}
+
+/// The keys that continue on GitHub from any field (#7203), as this computer spells them.
+pub(super) fn shortcut_hint(os: egui::os::OperatingSystem) -> &'static str {
+    if os == egui::os::OperatingSystem::Mac { "⌘Enter continues on GitHub." } else { "Ctrl+Enter continues on GitHub." }
 }

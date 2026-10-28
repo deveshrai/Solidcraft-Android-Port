@@ -845,7 +845,12 @@ pub fn check(h: &mut Harness, e: &Value) -> Result<(), String> {
                         .filter_map(|l| m.area_rect(l.id).map(|r| (l.id, r)))
                         .collect()
                 });
+                // Workspace panels (docks and strips) are laid out against the viewport, not sized like dialogs.
+                let panels: Vec<egui::Rect> = h.app.shell.workspace_panels.values().map(|(rect, _)| *rect).collect();
                 for (id, r) in rects {
+                    if panels.iter().any(|p| (p.min - r.min).abs().max_elem() < 1.0 && (p.max - r.max).abs().max_elem() < 1.0) {
+                        continue;
+                    }
                     if r.width() > max_w || !screen.expand(1.0).contains_rect(r) {
                         return Err(format!("window {id:?} at {r:?} (width {:.0}) does not fit {screen:?} at ≤{max_w}", r.width()));
                     }

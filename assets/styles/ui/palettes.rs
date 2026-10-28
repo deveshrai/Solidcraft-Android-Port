@@ -73,6 +73,7 @@ impl Tokens {
             form_ink: Color32::from_rgb(27, 36, 48),
             form_dim: Color32::from_rgb(74, 88, 104),
             form_primary: Color32::from_rgb(35, 110, 173),
+            form_primary_fill: Color32::from_rgb(35, 110, 173),
             form_error: Color32::from_rgb(161, 52, 44),
             form_error_fill: Color32::from_rgb(252, 239, 237),
             form_success: Color32::from_rgb(39, 107, 44),
@@ -363,6 +364,7 @@ impl Tokens {
         t.form_ink = t.text;
         t.form_dim = Color32::from_rgb(180, 187, 200);
         t.form_primary = t.accent;
+        t.form_primary_fill = t.form_primary;
         t.form_error = t.error;
         t.form_error_fill = t.timeline_item_error;
         t.form_success = Color32::from_rgb(143, 219, 154);

@@ -15,7 +15,7 @@ start), skips the "Recover unsaved design?" offer and draws with the software re
 - Windows: run `solidcraft.exe --safe-mode` from a terminal in the install folder, or add
   ` --safe-mode` to the end of a shortcut's *Target*.
 - macOS: `open -a SolidCraft --args --safe-mode`
-- Linux: `solidcraft --safe-mode` (Flatpak: `flatpak run ai.storyteller.solidcraft --safe-mode`)
+- Linux: `solidcraft --safe-mode` (Flatpak: `flatpak run io.tangencylabs.solidcraft --safe-mode`)
 
 Setting `SOLIDCRAFT_SAFE_MODE=1` does the same. From 0.10.2, if two launches in a row stop
 before the window opens, the next one starts in safe mode by itself. `SOLIDCRAFT_RENDERER=cpu`
@@ -24,15 +24,15 @@ uses only the software renderer and keeps your settings.
 ## A design won't open or hangs while opening
 
 - **Open the previous save.** Every save keeps the version it replaced next to it as
-  `<file>.bak` (see [Files](files.md)). Copy it to a new name ending in `.solidcraft`, for
-  example `bracket-previous.solidcraft`, and open that. Work saved after the previous save is
+  `<file>.bak` (see [Files](files.md)). Copy it to a new name ending in `.sc`, for
+  example `bracket-previous.sc`, and open that. Work saved after the previous save is
   not in it.
 - **Check the crash reports.** If SolidCraft crashed while the design was open, the newest report
-  in the `crashes` folder (see the table below) usually holds a `design.solidcraft` with the
+  in the `crashes` folder (see the table below) usually holds a `design.sc` with the
   design as it was. `solidcraft-cli crashes` lists the reports.
 - **Unsaved designs** are in the `recovery` folder, not next to the file.
-- **Report it.** GitHub doesn't accept `.solidcraft` attachments, so zip the file
-  (`design.solidcraft.zip`) and attach it to an issue, with the crash report if there is one.
+- **Report it.** GitHub doesn't accept `.sc` (or `.solidcraft`) attachments, so zip the file
+  (`design.sc.zip`) and attach it to an issue, with the crash report if there is one.
 
 ## Reset the settings
 
@@ -47,14 +47,14 @@ with a bug report.
 | Windows | `%APPDATA%\SolidCraft` | `%LOCALAPPDATA%\SolidCraft` |
 | macOS | `~/Library/Application Support/SolidCraft` | (the same folder) |
 | Linux | `~/.local/share/solidcraft` | (the same folder); thumbnails in `$XDG_CACHE_HOME/SolidCraft` or `/tmp/SolidCraft` |
-| Linux (Flatpak) | `~/.var/app/ai.storyteller.solidcraft/data/solidcraft` | (the same folder) |
+| Linux (Flatpak) | `~/.var/app/io.tangencylabs.solidcraft/data/solidcraft` | (the same folder) |
 
 On Windows, paste `%APPDATA%` or `%LOCALAPPDATA%` into the Explorer address bar to open the
 folder. Releases before the rename used `SolveCraft` folders next to these; SolidCraft only
 reads them, so you can leave them alone.
 
 - The **`recovery`** folder holds autosaves of designs that were never saved. Rename the data
-  folder rather than deleting it, so you can still open those autosaves (`.solidcraft` files)
+  folder rather than deleting it, so you can still open those autosaves (`.sc` files, or `.solidcraft` from earlier releases)
   with File > Open.
 - The **`crashes`** folder holds crash reports. Please attach the newest one to a bug report.
 

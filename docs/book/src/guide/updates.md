@@ -98,7 +98,7 @@ and SolidCraft picks the one matching how it was installed:
 | Installed as | Detected by | Download | How to update |
 |---|---|---|---|
 | AppImage | `APPIMAGE` is set | `solidcraft-linux-<arch>.AppImage` | Replace the old AppImage with the new one |
-| Flatpak | `FLATPAK_ID` is set | doesn't check (see below) | `flatpak update ai.storyteller.solidcraft` |
+| Flatpak | `FLATPAK_ID` is set | doesn't check (see below) | `flatpak update io.tangencylabs.solidcraft` |
 | Snap from the Snap Store | `SNAP` is set | release page | `sudo snap refresh solidcraft` (snapd also refreshes by itself) |
 | Snap from a downloaded file | `SNAP_REVISION` starts with `x` | `solidcraft-linux-<arch>.snap` | `sudo snap install --dangerous ./solidcraft-linux-<arch>.snap` |
 | `.deb` | under `/usr`, dpkg knows `solidcraft` | `solidcraft-linux-<arch>.deb` | `sudo apt install ./solidcraft-linux-<arch>.deb` |

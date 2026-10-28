@@ -2,7 +2,7 @@
 <!-- AppStream metadata (software centres, Flathub). Template: package.sh substitutes @VERSION@
      and @DATE@ from Cargo.toml and the build date. -->
 <component type="desktop-application">
-  <id>ai.storyteller.solidcraft</id>
+  <id>io.tangencylabs.solidcraft</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
   <name>SolidCraft</name>
@@ -24,8 +24,8 @@
       <li>Every action is a command, scriptable from a CLI, a JSON control channel and an MCP server</li>
     </ul>
   </description>
-  <launchable type="desktop-id">ai.storyteller.solidcraft.desktop</launchable>
-  <icon type="stock">ai.storyteller.solidcraft</icon>
+  <launchable type="desktop-id">io.tangencylabs.solidcraft.desktop</launchable>
+  <icon type="stock">io.tangencylabs.solidcraft</icon>
   <url type="homepage">https://docs.solidcraft.io/</url>
   <url type="bugtracker">https://github.com/bherbruck/solidcraft/issues</url>
   <url type="help">https://docs.solidcraft.io/</url>
@@ -56,11 +56,15 @@
     <binary>solidcraft</binary>
     <binary>solidcraft-cli</binary>
     <mediatype>application/x-solidcraft</mediatype>
-    <!-- The desktop id of releases before 0.8 (docs/compatibility.md). -->
+    <!-- The app and desktop ids of earlier releases (docs/compatibility.md). -->
+    <id>ai.storyteller.solidcraft</id>
+    <id>ai.storyteller.solidcraft.desktop</id>
     <id>ai.storyteller.solvecraft.desktop</id>
   </provides>
-  <!-- Releases before 0.8 used the app id ai.storyteller.solvecraft (docs/compatibility.md). -->
+  <!-- Earlier app ids (docs/compatibility.md): ai.storyteller.solidcraft from 0.8 until the move
+       to Tangency Labs, ai.storyteller.solvecraft before 0.8. -->
   <replaces>
+    <id>ai.storyteller.solidcraft</id>
     <id>ai.storyteller.solvecraft</id>
   </replaces>
   <content_rating type="oars-1.1"/>

@@ -387,6 +387,7 @@ const NO_MEANING: &[(&str, &str)] = &[
     ("borders.bevel", "structural chrome: hierarchy uses width, pattern and placement, not hue"),
     ("icon_palette", "optional SVG palette; actual roles and theme contrast are guarded in icon and theme tests"),
     ("file_dim", "File view secondary text, WCAG guarded in theme tests"),
+    ("form_primary_fill", "ground under a filled primary field; form_primary carries the meaning, contrast guarded in theme tests"),
     ("file_recovery_well", "decorative recovery icon ground"),
     ("file_action_height", "layout dimension"),
     ("file_back_height", "layout dimension"),
@@ -965,6 +966,39 @@ fn ui_prefs_sets_each_mode_and_refuses_anything_else() {
 /// Random values (fixed seed): strings near the four ids and far from them, numbers, nesting.
 /// `ui.prefs` takes exactly the four ids and refuses the rest without a change; saved
 /// preferences load every value, unknown ones as Off. Nothing panics.
+/// The section previews the mode being chosen (#7152): the sample's lines take that mode's
+/// colours. The status chips beside it keep theirs in every mode.
+#[test]
+fn the_sample_previews_the_mode_being_chosen() {
+    let mut h = crate::scenario::Harness::new();
+    crate::prefs::control(&mut h.app, &json!({"open": "Interface"})).unwrap();
+    let lines = |h: &crate::scenario::Harness| {
+        let mut out = BTreeSet::new();
+        for s in &h.shapes {
+            crate::test_support::each_shape(&s.shape, &mut |shape| {
+                if let egui::Shape::LineSegment { stroke, .. } = shape {
+                    out.insert(stroke.color.to_array());
+                }
+            });
+        }
+        out
+    };
+    for mode in [ColorVision::Protan, ColorVision::Tritan, ColorVision::Off] {
+        crate::prefs::control(&mut h.app, &json!({"color_vision": mode.id()})).unwrap();
+        h.frames(2);
+        let (want, off) = (Tokens::get_in(mode), Tokens::get_in(ColorVision::Off));
+        let painted = lines(&h);
+        for (name, c) in [("axis_x", want.axis_x), ("axis_y", want.axis_y), ("sketch_locked", want.sketch_locked)] {
+            assert!(painted.contains(&c.to_array()), "{mode:?}: the sample draws {name} {c:?}");
+        }
+        if mode != ColorVision::Off {
+            let changed = [(want.axis_x, off.axis_x), (want.sketch_locked, off.sketch_locked)];
+            assert!(changed.iter().any(|(a, b)| a != b), "{mode:?} recolours what the sample shows");
+        }
+    }
+    crate::prefs::control(&mut h.app, &json!({"button": "cancel"})).unwrap();
+}
+
 #[test]
 fn random_values_never_panic_and_only_the_four_ids_are_taken() {
     fn value(next: &mut impl FnMut() -> u64, depth: u32) -> serde_json::Value {

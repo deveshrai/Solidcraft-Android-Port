@@ -70,7 +70,12 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
         let free_orbit = setting::free_orbit(app, ui);
         crate::scenario::publish_target("prefs:free_orbit", free_orbit.rect);
         if app.preferences.free_orbit {
-            ui_kit::text(ui, crate::i18n::tr("nav.free_orbit.help"), ui_kit::Text::Hint("free_orbit"));
+            ui_kit::text(ui, crate::i18n::tr("nav.free_orbit.snap_help"), ui_kit::Text::Hint("free_orbit"));
+            let upright = setting::free_orbit_upright(app, ui);
+            crate::scenario::publish_target("prefs:free_orbit_upright", upright.rect);
+            if app.preferences.free_orbit_upright {
+                ui_kit::text(ui, crate::i18n::tr("nav.free_orbit_upright.help"), ui_kit::Text::Hint("free_orbit_upright"));
+            }
         }
         let help = if app.preferences.nav == TOUCHPAD_NAV {
             app.tr("nav.touchpad.help").to_owned()

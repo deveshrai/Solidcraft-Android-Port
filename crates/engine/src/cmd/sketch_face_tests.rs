@@ -679,7 +679,7 @@ fn every_flat_face_of_one_sketch_extruded_up_and_down_takes_an_attached_sketch()
     assert_eq!(sketch_and_extrude_on_every_flat_face(&reopened, &dir, "synthetic-reopened"), 12);
     // The logo design as it was reported (format 17, with a removed shelled body before it).
     let mut logo = Session::default();
-    run(&mut logo, "doc.open", json!({"path": root.join("logo-up-down-join.solidcraft").to_string_lossy()}));
+    run(&mut logo, "doc.open", json!({"path": root.join("logo-up-down-join.sc").to_string_lossy()}));
     assert_eq!(sketch_and_extrude_on_every_flat_face(&logo, &dir, "logo"), 12);
     let _ = std::fs::remove_dir_all(&dir);
 }

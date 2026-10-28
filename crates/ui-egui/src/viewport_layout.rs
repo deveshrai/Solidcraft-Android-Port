@@ -67,6 +67,33 @@ impl Layout {
         corner: egui::Vec2,
         show_navigation_bar: bool,
     ) -> Self {
+        Self::build(viewport, content, docks, scale, style, corner, show_navigation_bar, false)
+    }
+
+    /// Render fits stay between the docked panels, including beneath a short Browser card.
+    pub fn product(
+        viewport: Rect,
+        content: Rect,
+        docks: &[Rect],
+        scale: f32,
+        style: crate::prefs::NavigatorStyle,
+        corner: egui::Vec2,
+        show_navigation_bar: bool,
+    ) -> Self {
+        Self::build(viewport, content, docks, scale, style, corner, show_navigation_bar, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        viewport: Rect,
+        content: Rect,
+        docks: &[Rect],
+        scale: f32,
+        style: crate::prefs::NavigatorStyle,
+        corner: egui::Vec2,
+        show_navigation_bar: bool,
+        fit_in_content: bool,
+    ) -> Self {
         let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
         let mut obstacles: Vec<_> = docks.iter().take(14).copied().filter(|r| r.is_finite()).map(|r| r.expand(4.0)).collect();
         // Navigation is anchored to the viewport, never to transient dialog space.
@@ -83,7 +110,7 @@ impl Layout {
         };
         // The axis view starts below the pair while it is shown.
         let top = if confirm.is_positive() { confirm.bottom() + CORNER_GAP } else { available.top() };
-        let cube_size = super::viewport::axis_view_size(style);
+        let cube_size = if fit_in_content { 110.0 } else { super::viewport::axis_view_size(style) };
         let mut axis_view = if available.width() >= cube_size && available.bottom() - top >= cube_size {
             Rect::from_min_size(pos2(available.right() - cube_size, top), vec2(cube_size, cube_size))
         } else {
@@ -112,12 +139,25 @@ impl Layout {
                 obstacles.push(control);
             }
         }
-        let drawable = free_rect(viewport, &obstacles).shrink(16.0 / scale);
+        let drawable = free_rect(if fit_in_content { content } else { viewport }, &obstacles).shrink(16.0 / scale);
         Self { viewport, drawable, content, axis_view, navigation, confirm }
     }
 }
 
-pub(crate) fn fit_bounds(mut cam: Camera, bounds: &Aabb3, layout: &Layout, perspective: bool) -> Option<Camera> {
+pub(crate) fn fit_bounds(cam: Camera, bounds: &Aabb3, layout: &Layout, perspective: bool) -> Option<Camera> {
+    fit_with_fov(cam, bounds, layout, if perspective { 0.6 } else { 0.0 })
+}
+
+/// Product cameras keep the authored lens while framing the free canvas.
+pub(crate) fn fit_product_bounds(cam: Camera, bounds: &Aabb3, layout: &Layout) -> Option<Camera> {
+    fit_with_fov(cam, bounds, layout, cam.fov)
+}
+
+fn fit_with_fov(mut cam: Camera, bounds: &Aabb3, layout: &Layout, fov: f64) -> Option<Camera> {
+    let perspective = fov > 0.0;
+    if !fov.is_finite() || !(0.0..std::f64::consts::PI).contains(&fov) {
+        return None;
+    }
     if bounds.is_empty()
         || !bounds.min.is_finite()
         || !bounds.max.is_finite()
@@ -129,7 +169,7 @@ pub(crate) fn fit_bounds(mut cam: Camera, bounds: &Aabb3, layout: &Layout, persp
         return None;
     }
     let original_fov = cam.fov;
-    cam.fov = if perspective { 0.6 } else { 0.0 };
+    cam.fov = fov;
     let (r, u, b) = cam.basis();
     let centre = bounds.center();
     let mut hx: f64 = 0.0;
@@ -150,7 +190,7 @@ pub(crate) fn fit_bounds(mut cam: Camera, bounds: &Aabb3, layout: &Layout, persp
     let h = f64::from(layout.viewport.height());
     let hh = (hx * h / f64::from(layout.drawable.width())).max(hy * h / f64::from(layout.drawable.height())).max(0.5);
     let offset = layout.drawable.center() - layout.viewport.center();
-    let tangent = if perspective { (0.3_f64).tan() } else { 0.4 };
+    let tangent = if perspective { (fov * 0.5).tan() } else { 0.4 };
     cam.distance = hh / tangent + if perspective { depth } else { 0.0 };
     // Offset the target so the model projects into the free rectangle in the original viewport.
     // Perspective needs a bounded correction because corners have different depths.

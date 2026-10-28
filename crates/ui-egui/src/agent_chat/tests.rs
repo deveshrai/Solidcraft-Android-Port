@@ -1973,15 +1973,119 @@ fn assistant_marks_follow_chat_login_turns_and_approvals() {
     }
     assert_eq!(mark(State::Off, "signed_out", true), NeedsAuth);
     for login in ["", "signed_out", "unknown", "signed_in"] {
-        for (state, expected) in
-            [(State::Ready, Ready), (State::Busy, Busy), (State::Starting, Busy), (State::NeedsAuth, NeedsAuth), (State::Exited, Stopped)]
-        {
+        for (state, expected) in [
+            (State::Ready, Ready),
+            (State::Busy, Busy),
+            (State::Starting, Busy),
+            (State::NeedsAuth, NeedsAuth),
+            (State::Exited, Stopped),
+            (State::Failed, Stopped),
+        ] {
             assert_eq!(mark(state, login, true), expected);
             assert_eq!(assistant_mark_for(state, login, true, 12, false, false), Waiting(12));
         }
     }
     assert_eq!(assistant_mark_for(State::Ready, "signed_in", true, 0, true, false), Stopped);
     assert_eq!(assistant_mark_for(State::Ready, "signed_in", true, 0, false, true), Stopped);
+}
+
+/// An app whose endpoint agents answer at once (offline), with `api-1` and `api-2` added.
+#[cfg(not(target_arch = "wasm32"))]
+fn app_with_endpoints() -> SolveApp {
+    let http: backend::HttpFn = Arc::new(|_| Err("offline".into()));
+    let mut app = SolveApp::new(solidcraft_engine::Session::default(), crate::Services { agent_http: Some(http), ..Default::default() });
+    for id in ["api-1", "api-2"] {
+        app.preferences.agents.push(agents::AgentConfig {
+            id: id.into(),
+            kind: agents::Kind::Api,
+            base_url: "http://localhost:11434/v1".into(),
+            model: "m".into(),
+            ..Default::default()
+        });
+    }
+    app
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_agent_started_last_connects_at_start_once_the_agents_are_known() {
+    let ctx = crate::fonts::test_context();
+    let mut app = app_with_endpoints();
+    // Off by default: a launch starts nothing and leaves the panel closed.
+    begin(&mut app);
+    poll(&mut app, &ctx);
+    assert!(!app.agent_chat.open && app.agent_chat.backend.is_none() && app.agent_chat.detecting.is_none());
+
+    app.preferences.agent_connect_at_start = true;
+    app.preferences.agent_chat_open_at_start = true;
+    app.preferences.agent_last = "api-2".into();
+    begin(&mut app);
+    assert!(app.agent_chat.open);
+    // Nothing waits for discovery: the agent starts when it is in, in whichever tab is shown.
+    let (found, detecting) = channel();
+    app.agent_chat.detecting = Some(detecting);
+    poll(&mut app, &ctx);
+    assert!(app.agent_chat.backend.is_none());
+    crate::documents::open_tab(&mut app, solidcraft_engine::Session::default()).unwrap();
+    found.send(discover::Detection::default()).unwrap();
+    poll(&mut app, &ctx);
+    assert_eq!(app.agent_chat.agent_id.as_deref(), Some("api-2"), "the agent started last, not the default");
+    assert_eq!(app.agent_chat.state(), State::Starting);
+    assert!(app.agent_chat.backend.is_some());
+    // A design opened over the launch's blank one keeps the agent: nothing was asked yet.
+    crate::documents::adopt(&mut app, solidcraft_engine::Session::default());
+    assert!(app.agent_chat.backend.is_some() && app.agent_chat.items.is_empty());
+    assert_eq!(app.docs.count(), 2);
+    // Once per launch.
+    disconnect(&mut app);
+    poll(&mut app, &ctx);
+    assert!(app.agent_chat.backend.is_none());
+    // Connecting another agent makes it the one started last.
+    app.agent_chat.agent_id = Some("api-1".into());
+    connect(&mut app, &ctx);
+    assert_eq!(app.preferences.agent_last, "api-1");
+    assert!(status(&app)["lastAgent"] == "api-1" && status(&app)["connectAtStart"] == true);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_connection_that_never_gets_ready_says_connection_failed_and_offers_retry() {
+    let ctx = crate::fonts::test_context();
+    // The agent started last is gone: the chat says so, and no other agent starts by itself.
+    let mut app = app_with_endpoints();
+    app.preferences.agent_connect_at_start = true;
+    app.preferences.agent_last = "claude".into();
+    app.agent_chat.detection = Some(discover::Detection::default());
+    begin(&mut app);
+    poll(&mut app, &ctx);
+    assert_eq!(app.agent_chat.state(), State::Failed);
+    assert!(app.agent_chat.backend.is_none() && app.agent_chat.agent_id.is_none());
+    assert!(matches!(app.agent_chat.items.last(), Some(Item::Notice { text, error: true }) if text.contains("claude")));
+    assert!(!State::Failed.running(), "the Connect button reads Retry, not Stop");
+    assert_eq!(status(&app)["state"], "failed");
+
+    // An agent that cannot start.
+    let mut app = SolveApp::new(solidcraft_engine::Session::default(), crate::Services::default());
+    app.preferences.agents.push(agents::AgentConfig { id: "custom-1".into(), command: "solidcraft-no-such-agent-7009".into(), ..Default::default() });
+    connect(&mut app, &ctx);
+    assert_eq!(app.agent_chat.state(), State::Failed);
+    assert!(app.preferences.agent_last.is_empty(), "only an agent that started is remembered");
+
+    // No agent at all: the picker opens on what to install.
+    let mut app = SolveApp::new(solidcraft_engine::Session::default(), crate::Services::default());
+    app.agent_chat.detection = Some(discover::Detection::default());
+    connect(&mut app, &ctx);
+    assert_eq!((app.agent_chat.state(), app.agent_chat.picking), (State::Failed, Some(true)));
+
+    // An agent that ends while starting failed to connect; one that ends later stopped.
+    let mut c = chat();
+    c.state = Some(State::Starting);
+    c.on_event(Event::Error("initialize failed".into()));
+    c.on_event(Event::Exited { tail: Vec::new() });
+    assert_eq!(c.state(), State::Failed);
+    let mut c = chat();
+    c.on_event(Event::Exited { tail: Vec::new() });
+    assert_eq!(c.state(), State::Exited);
 }
 
 #[test]

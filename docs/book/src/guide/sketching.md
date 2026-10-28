@@ -10,6 +10,8 @@ an edited one goes back to how it was, as one step that Undo brings back.
 Opening a sketch turns the view to face it. When the sketch ends, the view stays where it is by default. Preferences › Sketch › **When a sketch ends** changes that: **Return to the previous view** goes back to the view from before the sketch, and **Return unless rotated** goes back only when you panned or zoomed the sketch view but didn't turn it.
 
 In scripts, `XY`, `XZ`, `YZ` and their `Top`, `Front`, `Right` aliases name origin planes.
+Preferences › Interface › **Origin plane names** shows them as Top, Front and Right in the
+browser, dialogs and lists; scripts and saved designs keep XY, XZ and YZ.
 These names are reserved: a construction plane cannot be created with or renamed to one
 (case-insensitive). If an older design already has a construction plane with such a name, a
 string argument naming it is ambiguous and is rejected; use the other alias (`XY` for `Top`)
@@ -43,6 +45,14 @@ rectangle; the circle, arc, slot, polygon and spline variants) share one toolbar
 drop-down. The button and the family's shortcut start the variant you picked last, so a
 shortcut such as L can start a Midpoint Line; pick the variant you want from the drop-down to
 change it ([Keyboard shortcuts](shortcuts.md)).
+
+Once a shape's first point is down, value boxes (a line's length and angle, a rectangle's width
+and height, a circle's diameter…) follow the cursor. Typing goes into the first box, Tab moves to
+the next and Enter places the shape; each typed value becomes a dimension. A value is an
+expression (`25`, `1 in`, `d1 * 2`), or `width = 20` (also `#width = 20`), which also adds the
+user parameter `width` and dimensions with it, as when [placing a dimension](parameters.md). A
+box that does not become a dimension (a polygon's sides, a rounded rectangle's corner radius)
+takes a value only.
 
 The Sketch Palette's **Construction Geometries** option hides construction curves while you
 work. A hidden construction curve cannot be picked by a click or by a box. Nothing invisible

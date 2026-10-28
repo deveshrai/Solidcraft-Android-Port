@@ -442,6 +442,19 @@ impl Camera {
             self.roll = roll;
         }
     }
+    /// Orbit by pixel deltas like [`Camera::orbit`], without its pole limit: sideways turns
+    /// about the world's up axis and up/down tilts about the screen's right, on over the top.
+    /// Upside down (past a pole) sideways turns the other way, so the model still follows the
+    /// cursor.
+    pub fn orbit_unlimited(&mut self, dx: f64, dy: f64) {
+        if !self.is_valid() || !dx.is_finite() || !dy.is_finite() {
+            return;
+        }
+        let upright = self.basis().1.dot(self.up_dir()) >= 0.0;
+        let turn = if upright { dx } else { -dx } * 0.008;
+        self.yaw = (self.yaw + turn) % std::f64::consts::TAU;
+        self.rotate_in_view(Vec3::new(-dy * 0.008, 0.0, 0.0));
+    }
     pub fn set_view(&mut self, v: StandardView) {
         let lim = std::f64::consts::FRAC_PI_2 - 1e-6;
         let (y, p) = v.angles();

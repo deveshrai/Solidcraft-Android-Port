@@ -93,6 +93,8 @@ impl Cards {
 pub(crate) struct State {
     pub cards: Vec<Rect>,
     pub panels: Vec<Rect>,
+    /// Actual floating workspace surfaces and their optional canvas reservation.
+    pub workspace_panels: std::collections::BTreeMap<&'static str, (Rect, Option<crate::ui_kit::Edge>)>,
     pub browser: Option<Rect>,
     pub history: Option<Rect>,
     /// In-memory seam drag width, never serialized as a preference.
@@ -103,12 +105,43 @@ pub(crate) struct State {
     pub history_folding: Option<[f32; 2]>,
     pub history_fold_motion: Option<[crate::timeline_left::FoldMotion; 2]>,
     pub content: Option<Rect>,
+    /// The space the browser and a left History are laid out in this frame.
+    pub left_space: Option<Rect>,
+    /// The left column an open dialog holds this frame (`dialog_column`).
+    pub dialog_column: Option<Rect>,
+}
+
+/// Register the actual card, so fitting and pointer shielding use the same rectangle.
+pub(crate) fn register_panel(app: &mut SolveApp, id: &'static str, rect: Option<Rect>, edge: Option<crate::ui_kit::Edge>) {
+    if let Some(rect) = rect.filter(|r| r.is_finite() && r.is_positive()) {
+        app.shell.workspace_panels.insert(id, (rect, edge));
+    } else {
+        app.shell.workspace_panels.remove(id);
+    }
+}
+
+/// Shared workspace-card bounds below the ribbon and above a floating bottom strip.
+pub(crate) fn panel_bounds(app: &SolveApp, mut available: Rect) -> Rect {
+    for card in &app.shell.cards {
+        available.min.y = card.bottom().clamp(available.top(), available.bottom());
+    }
+    if crate::render_workspace::active(app) {
+        let bottom = app.shell.cards.iter().map(|r| r.bottom()).fold(available.top() - Tokens::get().space_8, f32::max);
+        available.min.y = (bottom + Tokens::get().space_8).min(available.bottom());
+    }
+    for (rect, edge) in app.shell.workspace_panels.values() {
+        if matches!(edge, Some(crate::ui_kit::Edge::Bottom)) {
+            available.max.y = rect.top().clamp(available.top(), available.bottom());
+        }
+    }
+    available
 }
 
 /// One source of occlusion for navigation, picking, overlays and fit.
 pub(crate) fn covered_rects(app: &SolveApp) -> Vec<Rect> {
     let mut rects = Vec::new();
-    if Container::for_layout(app.ui.layout, Surface::Panel).floating() {
+    rects.extend(app.shell.workspace_panels.values().map(|(rect, _)| *rect));
+    if crate::render_workspace::active(app) || Container::for_layout(app.ui.layout, Surface::Panel).floating() {
         rects.extend(app.shell.cards.iter().copied());
         rects.extend(app.shell.panels.iter().copied());
         if crate::agent_chat::shown(app) && app.agent_chat.open && !app.preferences.agent_chat_popped {
@@ -159,6 +192,19 @@ pub(crate) fn content_rect(app: &SolveApp, viewport: Rect) -> Rect {
 /// Free anchor space shared by both layouts. Compact edge hosts have already consumed
 /// their allocation; content-hugging Browser and floating overlays reserve their measured span.
 pub(crate) fn workspace_content(app: &SolveApp, mut content: Rect) -> Rect {
+    if crate::render_workspace::active(app) {
+        let gap = Container::floating_card(Surface::Panel).gap();
+        for (rect, edge) in app.shell.workspace_panels.values() {
+            match edge {
+                Some(crate::ui_kit::Edge::Left) => content.min.x = (rect.right() + gap).clamp(content.left(), content.right()),
+                Some(crate::ui_kit::Edge::Right) => content.max.x = (rect.left() - gap).clamp(content.left(), content.right()),
+                Some(crate::ui_kit::Edge::Bottom) => content.max.y = (rect.top() - gap).clamp(content.top(), content.bottom()),
+                Some(crate::ui_kit::Edge::Top) => content.min.y = (rect.bottom() + gap).clamp(content.top(), content.bottom()),
+                None => {}
+            }
+        }
+        return content;
+    }
     let gap = Container::for_layout(app.ui.layout, Surface::Panel).gap();
     if let Some(history) = app.shell.history {
         if app.preferences.timeline_left {
@@ -169,6 +215,9 @@ pub(crate) fn workspace_content(app: &SolveApp, mut content: Rect) -> Rect {
     }
     if let Some(browser) = app.shell.browser {
         content.min.x = (browser.right() + gap).clamp(content.left(), content.right());
+    }
+    if let Some(column) = app.shell.dialog_column {
+        content.min.x = (column.right() + gap).clamp(content.left(), content.right());
     }
     content
 }

@@ -16,8 +16,9 @@ pub(super) fn command(kind: &Kind) -> Option<&'static str> {
         Kind::Gear(k) => Some(if k.component.is_some() { "gear.edit" } else { "gear.create" }),
         Kind::Part(_) => Some("parts.insert"),
         Kind::PartSize(_) => Some("parts.resize"),
-        Kind::SaveMesh(_) => Some("file.save_mesh"),
+        Kind::SaveMesh(k) => Some(crate::dialogs_save_mesh::command_id(k)),
         Kind::ViewDxf { .. } => Some("file.export_view_dxf"),
+        Kind::InsertDrawing(p) => Some(if p.command.ends_with("dxf") { "sketch.insert_dxf" } else { "sketch.insert_svg" }),
         Kind::Sketch => Some("sketch.create"),
         Kind::SketchModify(k) => Some(crate::sketch_modify_ui::command(k)),
         Kind::Text(_) => Some("sketch.edit_text"),
@@ -184,12 +185,13 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
         ui_kit::text(ui, tr(key), ui_kit::Text::Hint("manage"));
     }
     placement_row(d, ui, &app.session);
-    if matches!(&d.kind, Kind::Hole { opts, .. } if !opts.multiple) {
-        // Each reference edge with its distance (#37).
-        enter |= crate::hole_refs::input_rows(d, ui, &app.session);
+    if crate::hole_refs::takes(d) {
+        // Each reference edge with its distance (#37, #6380).
+        enter |= crate::hole_refs::input_rows(d, ui, &app.session, app.preferences.origin_plane_names);
     } else {
-        input_rows(d, ui, &app.session);
+        input_rows(d, ui, &app.session, app.preferences.origin_plane_names);
     }
+    d.sync_material(&app.session);
     match &mut d.kind {
         Kind::Material { index, editor } => crate::material_editor::rows(app, ui, index, editor),
         Kind::Appearance(k) => enter |= crate::dialogs_appearance::rows(app, ui, k, &mut d.inputs),
@@ -197,8 +199,9 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
         Kind::Gear(k) => enter |= crate::dialogs_gears::rows(app, ui, k),
         Kind::Part(k) => enter |= crate::dialogs_parts::rows(app, ui, k, &d.inputs),
         Kind::PartSize(k) => enter |= crate::dialogs_part_size::rows(app, ui, k),
-        Kind::SaveMesh(k) => enter |= crate::dialogs_save_mesh::rows(app, ui, k),
+        Kind::SaveMesh(k) => enter |= crate::dialogs_save_mesh::rows(app, ui, k, &mut d.inputs),
         Kind::ViewDxf { dashed, tolerance } => crate::dialogs_view_dxf::rows(app, ui, dashed, tolerance),
+        Kind::InsertDrawing(p) => crate::dialogs_insert_drawing::rows(ui, p),
         Kind::Sketch => {
             if d.error.is_some() && matches!(d.inputs.first().and_then(|i| i.items.first()), Some(Sel::Face { .. })) {
                 ui_kit::text(
@@ -799,7 +802,7 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
             enter |= crate::dialogs_move::rows(ui, k);
             extra_options(ui, "move_options", &mut d.extra, &[("Create Copy", "copy")]);
         }
-        Kind::Primitive { cmd, fields, operation, at } => {
+        Kind::Primitive { cmd, fields, operation, at, .. } => {
             let from_sketch = *cmd == "solid.coil" && d.inputs.first().is_some_and(|i| i.accept & selection::PROFILES != 0 && !i.items.is_empty());
             for (k, v) in fields.iter_mut() {
                 if from_sketch && (*k == "diameter" || *k == "section_size") {
@@ -810,11 +813,17 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
             if *cmd == "solid.coil" {
                 enter |= coil_rows(ui, &mut d.extra);
             }
+            if at.is_none() {
+                enter |= crate::primitive_placement::rows(ui, &app.session, cmd, &mut d.extra);
+            }
             if let Some((p, _)) = *at {
                 form_row(ui, "Position", |ui| {
                     ui.horizontal(|ui| {
                         ui.label(format!("{:.2}, {:.2}, {:.2}", p.x, p.y, p.z));
-                        if ui_kit::button(ui, "×", ui_kit::Button::Small).on_hover_text(tr("Place at the origin instead")).clicked() {
+                        // A cylinder's place is its Face pick, cleared there.
+                        if *cmd != "solid.cylinder"
+                            && ui_kit::button(ui, "×", ui_kit::Button::Small).on_hover_text(tr("Place at the origin instead")).clicked()
+                        {
                             *at = None;
                         }
                     });

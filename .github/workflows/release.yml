@@ -297,7 +297,7 @@ jobs:
             export CARGO_TARGET_DIR=/var/tmp/solidcraft-target CARGO_BUILD_JOBS=4
             bash packaging/freebsd/package.sh
             tar -tzf dist/release/solidcraft-*-freebsd-x86_64.tar.gz \
-              | grep -E '/bin/solidcraft$|/bin/solidcraft-cli$|/share/applications/ai\.storyteller\.solvecraft\.desktop$|/share/doc/solidcraft/THIRD-PARTY-LICENSES\.txt$'
+              | grep -E '/bin/solidcraft$|/bin/solidcraft-cli$|/share/applications/io\.tangencylabs\.solidcraft\.desktop$|/share/doc/solidcraft/THIRD-PARTY-LICENSES\.txt$'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-freebsd-x86_64

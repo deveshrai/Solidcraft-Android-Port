@@ -85,8 +85,8 @@ assigns generic physical materials and applies these finishes through the same
 commands used by the editor:
 
 ```sh
-solidcraft-cli run examples/material-finishes.json --save target/material-finishes.solidcraft
-solidcraft-cli render target/material-finishes.solidcraft --out target/material-finishes.png --width 1600 --height 1000
+solidcraft-cli run examples/material-finishes.json --save target/material-finishes.sc
+solidcraft-cli render target/material-finishes.sc --out target/material-finishes.png --width 1600 --height 1000
 ```
 
 ## Actual consumers and color

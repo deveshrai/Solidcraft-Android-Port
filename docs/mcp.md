@@ -22,7 +22,7 @@ document remains the reference implementation today.
 solidcraft-cli mcp
 
 # Headless, starting from a design file or a command script.
-solidcraft-cli mcp --in part.solidcraft
+solidcraft-cli mcp --in part.sc
 
 # Bridged to the running app, so you can watch the agent model. The app's control channel is
 # on by default (see below), so no flag is needed on either side:
@@ -133,7 +133,7 @@ not read-only, `destructiveHint` and `openWorldHint` are true.
 
 ### Client configuration
 
-`solidcraft-cli` is on `PATH` after every package install: the Windows installer adds its folder, the deb, rpm and FreeBSD packages install it in `/usr/bin`, the Homebrew cask links it, the AppImage writes a small `solidcraft-cli` launcher into `~/.local/bin` on its first run, and the macOS app links it into `/opt/homebrew/bin` or `/usr/local/bin` when it starts (Help > Install solidcraft-cli command does it with an administrator prompt when those are not writable). Two packages keep it out of `PATH` by design: Snap exposes it as `solidcraft.cli`, and Flatpak runs it as `flatpak run --command=solidcraft-cli ai.storyteller.solidcraft`; use those as the client's `command` (with `mcp` as the arguments).
+`solidcraft-cli` is on `PATH` after every package install: the Windows installer adds its folder, the deb, rpm and FreeBSD packages install it in `/usr/bin`, the Homebrew cask links it, the AppImage writes a small `solidcraft-cli` launcher into `~/.local/bin` on its first run, and the macOS app links it into `/opt/homebrew/bin` or `/usr/local/bin` when it starts (Help > Install solidcraft-cli command does it with an administrator prompt when those are not writable). Two packages keep it out of `PATH` by design: Snap exposes it as `solidcraft.cli`, and Flatpak runs it as `flatpak run --command=solidcraft-cli io.tangencylabs.solidcraft`; use those as the client's `command` (with `mcp` as the arguments).
 
 The quickest way: **Help > Connect AI assistants…** in the app, or
 
@@ -274,7 +274,7 @@ The `skill_reference` tool returns these documents from the copies built into So
 | `skill_reference` | `skill`, `file?` (default `reference.md`) | Read a bundled skill document. Skills: `solidcraft-modeling`, `solidcraft-mechanisms`, `solidcraft-editing`, `solidcraft-checking`. |
 | `running` | - | What the app is running or has queued, for every client (`control.running`, see [control-protocol.md](control-protocol.md#limits)): each request's connection and id, method, command id or a batch's step count, `running_s` and `queued`, never its parameters. Answers at once while the app is busy: ask it when a call timed out before sending a change again. Headless: always `{"running": []}`. |
 | `new_design` | `name?` | Start an empty design. |
-| `open` | `path` | Open a `.solidcraft` design, a STEP file (`.step`/`.stp`) as a new design holding its bodies (an Import base feature), or a 3MF/STL file as mesh bodies. |
+| `open` | `path` | Open a `.sc` design (or a `.solidcraft` one from an earlier release), a STEP file (`.step`/`.stp`) as a new design holding its bodies (an Import base feature), or a 3MF/STL file as mesh bodies. |
 | `save` | `path?` | Save the design (to its current file without `path`). |
 
 `measure` with `items` reports each item under `items` (`length_mm`, `area_mm2` or `position`).

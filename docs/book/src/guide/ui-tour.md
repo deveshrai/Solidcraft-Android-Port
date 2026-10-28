@@ -19,7 +19,12 @@
   hides an item, a component's radio button makes it the active component, and right-clicking any
   row gives that item's menu. Right-click the design or a component and choose **Expand All** or
   **Collapse All** to open or close every folder under that row (the design row stays visible
-  when the whole tree is collapsed). Rows drag into groups and other components.
+  when the whole tree is collapsed). Rows drag into groups and other components. **Preferences ›
+  Interface › Bodies folders** sets when a component's bodies sit in a Bodies folder of their own:
+  **Several bodies only** (the default) lists a component's body straight under it when it has
+  only one and no groups, **Never** lists every component's bodies and groups straight under it
+  (the folder's menu items are then on the component's menu), and **Always** keeps the folder.
+  The design's own Bodies folder, and a folder hidden with its eye, always stay.
 - **Viewport.** Click to select, Shift or Ctrl to add (Preferences › Selection), drag for a window or crossing box. While sketching, Ctrl/Cmd or Alt/Option suppress auto-snap by default; Shift prefers a midpoint; the pointer also snaps to where two curves cross. To
   reach something under something else (two lines drawn on top of each other, coincident points,
   an edge in front of a face, overlapping bodies), hold the left button still for half a second
@@ -42,7 +47,11 @@
   diagonal view; Shift does not request snapping when the preset already requires it to orbit.
 
   Enable **Preferences → Navigation → Free orbit** to rotate the mouse and 3D mouse continuously
-  through both poles, preserving roll without axis snapping. It defaults to off for every mouse
+  through both poles, preserving roll. During an orbit drag, Shift snaps the view direction and
+  the picture rotation to the nearest quarter turn; releasing Shift resumes the unsnapped rotation.
+  Under it, **Turn around the vertical axis** makes sideways mouse drags spin the model around the
+  world's vertical axis instead of the screen's, while up and down drags still tilt over the top
+  without a limit. Both default to off for every mouse
   preset. With SolidWorks navigation, right-click a planar face and choose **Normal to Selection**
   to use Look At (also Ctrl+8); repeat to flip the side, preserving scale and projection.
 
@@ -80,12 +89,25 @@
   identity or change the exported solid. Unsupported or uncertain wall geometry
   keeps its existing edge presentation.
 - **Dialogs** dock on the right with a live preview. Most features also show drag handles and a
-  value box in the viewport.
+  value box in the viewport. Preferences › Interface › **Dialogs** › *In the left column* opens
+  them in the browser's place instead (and the History's, when it is at the left), at least as
+  wide as that column; the column comes back as it was when the dialog closes.
+  Interface › **Dialog buttons** › **Top** puts OK, Cancel and Apply in
+  the dialog's title row, right of the title, where they stay while sections open and close;
+  Cancel then also takes the place of the close button. Enter and Esc work as before.
 - **Timeline** (bottom). Every feature in order. Double-click to edit, drag the marker to roll
   back, and drag features to reorder them. Preferences can put the timeline vertically at the
   far left of the viewport, beside the browser. Its seam handle switches between icon
   chips and compact feature names; the browser can collapse to a rail beside either width.
+  Docked under the browser, the two share the column: drag the seam between them to give either
+  more height, and the split is remembered.
   Previous, Play and Next sit at the top. Double-click Previous to roll to the start.
+  Interface › **Sketches** › **Under their feature** lists a sketch in the vertical timeline one
+  level in, under the first feature built from it, behind that feature's fold arrow. Dragging the
+  feature takes its sketch along. A later feature built from the same sketch gets a row that
+  selects it, and while the marker sits between a sketch and its feature, or the two are in
+  different folders, the sketch keeps a row of its own. The timeline along the bottom always lists
+  features in creation order.
 - **Command search (S).** Click the ribbon search field or press S to open the search popup
   below it. Results group commands by their ribbon path and show matching features and user
   parameters from this design. With an empty query, recent commands appear first, followed by
@@ -119,15 +141,23 @@ General › **Show text under ribbon icons** is a separate, saved option for eit
 layout. Turn it off for shorter icon-only command buttons; tooltips, section names
 and command menus remain available.
 
+Interface › Layout › **Show origin and bodies at the top** (off by default) puts the active
+component's Bodies folder and the Origin (planes, axes and point) at the top of the History when
+it sits on the left or under the browser and is wide enough for names. They are the browser's own
+rows: the same eyes, folds and right-click menus, so one list is enough for single-part work. The
+History at the bottom is unchanged.
+
 ### Colour themes
 
 Interface › **Theme** lists Dark, Light and System (follows the operating system), the built-in
 themes and any themes you have imported. A choice applies at once. Under the themes, **Viewport** draws the 3D view in the Light or Dark theme's colours whatever the window uses, for example the model on a light view in a dark window (**Follow theme**, the default, keeps the theme's own). The built-in themes are Gruvbox
 (dark and light, each in hard, normal and soft contrast), SolidCraft 95, Platinum 9, Cupertino,
 Green Phosphor, Amber Phosphor, Blueprint, One Dark, Tokyo Night, Solarized Light, Nord, High
-Contrast, Graphite, Nosferatu, Catppuccin Mocha, and Okibi and Akari (dark and light, from the
-[Okibi design system](https://kaievns.github.io/okibi-akiri-design-system-spec/)), and Clay and
-Clay Dark (warm ivory paper and warm charcoal, with a terracotta accent and rounded corners).
+Contrast, Graphite, Nosferatu, Catppuccin Mocha, Okibi and Akari (dark and light, from the
+[Okibi design system](https://kaievns.github.io/okibi-akiri-design-system-spec/)), Clay and
+Clay Dark (warm ivory paper and warm charcoal, with a terracotta accent and rounded corners), and
+1-bit and 1-bit Dark (pure black and white with square corners: black on white, or white on
+black, with selections drawn inverted).
 
 A theme is a small JSON file that starts from the Dark or Light palette and changes any of its
 colours and corner radii by name:
@@ -170,7 +200,7 @@ respectively. The first four style small accents through large surfaces; `contro
 styles form controls, and `sketch_mode_radius` styles sketch creation buttons. Themes own
 these settings, with matching shapes across light and dark variants. Dock joins remain
 square, circular controls remain circular, and control sizes and spacing stay the same.
-Platinum 9 and the phosphor themes use square corners, SolidCraft 95 uses subtle 3-point
+Platinum 9, 1-bit, 1-bit Dark, and the phosphor themes use square corners, SolidCraft 95 uses subtle 3-point
 corners, Blueprint uses the standard radii, Cupertino uses softer corners, and Clay and Clay Dark use rounded corners. Other built-in
 themes retain the defaults.
 
@@ -196,6 +226,20 @@ Command icons use the shared SVG palette.
 
 Imported themes are kept with your preferences, so they work in the browser app too. Colour
 vision modes still apply on top of any theme.
+
+#### Follow a theme file
+
+In the desktop app, **Follow a theme file** (under the themes) takes a theme file that another
+tool writes and keeps it as the theme: whenever the file changes, SolidCraft reloads it within
+about a second, and again when its window comes back to the front, without a restart. This suits
+tools that generate a colour scheme from your wallpaper or keep one scheme across your desktop
+and applications (pywal and matugen are two examples); have them write a `solidcraft-theme/1`
+file from a template. **Choose…** picks the file, **Stop following** (or choosing any theme)
+turns it off; it is off until you choose a file. Only a file that reads completely is applied:
+while it is being written, or if it is broken, missing or larger than 256 KiB, the last good
+theme stays on and the setting says why. `solidcraft --theme-file my-theme.json` follows a file
+for one run without changing your preferences. The browser app has no file to follow; import the
+theme there instead.
 
 Graphics › **Frame rate** shows frames per second in the view's bottom-right corner. Click it,
 or turn on **Frame rate details**, for the performance overlay:

@@ -351,7 +351,9 @@ mod clone_tests {
         use serde_json::json;
 
         let names = BTreeMap::from([("Old".into(), "New".into()), ("New".into(), "Wrong".into())]);
-        let origin = json!({"type": "plane", "plane": {"type": "construction", "name": "Old"}});
+        // Construction plane references are keyed by id (#1134): a copy remap moves the id map,
+        // not this one; the axis and point names below are what a rename and a copy rewrite.
+        let origin = json!({"type": "plane", "plane": {"type": "construction", "feature": 7}});
         for kind in [
             json!({"type": "construction_axis", "def": {"type": "two_points", "a": {"type": "construct_point", "name": "Old"}, "b": {"type": "point", "p": [1, 2, 3]}}}),
             json!({"type": "construction_point", "def": {"type": "edge_and_plane", "edge": {"type": "axis", "name": "Old"}, "plane": origin}}),

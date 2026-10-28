@@ -12,6 +12,10 @@ use egui::{Ui, vec2};
 /// Text segments retain mixed states and optional compact clipping instead of dropdown fallback.
 #[derive(Default)]
 pub(crate) struct Segments<'a> {
+    /// Optional leading icons retain the same text-segment geometry and accessibility.
+    pub icons: &'a [&'a str],
+    pub workspace_accent: bool,
+    pub dense: bool,
     pub states: &'a [bool],
     pub compact: bool,
     pub primary: bool,
@@ -20,7 +24,14 @@ pub(crate) struct Segments<'a> {
 }
 
 pub(crate) fn segmented(ui: &mut Ui, selected: &mut usize, options: &[&str], config: Segments<'_>) -> bool {
-    let Segments { states, compact, primary, intrinsic, proportional } = config;
+    if crate::prefs_search::suppress_chrome(ui) && !crate::prefs_search::texts_hit(ui, options) {
+        return false;
+    }
+    if crate::prefs_search::querying(ui) && !crate::prefs_search::shows_all(ui) {
+        crate::prefs_search::reveal(ui);
+    }
+    let Segments { icons, workspace_accent, dense, states, compact, primary, intrinsic, proportional } = config;
+    let accent = crate::theme::TabAccent::current(ui.ctx());
     let t = Tokens::get();
     let segment_width = dimension(ui.available_width()) / options.len().max(1) as f32;
     let widest = options
@@ -42,13 +53,16 @@ pub(crate) fn segmented(ui: &mut Ui, selected: &mut usize, options: &[&str], con
     }
     let natural: Vec<_> = options
         .iter()
-        .map(|option| {
-            ui.painter().layout_no_wrap((*option).to_owned(), crate::fonts::semibold(t.font_label), t.form_ink).size().x.ceil() + t.space_16
+        .enumerate()
+        .map(|(index, option)| {
+            ui.painter().layout_no_wrap((*option).to_owned(), crate::fonts::semibold(t.font_label), t.form_ink).size().x.ceil()
+                + t.space_16
+                + if icons.get(index).is_some() { t.space_14 + t.space_6 + t.space_4 } else { 0.0 }
         })
         .collect();
     let total = natural.iter().sum::<f32>();
     let desired = if intrinsic { total.min(dimension(ui.available_width())) } else { dimension(ui.available_width()) };
-    let (rect, _) = ui.allocate_exact_size(vec2(desired, row_height()), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(desired, if dense { t.control_height - t.space_2 } else { row_height() }), egui::Sense::hover());
     ui.painter().rect_filled(rect, t.control_radius, t.control_fill);
     let equal_width = rect.width() / options.len().max(1) as f32;
     let mut clicked = false;
@@ -72,6 +86,8 @@ pub(crate) fn segmented(ui: &mut Ui, selected: &mut usize, options: &[&str], con
                 rounding,
                 if on && primary {
                     t.form_primary
+                } else if on && workspace_accent {
+                    accent.soft
                 } else if on {
                     t.selected_bg
                 } else {
@@ -84,8 +100,18 @@ pub(crate) fn segmented(ui: &mut Ui, selected: &mut usize, options: &[&str], con
         }
         let font = if on { crate::fonts::semibold(t.font_label) } else { egui::FontId::proportional(t.font_label) };
         let galley = ui.painter().layout_no_wrap((*option).to_string(), font.clone(), t.form_ink);
-        let text_rect =
-            egui::Rect::from_min_size(egui::pos2(segment.center().x - galley.size().x / 2.0, segment.top()), vec2(galley.size().x, segment.height()));
+        let icon_width = if icons.get(index).is_some() { t.space_14 + t.space_6 } else { 0.0 };
+        let text_rect = egui::Rect::from_min_size(
+            egui::pos2(segment.center().x - (galley.size().x + icon_width) / 2.0 + icon_width, segment.top()),
+            vec2(galley.size().x, segment.height()),
+        );
+        if let Some(icon) = icons.get(index) {
+            let icon_rect = egui::Rect::from_center_size(
+                egui::pos2(text_rect.left() - t.space_6 - t.space_14 / 2.0, segment.center().y),
+                vec2(t.space_14, t.space_14),
+            );
+            crate::icons::paint_ink(ui.painter(), icon_rect, icon, if on && workspace_accent { accent.ink } else { t.form_ink });
+        }
         let text_rect = if compact { text_rect.intersect(segment.shrink2(vec2(t.space_4, 0.0))) } else { text_rect };
         paint_text(
             ui,
@@ -94,6 +120,8 @@ pub(crate) fn segmented(ui: &mut Ui, selected: &mut usize, options: &[&str], con
             font,
             if on && primary {
                 t.on_accent
+            } else if on && workspace_accent {
+                accent.ink
             } else if on {
                 t.selected_ink
             } else {
@@ -304,6 +332,16 @@ mod tests;
 pub(crate) fn list_picker(ui: &mut Ui, key: &str, text: &str, selected: bool) -> egui::Response {
     let response =
         ui.add_sized(egui::vec2(super::metrics::dimension(ui.available_width()), super::row_height()), egui::Button::selectable(selected, text));
+    crate::scenario::publish_target(&format!("dialog:list:{key}"), response.rect);
+    response
+}
+
+/// Intrinsic-width selection chip for horizontal lists, sharing list-picker styling.
+pub(crate) fn choice_chip(ui: &mut Ui, key: &str, text: &str, selected: bool) -> egui::Response {
+    let t = Tokens::get();
+    let width = (ui.painter().layout_no_wrap(text.to_owned(), crate::fonts::semibold(t.font_label), t.text).size().x + t.space_24)
+        .clamp(t.control_height * 2.0, t.form_card_width);
+    let response = ui.add_sized(vec2(width, super::row_height()), egui::Button::selectable(selected, text).truncate());
     crate::scenario::publish_target(&format!("dialog:list:{key}"), response.rect);
     response
 }

@@ -62,6 +62,124 @@ fn header_impl(ui: &mut Ui, icon: &str, title: &str, collapsed: Option<&mut bool
     t.secondary_hline(ui.painter(), rect.x_range(), rect.bottom(), t.dialog_rule);
 }
 
+/// Where a feature panel's OK, Cancel and Apply sit (Preferences › Interface › Dialog buttons,
+/// #6708). The app publishes the preference each frame, so every `Panel::feature` follows it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DialogButtons {
+    /// In a footer row under the inputs (how it always was). Also what a value this version
+    /// doesn't know reads as (`prefs::lenient`).
+    #[default]
+    Bottom,
+    /// In the header row, right of the title, where they stay while sections open and close.
+    Top,
+}
+
+impl DialogButtons {
+    pub(crate) fn publish(self, ctx: &egui::Context) {
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new("sc_dialog_buttons"), self));
+    }
+
+    pub(crate) fn current(ctx: &egui::Context) -> Self {
+        ctx.data(|data| data.get_temp(egui::Id::new("sc_dialog_buttons"))).unwrap_or_default()
+    }
+}
+
+/// The header row of a feature panel whose actions sit at the top. It is laid out before the
+/// body, and its icon, title and buttons are drawn after it, once the compute status and whether
+/// OK is enabled are known. Same tokens as `header`, plus `HeaderActions`'.
+struct TopHeader<'a> {
+    icon: egui::Rect,
+    title: egui::Rect,
+    actions: super::HeaderActions<'a>,
+}
+
+impl<'a> TopHeader<'a> {
+    fn new(ui: &mut Ui, ok: &'a str, apply: Option<&'a str>, cancel: &'a str, collapsed: Option<&mut bool>, close: &mut bool) -> Self {
+        let t = Tokens::get();
+        let (band, _) = ui.allocate_exact_size(vec2(dimension(ui.available_width()), header_height()), egui::Sense::hover());
+        let icon = egui::Rect::from_center_size(
+            egui::pos2(band.left() + t.space_12 + t.form_icon_size / 2.0, band.center().y),
+            vec2(t.form_icon_size, t.form_icon_size),
+        );
+        // The buttons end where the fields below do.
+        let end = (band.right() - t.space_12).max(band.left());
+        let actions = super::HeaderActions::new(ui, band, end, ok, apply, cancel);
+        let buttons = actions.left(end);
+        // Nothing placed yet beside the buttons: the next control keeps clear of them.
+        let beside_buttons = |right: f32| buttons < end && right >= buttons;
+        // An icon target to the left of what is already placed, `space_4` clear of the buttons.
+        let target = |right: f32| {
+            let right = if beside_buttons(right) { right - t.space_4 } else { right };
+            egui::Rect::from_center_size(
+                egui::pos2((right - t.form_close_size / 2.0).max(band.left()), band.center().y),
+                vec2(t.form_close_size, t.form_close_size),
+            )
+        };
+        let mut right = buttons;
+        // The header's close does what Cancel does in every panel, so with Cancel up here it is
+        // left out: one control for one action, and its width goes to the title. Its handle
+        // moves to Cancel, so automation that closes a panel keeps working.
+        if let Some(cancel_rect) = actions.rect(super::Action::Cancel) {
+            scenario::publish_handle("dialog:close", cancel_rect.center());
+        } else {
+            let close_rect = target(right);
+            let response = icon_button_at(ui, close_rect, "close", "Close");
+            scenario::publish_handle("dialog:close", response.rect.center());
+            if response.clicked() {
+                *close = true;
+            }
+            right = close_rect.left();
+        }
+        if let Some(collapsed) = collapsed {
+            let fold = target(right);
+            let response = super::disclosure_button_at(ui, fold, !*collapsed, crate::i18n::tr_label(if *collapsed { "Expand" } else { "Collapse" }));
+            scenario::publish_handle("dialog:collapse", response.rect.center());
+            if response.clicked() {
+                *collapsed = !*collapsed;
+            }
+            right = fold.left();
+        }
+        // Text next to a text button keeps a gap; an icon target carries its own padding.
+        if beside_buttons(right) {
+            right = (right - t.space_6).max(band.left());
+        }
+        let left = (icon.right() + t.space_8).min(right);
+        let title = egui::Rect::from_min_max(egui::pos2(left, band.top()), egui::pos2(right.max(left), band.bottom()));
+        // Dragging the panel by its title must not start on a button.
+        scenario::publish_handle("dialog:title", title.center());
+        scenario::publish_rect("dialog:header", band);
+        t.secondary_hline(ui.painter(), band.x_range(), band.bottom(), t.dialog_rule);
+        Self { icon, title, actions }
+    }
+
+    /// The icon (the compute spinner while busy), the title (the compute status while there is
+    /// one: the footer that showed it is gone) and the buttons. Returns the action asked for.
+    fn finish(&self, ui: &mut Ui, icon: &str, title: &str, state: &ComputeStatus, ok_enabled: bool) -> super::Action {
+        let t = Tokens::get();
+        if state.busy {
+            egui::Spinner::new().size(t.space_14).paint_at(ui, self.icon);
+            let status = state.text.as_deref().unwrap_or_else(|| crate::i18n::tr_label("Updating the preview"));
+            ui.interact(self.icon, ui.id().with("compute_status"), egui::Sense::hover()).on_hover_text(status);
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        } else {
+            crate::icons::paint_icon(ui.painter(), self.icon, icon, 1.0);
+        }
+        let heading = crate::fonts::semibold(t.font_heading);
+        match state.text.as_deref() {
+            Some(status) => paint_text(ui, self.title, status, crate::fonts::medium(t.font_label), t.form_dim, false),
+            None => paint_text(ui, self.title, title, heading.clone(), t.form_ink, false),
+        }
+        let title_response = ui.interact(self.title, ui.make_persistent_id("title_text"), egui::Sense::hover());
+        title_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), title));
+        // The buttons take the row's width first; a title that no longer fits says itself on hover.
+        if ui.painter().layout_no_wrap(title.to_owned(), heading, t.form_ink).size().x > self.title.width() {
+            title_response.on_hover_text(title);
+        }
+        self.actions.show(ui, ok_enabled)
+    }
+}
+
 /// A bounded docked or floating card. Uses form_card_width and the caller's tokenised frame.
 /// Window IDs and content scopes are retained so moving a card does not reset field focus.
 pub(crate) struct Panel<'a> {
@@ -76,11 +194,21 @@ pub(crate) struct Panel<'a> {
     ok: &'a str,
     cancel: &'a str,
     reset_scroll: bool,
+    joined: Option<super::DockEdges>,
+}
+
+pub(crate) struct WorkspaceOptions<'a> {
+    pub id: &'static str,
+    pub title: &'a str,
+    pub icon: &'a str,
+    pub bounds: egui::Rect,
+    pub fill_height: bool,
 }
 
 pub(crate) struct FeatureOptions<'a> {
     pub icon: &'a str,
     pub title: &'a str,
+    /// The dock offset the title band drags; empty for a card that stays in its place.
     pub drag_key: &'a str,
     pub moved: egui::Vec2,
     pub docked: egui::Pos2,
@@ -115,6 +243,121 @@ impl<'a> Panel<'a> {
             .show(ui, add)
     }
 
+    /// Floating workspace strip using the same bottom rectangle and chrome as History.
+    pub(crate) fn bottom_strip<R>(
+        ui: &mut Ui,
+        id: &'static str,
+        available: egui::Rect,
+        height: f32,
+        add: impl FnOnce(&mut Ui) -> R,
+    ) -> Option<egui::InnerResponse<R>> {
+        let container = super::Container::floating_card(super::Surface::Panel);
+        let rect = container.bottom_strip_rect(available, height);
+        if !rect.is_finite() || rect.width() < Tokens::get().control_height || rect.height() < Tokens::get().control_height {
+            return None;
+        }
+        let ctx = ui.ctx().clone();
+        Some(container.area(egui::Id::new(id)).fixed_pos(rect.min).movable(false).order(egui::Order::Middle).show(&ctx, |ui| {
+            let frame = container.frame(&ctx, Tokens::get().panel, crate::frame::Side::Left).inner_margin(Tokens::get().space_4);
+            container
+                .show_frame(ui, frame, rect, |ui| {
+                    ui.set_min_size((rect.size() - frame.total_margin().sum()).max(egui::Vec2::ZERO));
+                    ui.set_max_size((rect.size() - frame.total_margin().sum()).max(egui::Vec2::ZERO));
+                    super::scope(ui, add)
+                })
+                .inner
+        }))
+    }
+
+    /// Bounded floating workspace card. The shared grip chooses a side; the inner resize
+    /// rail changes its remembered width. Neither gesture changes the document.
+    pub(crate) fn workspace<R>(
+        ui: &mut Ui,
+        options: WorkspaceOptions<'_>,
+        side: &mut String,
+        width: &mut f32,
+        add: impl FnOnce(&mut Ui) -> R,
+    ) -> Option<egui::InnerResponse<R>> {
+        let container = super::Container::floating_card(super::Surface::Panel);
+        // The ribbon has already reserved the top gap, as for the Design Browser.
+        let gap = Tokens::get().space_8;
+        let bounds = egui::Rect::from_min_max(options.bounds.min + vec2(gap, 0.0), options.bounds.max - vec2(gap, gap));
+        let t = Tokens::get();
+        if !bounds.is_finite() || bounds.width() < t.control_height || bounds.height() < t.form_header_height {
+            return None;
+        }
+        let maximum = (t.form_card_width * 1.8).min((bounds.width() - gap).max(0.0) / 2.0);
+        if maximum < t.control_height * 4.0 {
+            return None;
+        }
+        let minimum = crate::frame::DIALOG_MIN_W.min(maximum);
+        *width = if width.is_finite() { width.clamp(minimum, maximum) } else { t.form_card_width.min(maximum) };
+        let left = side == "left";
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(if left { bounds.left() } else { bounds.right() - *width }, bounds.top()),
+            vec2(*width, bounds.height()),
+        );
+        let ctx = ui.ctx().clone();
+        let response = container.area(egui::Id::new(options.id)).fixed_pos(rect.min).movable(false).order(egui::Order::Middle).show(&ctx, |ui| {
+            let frame = container.frame(&ctx, t.panel, if left { crate::frame::Side::Left } else { crate::frame::Side::Right }).inner_margin(0.0);
+            let content = container.show_frame(ui, frame, bounds, |ui| {
+                let size = (rect.size() - frame.total_margin().sum()).max(egui::Vec2::ZERO);
+                // Allocate the bounded host once; overflowing controls scroll/clip inside a child,
+                // so a short window cannot grow a floating dock over the top bar or bottom strip.
+                let (body, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body).id_salt("workspace_body"));
+                let ui = &mut child;
+                ui.set_clip_rect(ui.clip_rect().intersect(body));
+                ui.set_width(size.x);
+                ui.set_max_height(size.y);
+                if options.fill_height {
+                    ui.set_min_height(size.y);
+                }
+                // Use the same fixed-height header as Panel/Window. Workspace cards are
+                // persistent; their navigation lives in the separately padded body.
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let band = egui::Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), header_height()));
+                let grip = ui.interact(band, ui.id().with("workspace_grip"), egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::Grab);
+                scenario::publish_target(&format!("{}:grip", options.id), grip.rect);
+                header_impl(ui, options.icon, options.title, None, false, || {});
+                scenario::publish_rect(&format!("{}:header", options.id), band);
+                if grip.dragged() {
+                    let frame_nr = ui.ctx().cumulative_frame_nr();
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("sc_dock_drag_frame"), frame_nr));
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                }
+                if grip.drag_stopped()
+                    && let Some(at) = ui.ctx().pointer_latest_pos()
+                {
+                    *side = if at.x < options.bounds.center().x { "left" } else { "right" }.into();
+                    ui.ctx().request_repaint();
+                }
+                egui::Frame::NONE
+                    .inner_margin(t.space_12)
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = t.form_gap_y;
+                        super::scope(ui, add)
+                    })
+                    .inner
+            });
+            let card = content.response.rect;
+            let rail = egui::Rect::from_x_y_ranges(
+                if left { card.right() - t.space_6..=card.right() } else { card.left()..=card.left() + t.space_6 },
+                card.y_range(),
+            );
+            let resize = ui.interact(rail, ui.id().with("workspace_resize"), egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            scenario::publish_target(&format!("{}:resize", options.id), rail);
+            if resize.dragged() {
+                let delta = ui.input(|i| i.pointer.delta().x) * if left { 1.0 } else { -1.0 };
+                if delta.is_finite() {
+                    *width = (*width + delta).clamp(minimum, maximum);
+                }
+            }
+            content.inner
+        });
+        Some(response)
+    }
+
     /// Shared floating card surface for panels, windows and modal confirmations.
     pub(super) fn card_frame(ctx: &egui::Context) -> egui::Frame {
         let t = Tokens::get();
@@ -147,7 +390,15 @@ impl<'a> Panel<'a> {
             ok: "OK",
             cancel: "Cancel",
             reset_scroll: false,
+            joined: None,
         }
+    }
+
+    /// The edges the card meets the window or a docked surface at (a dialog in the left column):
+    /// in Compact, only its other corners round.
+    pub(crate) fn joined(mut self, edges: super::DockEdges) -> Self {
+        self.joined = Some(edges);
+        self
     }
 
     /// A newly opened manager starts at its first section. Later frames retain user scrolling.
@@ -206,7 +457,8 @@ impl<'a> Panel<'a> {
             crate::frame::Side::Right => anchor.x,
             crate::frame::Side::Left => anchor.x + self.width.min(self.viewport.width().max(0.0)),
         };
-        super::Container::new(ctx, super::Surface::Feature).tool_frame(self.frame, right >= self.viewport.right() - 0.5)
+        let container = super::Container::new(ctx, super::Surface::Feature);
+        self.joined.map_or(container, |edges| container.joined(edges)).tool_frame(self.frame, right >= self.viewport.right() - 0.5)
     }
 
     pub(crate) fn window(&self, ctx: &egui::Context) -> egui::Window<'a> {
@@ -285,18 +537,27 @@ impl<'a> Panel<'a> {
             let t = Tokens::get();
             let min = ui.cursor().min;
             let band = egui::Rect::from_min_size(min, vec2(ui.available_width(), super::header_height()));
-            crate::frame::drag_dock(ui, band, heading.drag_key, heading.moved, self.bounded_anchor(ui.ctx()) - heading.docked);
-            let mut close = false;
-            if let Some(collapsed) = collapsed.as_deref_mut() {
-                collapsible_header(ui, heading.icon, heading.title, collapsed, || close = true);
+            if heading.drag_key.is_empty() {
+                scenario::publish_handle("dialog:title", band.center());
             } else {
-                header(ui, heading.icon, heading.title, || close = true);
+                crate::frame::drag_dock(ui, band, heading.drag_key, heading.moved, self.bounded_anchor(ui.ctx()) - heading.docked);
             }
+            let mut close = false;
+            let top = if DialogButtons::current(ui.ctx()) == DialogButtons::Top {
+                Some(TopHeader::new(ui, self.ok, heading.apply_label, self.cancel, collapsed.as_deref_mut(), &mut close))
+            } else {
+                if let Some(collapsed) = collapsed.as_deref_mut() {
+                    collapsible_header(ui, heading.icon, heading.title, collapsed, || close = true);
+                } else {
+                    header(ui, heading.icon, heading.title, || close = true);
+                }
+                None
+            };
             let bottom = self.viewport.bottom()
                 - super::Container::new(ui.ctx(), super::Surface::Feature).gap()
                 - self.frame.inner_margin.bottomf()
                 - self.frame.stroke.width;
-            let footer_height = t.form_footer_height;
+            let footer_height = if top.is_some() { 0.0 } else { t.form_footer_height };
             let fields_height = (bottom - ui.cursor().top() - footer_height - ui.spacing().item_spacing.y).max(0.0);
             let fields_height = self.body_rows.map_or(fields_height, |rows| fields_height.min(rows * t.control_height + t.space_12 * 2.0));
             let fields_rect = egui::Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), fields_height));
@@ -331,6 +592,11 @@ impl<'a> Panel<'a> {
                 })
                 .inner
             };
+            if let Some(top) = &top {
+                let action = top.finish(ui, heading.icon, heading.title, &state, valid && !state.applying);
+                super::Container::finish_content(ui, self.positioned_frame(ui.ctx()));
+                return (close, action);
+            }
             let corners = self.positioned_frame(ui.ctx()).corner_radius;
             let action = super::footer(
                 ui,
@@ -574,18 +840,48 @@ impl<'a> Window<'a> {
     }
 
     /// Declarative page navigation: the kit owns geometry, selection and page scrolling.
+    /// Preferences uses [`Self::show_pages_with_header`]; this entry is what the page-list tests call.
+    #[cfg(test)]
     pub(crate) fn show_pages<S>(
-        mut self,
+        self,
         ctx: &egui::Context,
         selected: &mut usize,
         pages: &[WindowPage<S>],
         state: &mut S,
         left: impl FnOnce(&mut Ui),
     ) -> (bool, super::Action) {
+        self.show_pages_inner(ctx, selected, pages, state, None, None, left)
+    }
+
+    /// Page navigation with a strip above the page body (Preferences search).
+    /// `on_select` runs when a page tab is clicked, before that page is drawn.
+    pub(crate) fn show_pages_with_header<S>(
+        self,
+        ctx: &egui::Context,
+        selected: &mut usize,
+        pages: &[WindowPage<S>],
+        state: &mut S,
+        header: fn(&mut Ui, &mut S),
+        on_select: fn(&mut S),
+        left: impl FnOnce(&mut Ui),
+    ) -> (bool, super::Action) {
+        self.show_pages_inner(ctx, selected, pages, state, Some(header), Some(on_select), left)
+    }
+
+    fn show_pages_inner<S>(
+        mut self,
+        ctx: &egui::Context,
+        selected: &mut usize,
+        pages: &[WindowPage<S>],
+        state: &mut S,
+        header: Option<fn(&mut Ui, &mut S)>,
+        on_select: Option<fn(&mut S)>,
+        left: impl FnOnce(&mut Ui),
+    ) -> (bool, super::Action) {
         self.body_padding = false;
         let rows = self.page_rows;
         let padding = self.page_padding;
-        self.show_with_left(ctx, true, |ui| page_list_sized(ui, selected, pages, state, rows, padding), left)
+        self.show_with_left(ctx, true, |ui| page_list_sized(ui, selected, pages, state, rows, padding, header, on_select), left)
     }
 
     /// The same bounded card frame, either movable or an input-blocking modal.
@@ -648,13 +944,25 @@ pub(crate) struct WindowPage<S> {
 
 #[cfg(test)]
 pub(super) fn page_list<S>(ui: &mut Ui, selected: &mut usize, pages: &[WindowPage<S>], state: &mut S) {
-    page_list_sized(ui, selected, pages, state, 16.0, vec2(Tokens::get().space_16, Tokens::get().space_16));
+    page_list_sized(ui, selected, pages, state, 16.0, vec2(Tokens::get().space_16, Tokens::get().space_16), None, None);
 }
 
-fn page_list_sized<S>(ui: &mut Ui, selected: &mut usize, pages: &[WindowPage<S>], state: &mut S, rows: f32, padding: egui::Vec2) {
+fn page_list_sized<S>(
+    ui: &mut Ui,
+    selected: &mut usize,
+    pages: &[WindowPage<S>],
+    state: &mut S,
+    rows: f32,
+    padding: egui::Vec2,
+    header: Option<fn(&mut Ui, &mut S)>,
+    on_select: Option<fn(&mut S)>,
+) {
     let t = Tokens::get();
+    // The search strip, the gap under it, and the following item spacing sit above the page.
+    // They must not eat the rows the page already had, or the graphics checkboxes fall out of view.
+    let header_band = if header.is_some() { t.control_height + t.form_gap_y + t.space_8 } else { 0.0 };
     let height = (dimension(ui.ctx().content_rect().height()) - t.form_header_height - t.form_footer_height - t.space_24 * 3.0)
-        .clamp(0.0, t.control_height * rows);
+        .clamp(0.0, t.control_height * rows + header_band);
     let (body, _) = ui.allocate_exact_size(vec2(dimension(ui.available_width()), height), egui::Sense::hover());
     let width = (t.form_label_width * 2.0 + t.space_24 * 2.0).min(body.width());
     let nav = egui::Rect::from_min_size(body.min, vec2(width, body.height()));
@@ -678,6 +986,9 @@ fn page_list_sized<S>(ui: &mut Ui, selected: &mut usize, pages: &[WindowPage<S>]
                     ui.allocate_exact_size(vec2(dimension(ui.available_width()), t.control_height + t.space_4), egui::Sense::click());
                 if response.clicked() {
                     *selected = index;
+                    if let Some(on_select) = on_select {
+                        on_select(state);
+                    }
                 }
                 let on = *selected == index;
                 if on || response.hovered() || response.has_focus() {
@@ -715,8 +1026,12 @@ fn page_list_sized<S>(ui: &mut Ui, selected: &mut usize, pages: &[WindowPage<S>]
             let clip = egui::Rect::from_min_max(content.min, egui::pos2(body.right(), content.bottom()));
             ui.set_clip_rect(ui.clip_rect().intersect(clip));
             ui.spacing_mut().item_spacing.y = t.form_gap_y;
+            if let Some(header) = header {
+                header(ui, state);
+            }
+            let force_scroll = header.is_some() && crate::prefs_search::force_scroll(ui.ctx());
             if let Some(page) = pages.get(*selected) {
-                if page.scroll {
+                if page.scroll || force_scroll {
                     let scroll = super::settings_scroll(ui, ("sc_prefs_page", *selected), |ui| (page.draw)(ui, state));
                     scenario::publish_rect("dialog:page_body", scroll.inner_rect);
                 } else {

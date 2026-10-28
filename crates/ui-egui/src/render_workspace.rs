@@ -204,10 +204,47 @@ fn setup_progress(ui: &mut egui::Ui, app: &SolveApp, started: std::time::Instant
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Stage {
+    #[default]
+    Look,
+    Light,
+    Frame,
+    Output,
+}
+impl Stage {
+    pub(crate) const ALL: [Self; 4] = [Self::Look, Self::Light, Self::Frame, Self::Output];
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::Look => "look",
+            Self::Light => "light",
+            Self::Frame => "frame",
+            Self::Output => "output",
+        }
+    }
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Look => "render.stage_look",
+            Self::Light => "render.stage_light",
+            Self::Frame => "render.stage_frame",
+            Self::Output => "render.stage_output",
+        }
+    }
+    fn page(self) -> inspector::Page {
+        match self {
+            Self::Look => inspector::Page::Appearance,
+            Self::Light => inspector::Page::Lighting,
+            Self::Frame => inspector::Page::Camera,
+            Self::Output => inspector::Page::Output,
+        }
+    }
+}
+
 /// Small per-document editor state; GPU uploads and host capabilities stay outside tabs.
 #[derive(Clone, Debug)]
 pub struct ViewState {
     pub name: String,
+    pub(crate) stage: Stage,
     draft: RenderSetup,
     dirty: bool,
     clean_setup: Option<RenderSetup>,
@@ -262,6 +299,7 @@ impl Default for ViewState {
     fn default() -> Self {
         Self {
             name: "Studio".into(),
+            stage: Stage::Look,
             draft: RenderSetup::default(),
             dirty: false,
             clean_setup: None,
@@ -336,7 +374,7 @@ impl State {
 }
 
 pub fn active(app: &SolveApp) -> bool {
-    app.ui.tab == "RENDER"
+    crate::workspace::render_tab(&app.ui.tab)
 }
 
 pub(crate) fn result_active(app: &SolveApp) -> bool {
@@ -358,7 +396,7 @@ pub(crate) fn inspect_state(app: &SolveApp) -> serde_json::Value {
         ImageMethod::GpuRaytrace => "gpu_path",
     };
     json!({
-        "active": active(app), "setup": view.name, "draft_dirty": view.dirty,
+        "active": active(app), "stage": view.stage.key(), "setup": view.name, "draft_dirty": view.dirty,
         "method": method, "job": view.job, "completed": view.completed,
         "showing_result": view.result, "export_format": if view.studio.export_exr {"exr"} else {"png"},
     })
@@ -437,6 +475,7 @@ pub fn tick(app: &mut SolveApp, ctx: &egui::Context) {
 }
 
 pub fn reset_document(app: &mut SolveApp) {
+    crate::render_ui::reset_shell(app);
     app.ui.ribbon_context = None;
     let host = app.render_workspace.host.clone();
     let image_host = app.render_workspace.image_host.clone();
@@ -478,9 +517,10 @@ pub fn enter(app: &mut SolveApp, render: bool) -> Result<(), String> {
         if !active(app) {
             app.render_workspace.design_camera = Some((app.cam, app.ui.perspective));
             app.ui.tab = "RENDER".into();
+            select_stage(app, app.render_workspace.view.stage.key());
             let scene = solidcraft_engine::product_scene::extract(&app.session).map_err(|e| e.to_string())?;
             if !scene.bounds.is_empty() {
-                app.cam.fit(&scene.bounds);
+                app.fit_bounds(scene.bounds);
             }
         }
         setups::refresh_dirty(app);
@@ -496,9 +536,50 @@ pub fn enter(app: &mut SolveApp, render: bool) -> Result<(), String> {
             app.ui.perspective = perspective;
         }
         app.ui.tab = "MODEL".into();
+        crate::render_ui::reset_shell(app);
     }
-    app.cancel_view_animation();
+    app.cam_anim = None;
+    if !render {
+        app.pending_fit = None;
+    }
     Ok(())
+}
+
+/// Stage navigation is transient per-document state. It never applies a resource or starts a job.
+pub(crate) fn select_stage(app: &mut SolveApp, key: &str) {
+    let stage = match key {
+        "look" => Stage::Look,
+        "light" => Stage::Light,
+        "frame" => Stage::Frame,
+        "output" => Stage::Output,
+        _ => return,
+    };
+    app.render_workspace.view.stage = stage;
+    app.render_workspace.view.inspector.page = stage.page();
+    // The current Browser has model folders only. Reveal Objects for Look; scene-specific
+    // Lights/Shots/Output expansion belongs to the scene Browser implementation.
+    if stage == Stage::Look {
+        app.tree.collapsed.remove("c0");
+        app.tree.collapsed.remove("c0/bodies");
+    }
+}
+
+pub(crate) fn switch_shot(app: &mut SolveApp, name: String) {
+    inspector::switch_shot(app, name);
+}
+pub(crate) fn stage_projection(app: &mut SolveApp, perspective: bool) -> Result<(), String> {
+    let mut camera = app.cam;
+    camera.fov = if perspective { 0.6 } else { 0.0 };
+    inspector::apply_camera_draft(app, camera)
+}
+
+pub(crate) fn output_summary(app: &SolveApp) -> (String, &'static str) {
+    let view = &app.render_workspace.view;
+    (format!("{} × {}", view.draft.width, view.draft.height), if view.studio.export_exr { "EXR" } else { "PNG" })
+}
+
+pub(crate) fn job_ready(app: &SolveApp, id: &str) -> Result<(), String> {
+    ribbon::action_ready(app, id)
 }
 
 pub fn panel(app: &mut SolveApp, ui: &mut egui::Ui) {
@@ -1342,8 +1423,13 @@ impl State {
 /// on the user-selected background (which may have the opposite theme contrast).
 fn preview_error(app: &mut SolveApp, ui: &mut egui::Ui, rect: egui::Rect, error: &str) {
     let t = Tokens::get();
-    let bounded = rect.shrink(t.space_12);
+    let bounded = crate::shell::workspace_content(app, crate::shell::panel_bounds(app, rect)).shrink(t.space_12);
+    // At tiny window sizes the shell may leave no room for the shared error card.
+    if !bounded.is_finite() || bounded.width() < t.control_height + 2.0 * t.space_8 || bounded.height() < t.control_height + 2.0 * t.space_8 {
+        return;
+    }
     ui.scope_builder(egui::UiBuilder::new().max_rect(bounded), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(bounded));
         ui.set_max_width(bounded.width().min(t.form_card_width * 2.0));
         crate::ui_kit::Panel::feature_frame(ui.ctx(), crate::shell::LayoutMode::Floating, crate::frame::Side::Left).inner_margin(t.space_8).show(
             ui,
@@ -1511,6 +1597,7 @@ pub fn gpu_scene(scene: &ProductScene) -> Result<(u64, GpuScene), String> {
             });
             let [Some(a), Some(b), Some(c)] = vertices else { return Err("invalid product triangle".into()) };
             let rgba = [color[0], color[1], color[2], (opacity * 255.0).round() as u8];
+            let index = gpu.color(rgba);
             for (p, n) in [a, b, c] {
                 if let Some(surface) = surface {
                     if n.iter().all(|v| *v == 0.0) {
@@ -1518,9 +1605,9 @@ pub fn gpu_scene(scene: &ProductScene) -> Result<(u64, GpuScene), String> {
                     }
                     gpu.pbr_tri(p, n, surface);
                 } else if opacity < 0.999 {
-                    gpu.glass_tri(p, n, rgba);
+                    gpu.glass_tri(p, n, index);
                 } else {
-                    gpu.tri(p, n, rgba);
+                    gpu.tri(p, n, index);
                 }
             }
         }
