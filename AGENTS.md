@@ -45,3 +45,4 @@ Work: ROADMAP.md, "Where help is wanted most" in CONTRIBUTING.md, issues labelle
 | A bug report, a crash, a wrong result | `skills/solidcraft-reporting/SKILL.md` |
 | Checking, porting, designs in git | `skills/solidcraft-checking/SKILL.md` |
 | Assemblies, joints, motion | `skills/solidcraft-mechanisms/SKILL.md` |
+| The Android port: merging upstream, port changes | `skills/solidcraft-android-port/SKILL.md` |

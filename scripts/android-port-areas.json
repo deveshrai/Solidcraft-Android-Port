@@ -1,0 +1,124 @@
+{
+  "about": "The Android port's touch points in upstream SolidCraft: every upstream file the port changes belongs to one area, and each area names the tests that prove it still works after a merge. Read by scripts/android-port.py (docs/android-sync.md, 'How the port stays mergeable'). Files only the port has (apps/solidcraft-android, the port's docs, pending files) need no entry.",
+  "areas": [
+    {
+      "name": "Touch input",
+      "why": "One finger orbits, two pan, a pinch zooms; a finger drags a dialog's arrows and scrolls a drop-down; the patched winit gives the mouse and keyboard",
+      "files": [
+        "crates/ui-egui/src/navigation.rs",
+        "crates/ui-egui/src/viewport.rs",
+        "crates/ui-egui/src/canvas.rs",
+        "crates/ui-egui/src/toolbar.rs",
+        "crates/ui-egui/src/extrude_edit_tests.rs"
+      ],
+      "tests": [
+        "solidcraft-ui-egui --lib one_finger_drag_orbits two_fingers_pan_and_pinch a_tap_selects pinch_gesture a_tap_picks_a_profile a_finger_on_the_arrow_stem a_finger_scrolls_a_tall_drop_down"
+      ]
+    },
+    {
+      "name": "Helical B-rep threads",
+      "why": "Exact helical threads, custom pitch, clearance, offsets; the Thread dialog's Type and Geometry rows",
+      "files": [
+        "crates/kernel/src/lib.rs",
+        "crates/kernel/src/thread_tests.rs",
+        "crates/doc/src/document.rs",
+        "crates/doc/src/eval.rs",
+        "crates/doc/src/lib.rs",
+        "crates/engine/src/cmd/features.rs",
+        "crates/engine/src/thread_tests.rs",
+        "crates/ui-egui/src/dialogs_thread.rs",
+        "crates/ui-egui/src/dialogs_dense.rs",
+        "crates/ui-egui/src/dialogs_all_tests.rs"
+      ],
+      "tests": [
+        "solidcraft-kernel --lib helical",
+        "solidcraft-engine --lib thread",
+        "solidcraft-ui-egui --lib dialogs_thread"
+      ]
+    },
+    {
+      "name": "Gears",
+      "why": "gear.create, gear.info, gear.edit and the Gear dialog; flanks as exact Beziers (one face each)",
+      "files": [
+        "crates/engine/src/cmd/mod.rs",
+        "crates/engine/src/cmd/sketch_import.rs",
+        "crates/engine/src/lib.rs",
+        "crates/ui-egui/src/dialogs.rs",
+        "crates/ui-egui/src/browser.rs",
+        "crates/ui-egui/src/context_menu.rs",
+        "crates/ui-egui/src/workspace.rs",
+        "crates/ui-egui/src/lib.rs",
+        "assets/icons/ui/design/requested_icons.txt"
+      ],
+      "tests": [
+        "solidcraft-engine --lib gear",
+        "solidcraft-ui-egui --lib gear"
+      ]
+    },
+    {
+      "name": "Design files",
+      "why": "The port writes upstream's format plus its pending helical-thread changes; designs saved by earlier port releases must keep opening",
+      "files": [],
+      "tests": [
+        "solidcraft-doc --lib format",
+        "solidcraft-cli --test design_corpus"
+      ]
+    },
+    {
+      "name": "Agents and the MCP server",
+      "why": "Settings > MCP server; agent commands, timed batches too, compute off the window thread",
+      "files": [
+        "crates/ui-egui/src/control.rs",
+        "crates/ui-egui/src/control_job.rs",
+        "crates/ui-egui/src/history_off_thread_tests.rs",
+        "crates/ui-egui/src/prefs.rs",
+        "crates/ui-egui/src/agent_chat/mod.rs",
+        "crates/ui-egui/src/agent_chat/paste.rs"
+      ],
+      "tests": [
+        "solidcraft-android",
+        "solidcraft-ui-egui --lib a_timed_batch_computes_off_the_window_thread an_agent_design_change_computes_off_the_window_thread mcp_server",
+        "solidcraft-mcp --lib handshake_and_tools_list a_request_still_running_is_left_to_the_pending_tool pending_is_empty_headless remote_engine_batch_is_not_resent_after_a_lost_reply running_asks_the_app running_is_asked_at_once auto_session_bridges_to_a_late_app"
+      ]
+    },
+    {
+      "name": "Kernel speed",
+      "why": "B-spline surfaces skip zero basis terms; flat joins skip faces that can't reach the contact; straight sweeps keep smooth walls",
+      "files": [
+        "vendor/truck-geometry/src/nurbs/bspsurface.rs",
+        "crates/kernel/src/coplanar.rs",
+        "crates/kernel/src/sweep_path.rs"
+      ],
+      "markers": [
+        { "file": "vendor/truck-geometry/src/nurbs/bspsurface.rs", "pattern": "SolidCraft: (only the degree \\+ 1 basis functions|zero basis terms skipped)", "count": 6 },
+        { "file": "crates/kernel/src/coplanar.rs", "pattern": "SolidCraft \\(Android port\\): a side face clear of the faces it would split", "count": 1 },
+        { "file": "apps/solidcraft-android/src/lib.rs", "pattern": "agent_off_thread = true", "count": 1 }
+      ],
+      "tests": [
+        "solidcraft-kernel --lib coplanar sweep_path",
+        "solidcraft-engine --lib a_flank_is_one_face_a_curve swept_gears_take_a_bore_quickly"
+      ]
+    },
+    {
+      "name": "The Android build",
+      "why": "Crates and settings the Android app needs: no arboard there, Android's system fonts, the patched winit, the port's app registered with the repository checks",
+      "files": [
+        ".gitignore",
+        "Cargo.toml",
+        "Cargo.lock",
+        "crates/ui-egui/Cargo.toml",
+        "crates/ui-egui/src/fonts.rs",
+        "xtask/src/assets.rs",
+        "xtask/src/layers.rs",
+        "skills/solidcraft-crash-safety/SKILL.md",
+        "vendor/README.md",
+        "ATTRIBUTION.md",
+        "docs/building.md",
+        "README.md",
+        "AGENTS.md",
+        "apps/solidcraft-cli/tests/corpus/README.md"
+      ],
+      "tests": []
+    }
+  ]
+}

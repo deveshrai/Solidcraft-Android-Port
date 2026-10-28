@@ -3,6 +3,10 @@
 #
 #   scripts/android-sync.sh                 fetch upstream, merge upstream/main, check, build the APK
 #   scripts/android-sync.sh --to v0.21.0    merge an upstream release tag instead of upstream/main
+#   scripts/android-sync.sh --latest        merge the newest upstream release tag
+#   scripts/android-sync.sh --preview [TAG] change nothing: a trial merge of TAG (default the newest
+#                                           release) in a scratch worktree, its conflicts and what it
+#                                           changes in each port area
 #   scripts/android-sync.sh --no-build      the same without the APK
 #   scripts/android-sync.sh --check-only    no fetch or merge: check the tree as it is (and build)
 #   scripts/android-sync.sh --revendor X.Y.Z
@@ -23,6 +27,7 @@ NDK_TARGET="aarch64-linux-android"
 build=1
 merge=1
 revendor=""
+preview=""
 to=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -30,7 +35,11 @@ while [ $# -gt 0 ]; do
         --check-only) merge=0 ;;
         --to) to="${2:?--to needs an upstream tag or commit}"; shift ;;
         --revendor) revendor="${2:?--revendor needs a winit version}"; merge=0; shift ;;
-        -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
+        --latest) to="latest" ;;
+        --preview)
+            preview="latest"
+            if [ $# -gt 1 ] && [[ "$2" != --* ]]; then preview="$2"; shift; fi ;;
+        -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -50,6 +59,16 @@ command -v cargo >/dev/null || fail "cargo not found (install Rust: https://rust
 cargo ndk --version >/dev/null 2>&1 || fail "cargo-ndk not found (cargo install cargo-ndk)"
 [ -d "${ANDROID_NDK_HOME:-}" ] || fail "no Android NDK (set ANDROID_NDK_HOME, or sdkmanager \"ndk;29.0.14206865\")"
 
+PORT="python3 scripts/android-port.py"
+
+# ---- preview -----------------------------------------------------------------------------------
+if [ -n "$preview" ]; then
+    git fetch -q --tags "$UPSTREAM_REMOTE" "$UPSTREAM_BRANCH"
+    [ "$preview" = latest ] && preview=""
+    $PORT preview $preview
+    exit 0
+fi
+
 # ---- merge upstream ----------------------------------------------------------------------------
 if [ "$merge" = 1 ]; then
     git diff --quiet && git diff --cached --quiet || fail "uncommitted changes: commit or stash them first"
@@ -58,16 +77,30 @@ if [ "$merge" = 1 ]; then
     step "Fetching $UPSTREAM_REMOTE"
     git fetch --tags "$UPSTREAM_REMOTE" "$UPSTREAM_BRANCH"
     # A release tag (upstream cuts releases on their own line, not always on main) or main.
+    if [ "$to" = latest ]; then
+        to=$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+        echo "newest upstream release: $to"
+    fi
     target="${to:-$UPSTREAM_REMOTE/$UPSTREAM_BRANCH}"
     git rev-parse -q --verify "$target^{commit}" >/dev/null || fail "no upstream '$target' (tags: git tag -l 'v*')"
     new=$(git rev-list --count "HEAD..$target")
     echo "$new new upstream commit(s) in $target"
     if [ "$new" -gt 0 ]; then
+        step "What $target changes in the port's areas"
+        $PORT report "$target" || true
         step "Merging $target"
         if ! git merge --no-edit -m "Merge upstream $target" "$target"; then
             echo
             git diff --name-only --diff-filter=U | sed 's/^/  conflict: /'
-            fail "merge conflicts: resolve them (docs/android-sync.md, 'Conflicts'), git commit, then run scripts/android-sync.sh --check-only"
+            fail "merge conflicts: resolve them keeping both sides (docs/android-sync.md, 'Conflicts'), git commit, then run scripts/android-sync.sh --check-only"
+        fi
+        step "Port strings upstream now has too"
+        if ! $PORT strings --fix; then
+            fail "a port string id now means something else upstream: rename it (assets/locales/pending/android-port.json)"
+        fi
+        if ! git diff --quiet -- assets/locales/pending/android-port.json; then
+            git commit -q -m "Drop the port's strings upstream $target now has" -- assets/locales/pending/android-port.json
+            echo "dropped and committed"
         fi
     fi
 fi
@@ -116,27 +149,25 @@ step "Browser build of the UI crate (wasm32)"
 rustup target list --installed | grep -q wasm32-unknown-unknown || rustup target add wasm32-unknown-unknown
 cargo check -p solidcraft-ui-egui --target wasm32-unknown-unknown || fail "wasm build"
 
-step "Repository checks (layers, assets)"
+step "Repository checks (layers, assets, lists, skills)"
 cargo xtask layers >/dev/null || fail "cargo xtask layers"
 cargo xtask assets || fail "cargo xtask assets"
+cargo xtask lists || fail "cargo xtask lists: a list is out of order, or a port string clashes with upstream's"
+cargo xtask skills || fail "cargo xtask skills: AGENTS.md or a skill (the port's lines count toward upstream's size caps)"
 
-step "Android tests (touch input, document names)"
-cargo test -q -p solidcraft-android
-cargo test -q -p solidcraft-ui-egui --lib -- one_finger_drag_orbits two_fingers_pan_and_pinch a_tap_selects pinch_gesture \
-    a_tap_picks_a_profile a_finger_on_the_arrow_stem \
-    || fail "touch tests"
+step "Every upstream file the port changes is registered"
+$PORT touchpoints || fail "register the file in scripts/android-port-areas.json, with the test that proves it"
 
-step "The port's speed fixes are still in place"
-# Upstream may re-vendor truck or rework the agent's control path: a merge that drops one of these
-# makes gear and thread booleans many times slower, or the app "not responding" on a long agent
-# call, without failing a build. Each is checked by its marker and its test.
-n=$(grep -cE "SolidCraft: (only the degree \+ 1 basis functions|zero basis terms skipped)" vendor/truck-geometry/src/nurbs/bspsurface.rs || true)
-[ "$n" -ge 6 ] || fail "vendor/truck-geometry/src/nurbs/bspsurface.rs lost the port's zero-basis skip ($n of 6 places): re-apply it (docs/android-sync.md, 'The port's speed fixes')"
-grep -q "agent_off_thread = true" apps/solidcraft-android/src/lib.rs \
-    || fail "apps/solidcraft-android/src/lib.rs no longer turns on agent_off_thread: agents' calls would block the window thread"
-cargo test -q -p solidcraft-engine --lib -- gear_profile a_flank_is_one_face_a_curve || fail "gear flanks are no longer one face a curve"
-cargo test -q -p solidcraft-ui-egui --lib -- a_timed_batch_computes_off_the_window_thread an_agent_design_change_computes_off_the_window_thread \
-    || fail "agents' commands no longer compute off the window thread"
+step "The port's marked fixes are in place"
+$PORT markers || fail "a merge dropped a port fix (docs/android-sync.md, 'The port's speed fixes')"
+
+step "Port strings against upstream's"
+$PORT strings || fail "port strings collide with upstream's: scripts/android-port.py strings --fix"
+
+step "Each port area's tests"
+# Gears, helical threads, design files (old port designs still open), the MCP server, agents off
+# the window thread, touch input and the kernel's speed fixes; a filter that matches no test fails.
+$PORT tests || fail "a port area's tests fail: the area's files are in scripts/android-port-areas.json"
 
 # ---- APK ---------------------------------------------------------------------------------------
 if [ "$build" = 1 ]; then

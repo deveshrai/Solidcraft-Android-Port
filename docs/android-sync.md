@@ -22,40 +22,96 @@ cd solidcraft-android
 git remote add upstream https://github.com/tangency-labs/solidcraft
 ```
 
+## How the port stays mergeable
+
+Upstream is free to change anything, in any direction, as often as it likes: the port never asks
+it to hold still. Instead the port knows exactly where it touches upstream, and proves after
+every merge that each of those places still works.
+
+- **The port lives in its own files where it can**: the Android app (`apps/solidcraft-android/`),
+  the gear generator (`crates/engine/src/gear_profile.rs`), the MCP endpoint, the port's docs, and
+  upstream's own folders for unfolded additions (pending strings, attribution rows and
+  design-format changes). Upstream never edits those, so they never conflict.
+- **Every upstream file the port changes is registered** in
+  [`scripts/android-port-areas.json`](../scripts/android-port-areas.json), in one of seven areas
+  (touch input, helical threads, gears, design files, agents and the MCP server, kernel speed, the
+  Android build), and each area names the tests that prove it. About 45 upstream files carry
+  port changes as of 0.25.1a, most of them a few lines.
+- **A fix a merge could quietly undo carries a marker**: a `SolidCraft` comment the area lists, so
+  a merge that takes upstream's version of the file is caught even when everything builds.
+- **Designs saved by port releases are kept** in upstream's design corpus
+  (`apps/solidcraft-cli/tests/corpus/port-*.solidcraft`, each saved by that release's CLI with
+  its expected evaluation), so every merge proves old port designs still open and evaluate as
+  saved, even when upstream reuses a format number the port wrote (as 0.24.1 did with 40).
+- **Checks fail loudly**: an unregistered touch point, a missing marker, a port string upstream
+  now gives another meaning, an area test failing, or a test filter that matches **no** test (a
+  renamed test would otherwise stop guarding anything) each stop the sync with the fix to make.
+
+`scripts/android-port.py` does the checking:
+
+| Command | What it does |
+|---|---|
+| `preview [TAG]` | A trial merge of TAG (default: the newest upstream release) in a scratch worktree: the releases it brings, the design-format change, the files both sides changed by port area, the conflicts and string clashes. Changes nothing. |
+| `report [TAG]` | The same without the trial merge. |
+| `touchpoints` | Every upstream file the port changes is in an area; listed files the port no longer changes are noted. |
+| `markers` | The marked fixes are in their files. |
+| `strings [--fix]` | Port strings upstream now has: the same text is dropped with `--fix`; other text is a clash to rename. |
+| `tests [AREA]` | Each area's tests (or one area's: `tests gears`). |
+
+**Adding to the port**: a new upstream file you change goes into the area it serves (or a new
+area) in `android-port-areas.json`, with a test in that area's existing test file; a port release
+that changes what a design file holds adds a corpus file saved by its CLI. Agents read the same
+rules in [`skills/solidcraft-android-port/SKILL.md`](../skills/solidcraft-android-port/SKILL.md).
+
 ## Updating
 
+First look, without changing anything:
+
 ```sh
-scripts/android-sync.sh
+scripts/android-sync.sh --preview          # the newest upstream release
+scripts/android-sync.sh --preview v0.26.0  # or a given one
+```
+
+Then merge it:
+
+```sh
+scripts/android-sync.sh --latest
 ```
 
 It stops at the first step that fails and says what to do. In order:
 
-1. **Fetch and merge** `upstream/main` (needs a clean working tree). Nothing new: it goes on to
-   the checks anyway.
-2. **winit**: checks the patched `vendor/winit` is still the winit in use. When upstream's eframe
+1. **Fetch, report and merge** the newest upstream release tag (needs a clean working tree);
+   `--to <tag>` merges a given tag, and no option merges `upstream/main`. Before merging it prints
+   what the release changes in each port area. Nothing new: it goes on to the checks anyway.
+2. **Strings**: port strings upstream now has with the same text are dropped from
+   `assets/locales/pending/android-port.json` and committed; the same id with other text stops
+   the sync.
+3. **winit**: checks the patched `vendor/winit` is still the winit in use. When upstream's eframe
    moves to another winit, Cargo stops using the patch and the mouse and keyboard would quietly
    go back to acting as a finger; the script stops instead and names the version wanted.
-3. **Checks**: `cargo fmt --check`; clippy for Android (arm64); clippy on the desktop for the
+4. **Checks**: `cargo fmt --check`; clippy for Android (arm64); clippy on the desktop for the
    UI crate, the Android crate and the desktop app; the UI crate's wasm build; `cargo xtask
-   layers` and `assets`; the touch and Android tests.
-4. **APK**: `./gradlew assembleDebug` (skip with `--no-build`).
+   layers`, `assets`, `lists` and `skills`; then the port's own: `touchpoints`, `markers`,
+   `strings` and every area's tests (about 15 minutes in all).
+5. **APK**: `./gradlew assembleDebug` (skip with `--no-build`).
 
-Then look over what came in and publish:
+Then look over what came in, test on a device, and publish:
 
 ```sh
 git log --oneline -20
 git push origin HEAD
 ```
 
-To follow an upstream **release** rather than `main`, merge its tag: upstream cuts releases on
-their own line (v0.23.0 is not on `main`), so `scripts/android-sync.sh --to v0.23.0` merges
+Upstream cuts releases on their own line (v0.23.0 is not on `main`), so merging the tag gets
 exactly that release and the APK gets its version. Merging `main` later is fine; both are merges.
 
-Options: `--to <tag>` (merge that upstream tag), `--no-build` (no APK), `--check-only` (no fetch or merge: check the tree as it is),
-`--revendor X.Y.Z` (below). `UPSTREAM_REMOTE` / `UPSTREAM_BRANCH` override `upstream` / `main`.
+Options: `--preview [tag]`, `--latest`, `--to <tag>`, `--no-build` (no APK), `--check-only` (no
+fetch or merge: check the tree as it is), `--revendor X.Y.Z` (below). `UPSTREAM_REMOTE` /
+`UPSTREAM_BRANCH` override `upstream` / `main`.
 
-How often: whenever you want the new features; upstream lands several changes a day, and
-smaller, more frequent merges have fewer conflicts.
+How often: at each upstream release. Upstream lands dozens of changes a day and sometimes
+several releases a night (0.24.1, 0.25.0 and 0.25.1 in one night); smaller, more frequent merges
+have fewer conflicts.
 
 ## Releasing
 
@@ -119,6 +175,12 @@ code"](android.md#changes-to-upstream-code)), so conflicts are rare and usually 
 
 Then `git add` the files, `git commit`, and `scripts/android-sync.sh --check-only`.
 
+### Size caps
+
+Upstream caps AGENTS.md and each skill (`cargo xtask skills`); the port's lines count toward the
+cap, so when upstream grows a file the port adds to, shorten the port's lines. 0.25.1 grew
+`skills/solidcraft-crash-safety/SKILL.md` past it with the port's Android `unsafe` line.
+
 ### The port's speed fixes
 
 Four port changes make gears, threads and agents' long calls quick on a phone. A merge can drop
@@ -168,6 +230,11 @@ vendored copy (and `[patch.crates-io]` entry) can go.
 
 ### Android build errors
 
+- `cannot find crate` in `control_server.rs`: the Android app builds the desktop app's control
+  server from its own file (`#[path]`), so a crate upstream adds there must be added to
+  `apps/solidcraft-android/Cargo.toml` too (0.25.1 added `serde`).
+- A missing field in a port test's struct literal (0.25.1 added `GpuTarget::oit`): add the field
+  with the value upstream's own code uses.
 - In `apps/solidcraft-android/src/lib.rs`: upstream changed `SolveApp`'s or `Services`'s API, or
   the desktop app's setup; compare with `apps/solidcraft/src/main.rs`, which does the same job.
 - In `documents.rs`: the `jni` crate's version follows `android-activity` (pulled in by winit);

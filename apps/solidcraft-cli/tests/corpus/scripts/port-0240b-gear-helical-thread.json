@@ -1,0 +1,54 @@
+{
+ "commands": [
+  {
+   "command": "gear.create",
+   "params": {
+    "type": "spur",
+    "module": 1,
+    "teeth": 12,
+    "face_width": 4,
+    "bore": 3
+   }
+  },
+  {
+   "command": "component.activate",
+   "params": {
+    "component": 0
+   }
+  },
+  {
+   "command": "solid.cylinder",
+   "params": {
+    "diameter": 6,
+    "height": 8,
+    "base": [
+     30,
+     0,
+     0
+    ],
+    "operation": "new",
+    "body_name": "Bolt"
+   }
+  },
+  {
+   "command": "solid.thread",
+   "params": {
+    "face": [
+     33,
+     0,
+     4
+    ],
+    "helical": true,
+    "pitch": 1,
+    "handedness": "left",
+    "modeled": true
+   }
+  },
+  {
+   "command": "file.save_as",
+   "params": {
+    "path": "port-0240b-gear-helical-thread.solidcraft"
+   }
+  }
+ ]
+}

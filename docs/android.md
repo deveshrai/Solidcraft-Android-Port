@@ -224,7 +224,9 @@ behaviour is unchanged. On a desktop touch screen the same touch gestures apply.
 ## Changes to upstream code
 
 Everything Android-only is new (`apps/solidcraft-android`, `vendor/winit`, `scripts/android-sync.sh`,
-these docs). Upstream files changed, and why:
+`scripts/android-port.py`, these docs). Upstream files changed, and why. The machine-checked list,
+with the tests that prove each, is [`scripts/android-port-areas.json`](../scripts/android-port-areas.json)
+([how it is used](android-sync.md#how-the-port-stays-mergeable)):
 
 | File | Change |
 |------|--------|
@@ -263,6 +265,9 @@ these docs). Upstream files changed, and why:
 | `ATTRIBUTION.md`, `vendor/README.md` | The vendored winit and its patch |
 | `docs/building.md` | How to build the APK |
 | `.gitignore` | Local `continue-*.sh` session scripts |
+| `AGENTS.md`, `skills/solidcraft-android-port/SKILL.md` (new) | A router row and a skill: the port's rules and merge routine for agents |
+| `apps/solidcraft-cli/tests/corpus/port-*.solidcraft` (new), `corpus/README.md` | Designs saved by port releases, so every merge proves they still open (0.24.0b: a gear and a helical thread) |
+| `apps/solidcraft-android/Cargo.toml` | `serde`, for the desktop app's control server it builds from (0.25.1) |
 
 The Android changes keep the desktop and browser builds as they were: the Android code paths are
 behind `cfg(target_os = "android")`, and the touch changes act only on touch input. The thread

@@ -20,6 +20,7 @@ hostile variants of it never panic.
 | `split-body-pieces` | v0.3.2 (07e263d) | a slot along X cuts a block into two bodies; a fillet, a chamfer and an appearance refer to the pieces by body name (`Body1`, `Body1 (1)`) |
 | `issue-489-stacked-join` | v0.6.0 (809ecf7), desktop | a 70 × 84 extrude, then a 70 × 62 strip joined on its top face, sketched partly over the face's projected edges (issue #489; expected values from main at 2880525) |
 | `issue-616-lid-ribs` | v0.7.0 (a9879fa), CLI | a rounded lid with a skirt ring, a window and a slot cut through, then four ribs joined on the plate over the skirt, flush with the window's sides; v0.7.0 displaced the ribs and left a slit through the skirt and plate (issue #616; script `examples/regressions/lid_ribs_flush_with_window.json`, expected values from the fix) |
+| `port-0240b-gear-helical-thread` | Android port 0.24.0b (17b23c9b), CLI | the port's own design format: 40 with `format_pending` [`helical-thread-handedness`, `helical-threads`], a spur gear (12 teeth, bore; its parameters in component metadata) and a bolt with a left-handed helical B-rep thread. Upstream later gave 40 to other changes, so this checks that a port design still gets those changes and keeps its helical thread when it opens |
 
 The scripts that made them are in `scripts/` (`issue-489-stacked-join` was drawn in the desktop
 app and has none; `issue-616-lid-ribs` is made by its regression script). Every flat face of every final body must also take an attached sketch and an

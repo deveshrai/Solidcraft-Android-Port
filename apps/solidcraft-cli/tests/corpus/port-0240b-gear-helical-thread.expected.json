@@ -1,0 +1,164 @@
+{
+  "bodies": [
+    {
+      "area_mm2": 263.74111439915634,
+      "bbox": {
+        "max": [
+          32.999999990064985,
+          3.000000000000009,
+          8.0
+        ],
+        "min": [
+          27.000000018623165,
+          -2.9999997508776826,
+          0.0
+        ]
+      },
+      "center_of_mass": [
+        29.993392412060924,
+        -0.009904148314994785,
+        3.9999537999011654
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 14,
+      "face_types": {
+        "cylinder": 2,
+        "other": 2,
+        "plane": 4
+      },
+      "faces": 8,
+      "kernel": {
+        "edges": 16,
+        "faces": 8,
+        "shells": 1,
+        "vertices": 12
+      },
+      "mass_g": 0.25387871116776306,
+      "material": "Default",
+      "name": "Bolt",
+      "vertices": 10,
+      "volume_mm3": 196.80520245563028
+    },
+    {
+      "area_mm2": 535.7768984694047,
+      "bbox": {
+        "max": [
+          7.000000000000003,
+          7.000000000000003,
+          4.000000000000003
+        ],
+        "min": [
+          -7.000000000000003,
+          -7.000000000000001,
+          0.0
+        ]
+      },
+      "center_of_mass": [
+        -1.6590937935895244e-14,
+        5.0915561754735305e-15,
+        1.9999999984522372
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 218,
+      "face_types": {
+        "cylinder": 61,
+        "other": 12,
+        "plane": 2
+      },
+      "faces": 75,
+      "kernel": {
+        "edges": 222,
+        "faces": 76,
+        "shells": 1,
+        "vertices": 148
+      },
+      "mass_g": 0.5291581628280725,
+      "material": "Default",
+      "name": "Spur Gear m1 z12",
+      "vertices": 146,
+      "volume_mm3": 410.200126223312
+    }
+  ],
+  "body_count": 2,
+  "params": [],
+  "sketches": [
+    {
+      "curves": 73,
+      "dof": 531,
+      "id": 3,
+      "name": "Tooth Profile",
+      "profiles": 2,
+      "status": "solved",
+      "visible": false
+    }
+  ],
+  "timeline": [
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 3,
+      "ms": 32.311541,
+      "name": "Tooth Profile",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "Sketch",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 4,
+      "ms": 9.935333,
+      "name": "Extrude1",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "ExtrudeFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 5,
+      "ms": 0.607,
+      "name": "Cylinder1",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 6,
+      "ms": 266.982125,
+      "name": "Thread1",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "ThreadFeature",
+      "warning": null
+    }
+  ],
+  "total": {
+    "area_mm2": 799.5180128685611,
+    "edges": 232,
+    "faces": 83,
+    "mass_g": 0.7830368739958355,
+    "open_bodies_skipped": 0,
+    "vertices": 156,
+    "volume_mm3": 607.0053286789423
+  }
+}
