@@ -4280,6 +4280,7 @@ dependencies = [
  "getrandom 0.3.4",
  "jni",
  "log",
+ "serde",
  "serde_json",
  "solidcraft-engine",
  "solidcraft-mcp",

@@ -9225,7 +9225,7 @@ mod tests {
         let mut h = crate::scenario::Harness::new();
         h.app.home.open = false;
         // As on a device: the viewport drawn on the GPU (the target alone; no device is needed).
-        h.app.viewport.gpu = Some(GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false });
+        h.app.viewport.gpu = Some(GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
         for (id, p) in [("sketch.create", json!({"plane": "XY"})), ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [60, 20]}))] {
             h.app.run(id, p).unwrap();
         }
