@@ -277,7 +277,7 @@ parameters in component metadata, so they need no design-format change of their 
 Design files below).
 
 **Design files.** The helical thread fields are a pending design-format change, so the port
-writes one format number past upstream's release (40 while upstream's 0.24.0 is 39) with
+writes one format number past upstream's release (42 while upstream's 0.25.1 is 41) with
 `"format_pending": ["helical-thread-handedness", "helical-threads"]`. The port opens every upstream design. Upstream's
 releases refuse a design saved by the port ("saved by a newer SolidCraft") rather than opening
 it and quietly rebuilding its helical threads as faceted ones; designs to share with desktop

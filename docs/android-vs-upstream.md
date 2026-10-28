@@ -6,7 +6,7 @@ built here first and kept up to date with every upstream release.
 
 ![The port and upstream](screenshots/android/hero-port-vs-upstream.png)
 
-Current: **port 0.24.0b**, against **upstream 0.24.0** ([what's new](android-whats-new.md)). This page is kept up to date with each
+Current: **port 0.25.1a**, against **upstream 0.25.1** ([what's new](android-whats-new.md)). This page is kept up to date with each
 port release ([keeping this page current](#keeping-this-page-current)).
 
 - [At a glance](#at-a-glance)
@@ -19,7 +19,7 @@ port release ([keeping this page current](#keeping-this-page-current)).
 
 ## At a glance
 
-| | Upstream 0.24.0 | Port 0.24.0b |
+| | Upstream 0.25.1 | Port 0.25.1a |
 |---|---|---|
 | Platforms | Windows, macOS, Linux, web | All of upstream's, **plus Android** (phones, tablets, foldables) |
 | Modelled threads | Cut as a faceted groove; the threaded body's curved faces become facets | Faceted as upstream, **or exact helical B-rep**: smooth helical faces, the rest of the body stays exact |
@@ -31,7 +31,7 @@ port release ([keeping this page current](#keeping-this-page-current)).
 | AI agents | MCP over stdio on the same computer (`solidcraft-cli mcp`), and the agent chat | Upstream's, **plus an MCP server on the network** (Settings › MCP server): Claude Code in Termux on the device, or on a computer on the same Wi-Fi, models in the app; long calls answer "still running" and wait through `pending`, each session on its own thread |
 | Touch | None | Orbit, pan, pinch, tap to select, finger-dragged dialog arrows |
 | Files | Native file dialogs | Android's file picker: device, SD card, Google Drive, any storage app |
-| Design file format | 39 | 40 (39 plus the helical threads) |
+| Design file format | 41 | 42 (41 plus the helical threads) |
 
 Everything else (sketching, the solver, every feature and workspace, Render, sheet metal,
 assemblies, import and export) is upstream's, unchanged, at the same version.
@@ -115,7 +115,7 @@ What it takes to run upstream's desktop app on Android
 
 - **The port opens every upstream design**, from any version.
 - **Upstream releases don't open port designs.** The helical thread fields are a design-format
-  change that upstream hasn't adopted, so the port saves format 40 where upstream 0.24.0 saves 39,
+  change that upstream hasn't adopted, so the port saves format 42 where upstream 0.25.1 saves 41,
   and upstream asks to be updated rather than silently rebuilding helical threads as faceted ones.
   This applies to every design the port saves, with or without threads.
 - **To share with upstream, export STEP.** Gears and threads arrive as exact solids.

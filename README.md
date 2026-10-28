@@ -4,8 +4,8 @@
 
 **This is the Android port of SolidCraft.** It is upstream
 [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with every
-upstream release (now 0.24.0), plus an Android app and **features upstream doesn't have yet**. Current
-release: **0.24.0b** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
+upstream release (now 0.25.1), plus an Android app and **features upstream doesn't have yet**. Current
+release: **0.25.1a** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
 
 | Added in this port | What it gives you | Guide |
 |---|---|---|

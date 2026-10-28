@@ -5,12 +5,54 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.25.1a](#0251a): upstream 0.24.1, 0.25.0 and 0.25.1; a sturdier way to follow upstream
 - [0.24.0b](#0240b): faster gears, a steadier MCP server
 - [0.24.0a](#0240a): upstream 0.24.0, the MCP server, thread fixes
 - [0.23.0b](#0230b): finger-scrolled menus
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.25.1a
+
+**Upstream 0.24.1, 0.25.0 and 0.25.1**, released in one night, merged. Among much else:
+
+- **Modelling:** a Cone primitive; Cylinder and Box placed by reference edges, a corner or the centre;
+  Sketch Transform (one box with handles to scale, move and turn a selection); add points to an existing
+  spline; define a parameter as you go by typing `name = value` in a value box; better sketch dimensions
+  (switch a circle between radius and diameter, delete from the right-click menu); Press Pull on a
+  fillet's round face edits the fillet.
+- **Working:** copy and paste bodies and components, also between designs; Send to Slicer; Canvas to
+  Sketch; Insert SVG/DXF lets you place, size and turn the drawing first; reopen the designs open at the
+  last quit; Repeat Last Command; dialogs open in the left column in place of the Browser and History,
+  with OK and Cancel at the top.
+- **Faster on big models**, new themes (CGA, 1-bit), Arabic, and Turkish and French complete.
+- **Fixed in 0.25.1:** an Extrude to Object set to Join could merge bodies of different components.
+- **New designs save as `.sc`**; `.solidcraft` files keep opening, and saving one keeps its name.
+
+**Design files:** format 42 (upstream's 41 plus the helical threads). Designs saved by every earlier port
+release open, gears and helical threads included; upstream's releases still ask to be updated rather
+than open a port design (export STEP to share).
+
+**Following upstream, made sturdier.** Upstream moves fast (three releases in one night), and the port now
+follows it without holding it back ([android-sync.md](android-sync.md#how-the-port-stays-mergeable)):
+
+- **Every upstream file the port changes is registered**, by area (touch input, helical threads, gears,
+  design files, agents and the MCP server, kernel speed, the Android build), with the tests that prove
+  each area still works; a merge that adds an unregistered change, drops a marked fix, or leaves a test
+  filter matching nothing stops with the fix to make.
+- **`scripts/android-sync.sh --preview`** tries the newest upstream release in a scratch worktree and
+  says what it would conflict with and which port areas it touches, before anything changes; it
+  predicted every conflict and fix this merge needed. `--latest` merges it.
+- **Designs saved by the port are kept as tests**: a gear and a helical thread saved by 0.24.0b are now
+  in upstream's design corpus, so each merge proves port designs still open and evaluate as saved.
+- Port strings upstream adds with the same text are dropped automatically.
+
+**Tested on a Galaxy Tab** (SM-X840): installs over 0.24.0b with settings kept; the MCP server, gears (an
+18-tooth spur gear still 110 faces), helical threads and timed batches over MCP; the worm gearbox saved by
+0.24.0b opens with its gears still editable; Save As offers `.sc`; touch navigation; Send to Slicer is
+greyed out, as Android has no slicer to send to. Upstream's *Reopen designs* doesn't work on Android yet
+([known issues](android-known-issues.md)).
 
 ## 0.24.0b
 
