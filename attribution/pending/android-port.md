@@ -90,3 +90,8 @@
 | docs/screenshots/android/tab-mcp-worm-gearbox.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab): the worm gearbox, cut through the worm and the wheel | MIT OR Apache-2.0 |
 | docs/screenshots/android/tab-gear-faces.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab): a spur gear with each face coloured | MIT OR Apache-2.0 |
 | docs/screenshots/android/gear-flank-faces.png | SolidCraft contributors | diagram drawn from SolidCraft's own gear sketches (0.24.0a and 0.24.0b), labelled in IBM Plex Sans (OFL) | MIT OR Apache-2.0 |
+| docs/screenshots/android/tab-0251a-settings-mcp.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.25.1a): Settings with upstream's search and the MCP server page, the access token hidden | MIT OR Apache-2.0 |
+| docs/screenshots/android/tab-0251a-create-gear.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.25.1a): the Create menu with Gear and Cone | MIT OR Apache-2.0 |
+| docs/screenshots/android/tab-0251a-gear-dialog.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.25.1a): the Gear dialog over gears and a threaded bolt built over MCP | MIT OR Apache-2.0 |
+| docs/screenshots/android/tab-0251a-file-menu.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.25.1a): the File menu, Send to Slicer greyed out | MIT OR Apache-2.0 |
+| docs/screenshots/android/tab-0251a-orbit.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.25.1a): a one-finger orbit, before and after | MIT OR Apache-2.0 |

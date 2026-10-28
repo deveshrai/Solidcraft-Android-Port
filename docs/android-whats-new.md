@@ -48,7 +48,7 @@ follows it without holding it back ([android-sync.md](android-sync.md#how-the-po
   in upstream's design corpus, so each merge proves port designs still open and evaluate as saved.
 - Port strings upstream adds with the same text are dropped automatically.
 
-**Tested on a Galaxy Tab** (SM-X840): installs over 0.24.0b with settings kept; the MCP server, gears (an
+**Tested on a Galaxy Tab** ([the port report](android-port-report-0.25.1a.md), with every check and screenshot) (SM-X840): installs over 0.24.0b with settings kept; the MCP server, gears (an
 18-tooth spur gear still 110 faces), helical threads and timed batches over MCP; the worm gearbox saved by
 0.24.0b opens with its gears still editable; Save As offers `.sc`; touch navigation; Send to Slicer is
 greyed out, as Android has no slicer to send to. Upstream's *Reopen designs* doesn't work on Android yet

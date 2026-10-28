@@ -29,6 +29,7 @@ Code on a Galaxy Tab, and what changed: [android-speed](docs/android-speed.md).
 How the port differs from upstream, feature by feature: [android-vs-upstream](docs/android-vs-upstream.md) ·
 what's new in each release: [android-whats-new](docs/android-whats-new.md) ·
 faster gears and agents (0.24.0b): [android-speed](docs/android-speed.md) ·
+the 0.25.1a port report (merge, checks, device test): [android-port-report-0.25.1a](docs/android-port-report-0.25.1a.md) ·
 known issues: [android-known-issues](docs/android-known-issues.md) ·
 how it works and how to build it: [android](docs/android.md) ·
 following upstream: [android-sync](docs/android-sync.md).
