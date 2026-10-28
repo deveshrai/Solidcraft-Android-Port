@@ -106,7 +106,8 @@ seconds on a phone or tablet, and a check between two gears a minute or two. Sin
   answers with the result. **Don't send the command again**; a second copy would wait for the first
   and then run twice.
 - **`batch` with `"timings": true`** times each step as it computed off the window thread
-  (`timings_measured` says so).
+  (the times are where it computed; upstream's MCP
+  `batch` passes on `timings` and `total_ms`).
 - One session's long call doesn't hold up another session or a ping.
 
 **Avoid faces that coincide with a gear's or a thread's faces.** The kernel handles a tool whose

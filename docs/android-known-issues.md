@@ -4,7 +4,7 @@ What is wrong or missing in the current port release, and what is planned for th
 entry says how to work around it today. Fixed entries move to [Fixed](#fixed) with the release that
 fixed them.
 
-Current: **port 0.24.0b** (upstream 0.24.0). Next: **0.24.0c**, or **0.25.0a** if upstream releases
+Current: **port 0.25.1a** (upstream 0.25.1). Next: **0.25.1b**, or the next upstream release's **a**, if upstream releases
 first. See also [android-vs-upstream.md](android-vs-upstream.md) for what upstream has that the port
 doesn't, and the reverse.
 
@@ -21,7 +21,7 @@ doesn't, and the reverse.
 |---|---|---|---|
 | **The helical thread is hard to find.** Thread opens as upstream's does: Modeled off, and once ticked, Geometry on Faceted. The port's Helical B-rep, Custom and Clearance look missing until you know where they are. | Galaxy Z Fold, 0.23.0a; still so in 0.24.0a | Tick **Modeled**, set **Geometry** to **Helical B-rep** ([android-threads.md](android-threads.md#opening-thread)) | Decide whether the port opens Thread with Modeled ticked and Helical B-rep chosen |
 | **A file saved to a device folder can lose its extension.** Save As writes the name typed in Android's picker; type *gear* and the file is `gear`, not `gear.solidcraft`. The app itself names the tab and its copy correctly and opens the file again, but file managers and other apps don't know what it is. | Pixel 9 and Galaxy Z Fold, 0.23.0a and b | Type the extension: *gear.solidcraft*, *part.stl* | Ask the picker for the name with its extension kept, or rename the saved document through the provider |
-| **The version shown in the app is upstream's.** The title bar shows *v0.24.0*; the port letter (a) is only in Android's app info and the APK name. | All, every port release | Settings › Apps › SolidCraft shows *0.24.0b* | Show the port version next to upstream's |
+| **The version shown in the app is upstream's.** The title bar shows *v0.25.1*; the port letter (a) is only in Android's app info and the APK name. | All, every port release | Settings › Apps › SolidCraft shows *0.25.1a* | Show the port version next to upstream's |
 | **Samsung's window handle covers the new-tab button.** On Samsung devices the handle at the top centre sits over the tab strip; a tap there can open Samsung's window menu instead of **+**. | Galaxy Z Fold | **Ctrl+N** or **File › New Design** | Keep the tab strip's buttons out of the handle's area on Samsung devices |
 | **Designs saved by 0.22.0a open as "Untitled (n)".** That release's Save As didn't store the typed name in the design (fixed in 0.23.0a), and Open names the tab from the design. | Any, files from 0.22.0a | **Save As** once to rename it | Fall back to the file's name when a design's name is a default "Untitled" one |
 
@@ -35,6 +35,7 @@ doesn't, and the reverse.
 | **A cylinder exactly on an existing bore, or a cut starting exactly on a gear's end face, is slow or fails.** A second Ø8 bore on the axis of an existing one fails ("no result"); upstream's kernel retries such contacts many times. (Joins that touch a gear's flat end face are quick since 0.24.0b.) | Start cuts outside the body, bore once after joining ([android-mcp.md](android-mcp.md#long-operations)) | Upstream's kernel: a cheaper path for coincident faces |
 | **Interference and clearance between two gears take a minute or more.** Worm against worm wheel: 77 s on a Mac; the exact intersection of their helical flanks is meshed finely. | Check the gear pair once, at the end | Measure an interference from meshes first |
 | **Checks between large bodies are slow.** Interference and clearance between the two halves of the [cassette test](android-mcp-live-test.md) take about 38 s and 35 s on a Galaxy Z Fold (about 1 s each before its tape-path blocks were added). | Check the pairs that matter (`bodies`, `against`) | Find what makes those pairs slow |
+| **A sketch can't attach to the end of a helical thread's groove.** The two small flat faces closing the groove's ends share one name, so a sketch or offset plane on them is refused ("its history can't tell it apart"). Every other face of a threaded body attaches. | Use a fixed plane there (`fixed: true`) | Name the groove's faces apart (found by the design corpus, `the_groove_ends_of_a_helical_thread_take_an_attached_sketch`) |
 | **A thread's face can't name its body.** `solid.thread` picks the face by a point; with a screw already in its tapped hole the point is on both, and the wrong one is threaded ("something else of the body meets the thread"). | Thread the part before putting it in place | A `body` parameter, as other commands have |
 | **Helical threads against helical threads aren't intersected.** Interference and clearance list such pairs as not checked. | Check a thread fit on meshes ([how](android-mcp-live-test.md#how-the-fit-was-checked)) | Upstream's kernel |
 | **MCP: nothing on the device says Claude Code is waiting.** With SolidCraft in the background, an agent's call waits 15 s and then tells the agent to ask you to bring SolidCraft back; nothing on the phone itself says so. | Keep SolidCraft on screen next to Termux: split screen or a pop-up window ([android-mcp.md](android-mcp.md#keep-solidcraft-on-screen)) | A notification while a call waits, tapping it brings SolidCraft back |
@@ -60,6 +61,10 @@ reported or left to upstream, not patched in the port, so merges stay clean.
 
 ## By design
 
+- **The first open after an update rebuilds the design.** A design keeps its computed model only for
+  the build that computed it, so the first time a newer SolidCraft opens it, every feature is
+  computed again (the worm gearbox from [android-speed.md](android-speed.md): 2 minutes on a Galaxy
+  Tab); saved again, it opens at once (0.4 s). Upstream does the same on every platform.
 - **Upstream's releases don't open designs the port saved.** The port saves one file format past
   upstream's (38 against 37) for the helical thread fields, so upstream asks to be updated rather
   than silently rebuilding helical threads as faceted ones. Export STEP to share

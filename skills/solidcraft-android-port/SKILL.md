@@ -17,6 +17,7 @@ that touches and prove its own features still work. The long form is `docs/andro
 - A design saved by a port release goes into `apps/solidcraft-cli/tests/corpus/` (saved by that release's CLI, never regenerated), so every later merge proves it still opens.
 - Resolve a conflict by keeping both sides: upstream's change and the port's hook. Never drop upstream code to keep a port change simple.
 - Merge upstream release tags (`--latest`), not `main`, for a release; port releases are lettered (0.25.1a, b…) until upstream's next.
+- A test that fails on clean upstream too goes under `upstream_failures` in the manifest (exact name, why); `scripts/android-port.py upstream-failures` re-checks the list at each upstream release.
 - Pushing and publishing need the owner's go-ahead.
 
 ## Routine

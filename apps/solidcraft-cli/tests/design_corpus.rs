@@ -137,7 +137,12 @@ fn body_names_saved_before_exact_history_keep_their_pieces() {
 /// ignored test below that checks its faces; a listed plane whose face attaches fails the main
 /// check until it is removed from here.
 type Planes = &'static [([f64; 3], f64)];
-const NO_ATTACHMENT_YET: [(&str, &str, Option<Planes>, u32); 1] = [("issue-616-lid-ribs", "Lid", None, 628)];
+const NO_ATTACHMENT_YET: [(&str, &str, Option<Planes>, u32); 2] = [
+    ("issue-616-lid-ribs", "Lid", None, 628),
+    // Android port (no upstream issue: 0): a helical thread's groove ends are both named as made
+    // from the threaded face, so neither can be told apart from the other.
+    ("port-0240b-gear-helical-thread", "Bolt", Some(&[([1.0, 0.0, 0.0], 30.0), ([-0.3826834323629895, 0.9238795325121567, 0.0], -11.480503)]), 0),
+];
 
 /// The issue a face is listed under, and whether it is listed by its plane (not as every face).
 fn known_without_attachment(design: &str, body: &str, normal: [f64; 3], distance: f64) -> Option<(u32, bool)> {
@@ -260,6 +265,12 @@ fn known_faces_attach(issue: u32) {
 #[ignore = "fails until #628 is fixed"]
 fn faces_of_a_lid_with_joined_ribs_take_an_attached_sketch() {
     known_faces_attach(628);
+}
+
+#[test]
+#[ignore = "fails until the Android port names a helical thread's two groove ends apart"]
+fn the_groove_ends_of_a_helical_thread_take_an_attached_sketch() {
+    known_faces_attach(0);
 }
 
 /// A small deterministic generator (xorshift).

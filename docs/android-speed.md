@@ -68,7 +68,8 @@ behind the first, so the work piled up.
   what is computing, for how long, with **Stop**. Android never sees an unresponsive window.
 - **Timed batches too.** `batch` with `"timings": true` used to be held on the window thread so
   that it could time each step. It now computes off the window thread like any other batch, timing
-  each step where it computes (`timings_measured` in the reply says so).
+  each step where it computes. (Over the control channel the reply says so in `timings_measured`;
+  upstream's MCP `batch` tool passes on only `timings` and `total_ms`.)
 - **"Still running", then `pending`.** A call that is still computing after a few minutes answers
   *"still running: … call the `pending` tool"*. The command is not cancelled and not lost; the
   agent calls `pending` in the same session until the result arrives. Claude Code follows that

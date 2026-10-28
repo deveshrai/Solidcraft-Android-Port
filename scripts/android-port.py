@@ -7,6 +7,9 @@
     scripts/android-port.py tests [AREA...]    each area's tests (all areas without a name)
     scripts/android-port.py report [TARGET]    what an upstream release or commit changes, by area
     scripts/android-port.py preview [TARGET]   a trial merge in a scratch worktree: conflicts and report
+    scripts/android-port.py upstream-failures [TARGET]
+                                               the tests skipped as upstream's own failures still fail on
+                                               a clean upstream checkout (slow: builds it)
 
 TARGET defaults to the newest upstream release tag. The areas are in scripts/android-port-areas.json;
 docs/android-sync.md ("How the port stays mergeable") says how to use this and what to do when a
@@ -33,9 +36,18 @@ def git(*args, cwd=ROOT, check=True):
     return r.stdout
 
 
-def areas():
+def manifest():
     with open(AREAS, encoding="utf-8") as f:
-        return json.load(f)["areas"]
+        return json.load(f)
+
+
+def areas():
+    return manifest()["areas"]
+
+
+def upstream_failures(pkg=None):
+    """Tests that fail on a clean upstream checkout too: skipped in the areas' runs."""
+    return [u for u in manifest().get("upstream_failures", []) if pkg is None or u["package"] == pkg]
 
 
 def bold(s):
@@ -164,8 +176,9 @@ def cmd_strings(args, cwd=ROOT):
 
 
 # ---- tests --------------------------------------------------------------------------------------
-def run_test(spec):
-    """`package [--lib|--test NAME] [filters…]`, via cargo test; (ok, tests run)."""
+def run_test(spec, cwd=ROOT, env=None):
+    """`package [--lib|--test NAME] [filters…]`, via cargo test, skipping upstream's own
+    failures; (ok, tests run)."""
     words = spec.split()
     pkg, rest = words[0], words[1:]
     kind, filters = [], rest
@@ -173,8 +186,9 @@ def run_test(spec):
         kind, filters = ["--lib"], rest[1:]
     elif rest and rest[0] == "--test":
         kind, filters = rest[:2], rest[2:]
-    cmd = ["cargo", "test", "-q", "-p", pkg, *kind, "--", *filters]
-    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    skips = [w for u in upstream_failures(pkg) for w in ("--skip", u["test"])]
+    cmd = ["cargo", "test", "-q", "-p", pkg, *kind, "--", *filters, *skips]
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env)
     out = r.stdout + r.stderr
     passed = sum(int(n) for n in re.findall(r"test result: \w+\. (\d+) passed", out))
     failed = re.findall(r"^test (\S+) \.\.\. FAILED", out, flags=re.M)
@@ -279,11 +293,36 @@ def cmd_preview(args):
     return 0
 
 
+def cmd_upstream_failures(args):
+    """Run the listed upstream failures on a clean checkout of TARGET: each must still fail there.
+    One that passes there is fixed upstream: drop it from the list (and so test it again)."""
+    target = args[0] if args else last_upstream()
+    tmp = tempfile.mkdtemp(prefix="sc-upstream-")
+    target_dir = os.environ.get("UPSTREAM_TARGET_DIR", os.path.join(tempfile.gettempdir(), "sc-upstream-target"))
+    bad = 0
+    try:
+        git("worktree", "add", "--detach", tmp, target)
+        env = dict(os.environ, CARGO_TARGET_DIR=target_dir)
+        for u in upstream_failures():
+            r = subprocess.run(["cargo", "test", "-q", "-p", u["package"], "--lib", "--", u["test"]], cwd=tmp, capture_output=True, text=True, env=env)
+            out = r.stdout + r.stderr
+            failed = re.findall(r"^test (\S+) \.\.\. FAILED", out, flags=re.M)
+            if failed:
+                print(f"  still fails upstream ({len(failed)}): {u['test']}")
+            else:
+                bad += 1
+                print(red(f"  passes on upstream {target}: {u['test']}: remove it from upstream_failures in {os.path.relpath(AREAS, ROOT)}"))
+    finally:
+        git("worktree", "remove", "--force", tmp, check=False)
+        shutil.rmtree(tmp, ignore_errors=True)
+    return 1 if bad else 0
+
+
 def main(argv):
     if len(argv) < 2 or argv[1] in ("-h", "--help"):
         print(__doc__)
         return 0
-    cmds = {"touchpoints": cmd_touchpoints, "markers": cmd_markers, "strings": cmd_strings, "tests": cmd_tests, "report": cmd_report, "preview": cmd_preview}
+    cmds = {"touchpoints": cmd_touchpoints, "markers": cmd_markers, "strings": cmd_strings, "tests": cmd_tests, "report": cmd_report, "preview": cmd_preview, "upstream-failures": cmd_upstream_failures}
     if argv[1] not in cmds:
         print(__doc__)
         return 2

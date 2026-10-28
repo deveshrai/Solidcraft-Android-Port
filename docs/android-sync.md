@@ -43,6 +43,9 @@ every merge that each of those places still works.
   (`apps/solidcraft-cli/tests/corpus/port-*.solidcraft`, each saved by that release's CLI with
   its expected evaluation), so every merge proves old port designs still open and evaluate as
   saved, even when upstream reuses a format number the port wrote (as 0.24.1 did with 40).
+- **Upstream's own failures are listed, not hidden**: a test that fails on a clean upstream checkout
+  too goes under `upstream_failures` in the manifest, with why; the area runs skip it, and
+  `upstream-failures` re-checks the list against clean upstream so a skip never outlives the bug.
 - **Checks fail loudly**: an unregistered touch point, a missing marker, a port string upstream
   now gives another meaning, an area test failing, or a test filter that matches **no** test (a
   renamed test would otherwise stop guarding anything) each stop the sync with the fix to make.
@@ -56,7 +59,8 @@ every merge that each of those places still works.
 | `touchpoints` | Every upstream file the port changes is in an area; listed files the port no longer changes are noted. |
 | `markers` | The marked fixes are in their files. |
 | `strings [--fix]` | Port strings upstream now has: the same text is dropped with `--fix`; other text is a clash to rename. |
-| `tests [AREA]` | Each area's tests (or one area's: `tests gears`). |
+| `tests [AREA]` | Each area's tests (or one area's: `tests gears`), skipping `upstream_failures`. |
+| `upstream-failures [TAG]` | Builds a clean upstream checkout and runs the tests listed as upstream's own failures: each must still fail there. One that passes is fixed upstream: drop it from the list, and the port tests it again. Slow (a full build); run it at each upstream release. |
 
 **Adding to the port**: a new upstream file you change goes into the area it serves (or a new
 area) in `android-port-areas.json`, with a test in that area's existing test file; a port release

@@ -1,5 +1,17 @@
 {
   "about": "The Android port's touch points in upstream SolidCraft: every upstream file the port changes belongs to one area, and each area names the tests that prove it still works after a merge. Read by scripts/android-port.py (docs/android-sync.md, 'How the port stays mergeable'). Files only the port has (apps/solidcraft-android, the port's docs, pending files) need no entry.",
+  "upstream_failures": [
+    {
+      "package": "solidcraft-ui-egui",
+      "test": "dialogs_thread::contribution_tests::contribution_metric_designation_rendering_preserves_authored_legacy_and_custom_text",
+      "why": "trips egui's debug assertion in the test harness; fails the same on a clean upstream checkout (0.22.0 to 0.25.1)"
+    },
+    {
+      "package": "solidcraft-ui-egui",
+      "test": "dialogs_thread::contribution_tests::contribution_thread_catalogue_is_parseable_and_rendering_keeps_custom_designations",
+      "why": "trips egui's debug assertion in the test harness; fails the same on a clean upstream checkout (0.22.0 to 0.25.1)"
+    }
+  ],
   "areas": [
     {
       "name": "Touch input",
@@ -58,7 +70,10 @@
     {
       "name": "Design files",
       "why": "The port writes upstream's format plus its pending helical-thread changes; designs saved by earlier port releases must keep opening",
-      "files": [],
+      "files": [
+        "apps/solidcraft-cli/tests/corpus/README.md",
+        "apps/solidcraft-cli/tests/design_corpus.rs"
+      ],
       "tests": [
         "solidcraft-doc --lib format",
         "solidcraft-cli --test design_corpus"
@@ -90,9 +105,21 @@
         "crates/kernel/src/sweep_path.rs"
       ],
       "markers": [
-        { "file": "vendor/truck-geometry/src/nurbs/bspsurface.rs", "pattern": "SolidCraft: (only the degree \\+ 1 basis functions|zero basis terms skipped)", "count": 6 },
-        { "file": "crates/kernel/src/coplanar.rs", "pattern": "SolidCraft \\(Android port\\): a side face clear of the faces it would split", "count": 1 },
-        { "file": "apps/solidcraft-android/src/lib.rs", "pattern": "agent_off_thread = true", "count": 1 }
+        {
+          "file": "vendor/truck-geometry/src/nurbs/bspsurface.rs",
+          "pattern": "SolidCraft: (only the degree \\+ 1 basis functions|zero basis terms skipped)",
+          "count": 6
+        },
+        {
+          "file": "crates/kernel/src/coplanar.rs",
+          "pattern": "SolidCraft \\(Android port\\): a side face clear of the faces it would split",
+          "count": 1
+        },
+        {
+          "file": "apps/solidcraft-android/src/lib.rs",
+          "pattern": "agent_off_thread = true",
+          "count": 1
+        }
       ],
       "tests": [
         "solidcraft-kernel --lib coplanar sweep_path",
@@ -115,8 +142,7 @@
         "ATTRIBUTION.md",
         "docs/building.md",
         "README.md",
-        "AGENTS.md",
-        "apps/solidcraft-cli/tests/corpus/README.md"
+        "AGENTS.md"
       ],
       "tests": []
     }
