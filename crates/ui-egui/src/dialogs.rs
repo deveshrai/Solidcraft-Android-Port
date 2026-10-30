@@ -6264,7 +6264,21 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
             }
             d
         }
-        FeatureKind::Thread { face, designation, length, modeled, helical, pitch, depth, angle, clearance, start_offset, end_offset, handedness } => {
+        FeatureKind::Thread {
+            face,
+            designation,
+            length,
+            modeled,
+            helical,
+            pitch,
+            depth,
+            angle,
+            clearance,
+            start_offset,
+            end_offset,
+            start_angle,
+            handedness,
+        } => {
             let mut d = start("solid.thread")?;
             if *modeled {
                 d.extra.insert("modeled".into(), json!(true));
@@ -6283,6 +6297,7 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                     clearance.as_deref(),
                     start_offset.as_deref(),
                     end_offset.as_deref(),
+                    start_angle.as_deref(),
                 ),
             };
             if let Some(inp) = d.inputs.first_mut() {

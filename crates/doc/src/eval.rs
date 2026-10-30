@@ -471,6 +471,8 @@ pub struct HelicalInputs<'a> {
     pub start_offset: Option<f64>,
     pub end_offset: Option<f64>,
     pub left_handed: bool,
+    /// Radians; `None` = 0.
+    pub start_angle: Option<f64>,
 }
 
 /// A helical B-rep thread on the face at `p`: a custom pitch on the face as it is, or an ISO
@@ -551,7 +553,7 @@ pub fn helical_thread_on(st: &ModelState, p: Vec3, h: &HelicalInputs) -> Result<
     if !(to > from) {
         return Err(DocError::Invalid("the start and end offsets leave nothing of the face to thread".into()));
     }
-    let t = kernel::HelicalThread { pitch, depth, angle, clearance, from, to, left_handed: h.left_handed };
+    let t = kernel::HelicalThread { pitch, depth, angle, clearance, from, to, left_handed: h.left_handed, start_angle: h.start_angle.unwrap_or(0.0) };
     Ok((body, cyl, t))
 }
 
@@ -7407,7 +7409,21 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
             }
             Ok(())
         }
-        FeatureKind::Thread { face, designation, length, modeled, helical, pitch, depth, angle, clearance, start_offset, end_offset, handedness } => {
+        FeatureKind::Thread {
+            face,
+            designation,
+            length,
+            modeled,
+            helical,
+            pitch,
+            depth,
+            angle,
+            clearance,
+            start_offset,
+            end_offset,
+            start_angle,
+            handedness,
+        } => {
             let l = match length {
                 Some(e) => Some(val(vals, e, Kind::Length)?),
                 None => None,
@@ -7424,6 +7440,7 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
                     start_offset: opt(start_offset, Kind::Length)?,
                     end_offset: opt(end_offset, Kind::Length)?,
                     left_handed: *handedness == crate::ThreadHandedness::Left,
+                    start_angle: opt(start_angle, Kind::Angle)?,
                 };
                 let (name, cyl, t) = helical_thread_on(st, face.0, &h)?;
                 let i = st.bodies.iter().position(|b| b.name == name).ok_or_else(|| DocError::Invalid("threaded body".into()))?;

@@ -128,7 +128,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("solid.thread", "Thread", thread)
         .at("SOLID", "CREATE")
         .icon("thread")
-        .params("face: [x,y,z] on a cylindrical face; designation?: ISO metric (\"M8\", \"M8x1\"; default: the size that fits); length?: expr (default: the whole face); handedness?: right|left (default right; any thread: cosmetic, faceted or helical; left_handed: true is the same as left); modeled?: bool (default false). Cosmetic: the model is unchanged, model.threads lists it. Modeled: cuts the thread profile into the body (faceted); a shaft thicker than the thread is first turned down to its major diameter over the threaded length. helical?: bool: model it as exact helical B-rep instead (smooth helicoid faces, the rest of the body untouched; the face must be the ISO major diameter for a shaft, any hole up to it). pitch?: expr: a custom helical thread of this pitch on the face as it is, whatever its diameter (no designation). Helical only: depth?: expr (default: the basic depth, 5/16 pitch / tan(angle/2)); angle?: expr (included flank angle, default 60 deg); clearance?: expr (flanks and root moved this far into the material, default 0); start_offset?, end_offset?: expr (the groove starts this far after the threaded length's start, nearest the picked point, and ends this far before its end; default half a pitch; must be positive)"),
+        .params("face: [x,y,z] on a cylindrical face; designation?: ISO metric (\"M8\", \"M8x1\"; default: the size that fits); length?: expr (default: the whole face); handedness?: right|left (default right; any thread: cosmetic, faceted or helical; left_handed: true is the same as left); modeled?: bool (default false). Cosmetic: the model is unchanged, model.threads lists it. Modeled: cuts the thread profile into the body (faceted); a shaft thicker than the thread is first turned down to its major diameter over the threaded length. helical?: bool: model it as exact helical B-rep instead (smooth helicoid faces, the rest of the body untouched; the face must be the ISO major diameter for a shaft, any hole up to it). pitch?: expr: a custom helical thread of this pitch on the face as it is, whatever its diameter (no designation). Helical only: depth?: expr (default: the basic depth, 5/16 pitch / tan(angle/2)); angle?: expr (included flank angle, default 60 deg); clearance?: expr (flanks and root moved this far into the material, default 0); start_offset?, end_offset?: expr (the groove starts this far after the threaded length's start, nearest the picked point, and ends this far before its end; default half a pitch; must be positive); start_angle?: expr (the groove turned about the face's axis, default 0 deg: sets its phase against a mating thread; turning by θ moves its crests θ/360 of a pitch along the axis)"),
     CommandSpec::new("solid.shell", "Shell", shell)
         .at("SOLID", "MODIFY")
         .icon("shell")
@@ -2972,6 +2972,7 @@ fn thread(s: &mut Session, p: &Value) -> Result<Value> {
     let clearance = checked("clearance", Kind::Length)?;
     let start_offset = checked("start_offset", Kind::Length)?;
     let end_offset = checked("end_offset", Kind::Length)?;
+    let start_angle = checked("start_angle", Kind::Angle)?;
     // `left_handed: true`, the port's name before upstream's `handedness`, still means left.
     let mut handedness = thread_handedness(p, cmd)?;
     if p.get("left_handed").and_then(Value::as_bool).unwrap_or(false) {
@@ -2983,8 +2984,10 @@ fn thread(s: &mut Session, p: &Value) -> Result<Value> {
     // A custom pitch is always helical, and helical is always modelled.
     let helical = p.get("helical").and_then(Value::as_bool).unwrap_or(false) || pitch.is_some();
     let modeled = helical || p.get("modeled").and_then(Value::as_bool).unwrap_or(false);
-    if !helical && (depth.is_some() || angle.is_some() || clearance.is_some() || start_offset.is_some() || end_offset.is_some()) {
-        return Err(bad(cmd, "depth, angle, clearance and offsets are for helical threads: set `helical: true` or a `pitch`"));
+    if !helical
+        && (depth.is_some() || angle.is_some() || clearance.is_some() || start_offset.is_some() || end_offset.is_some() || start_angle.is_some())
+    {
+        return Err(bad(cmd, "depth, angle, clearance, offsets and the start angle are for helical threads: set `helical: true` or a `pitch`"));
     }
     // An ISO size that only comes fine says what to type; a custom pitch threads any diameter.
     if designation.is_none()
@@ -3005,6 +3008,7 @@ fn thread(s: &mut Session, p: &Value) -> Result<Value> {
         clearance,
         start_offset,
         end_offset,
+        start_angle,
         handedness,
     };
     let v = add_feature(s, p, kind)?;

@@ -1285,12 +1285,21 @@ impl Body {
         let planned =
             guard("tessellate", || Ok(crate::tess::seam::turns_more_than_once(&self.solid) || crate::tess::seam::closes_on_itself(&self.solid)));
         if planned.unwrap_or(false) {
-            let turn = (angle.is_finite() && angle > 0.0)
-                .then(|| crate::tess::size::Turn { angle: angle.max(MIN_DISPLAY_ANGLE), floor: tol * DISPLAY_ANGLE_FLOOR });
-            match guard("tessellate", || crate::tess::plan(&self.solid, tol, turn, self.boundary_tol)) {
-                Ok((plan, _)) => return Ok(plan.evaluate()),
-                Err(e) => log::debug!("no display plan ({e}); meshing the reference way"),
+            // SolidCraft (Android port): a plan for measuring finer than the planner's limits
+            // allow (a 220 mm thread at a micron has more edge nodes than it takes) is made
+            // coarser rather than meshed the reference way, whose mesh of such a face is inside
+            // out. Only for measuring: other callers rely on the tolerance they ask for.
+            let coarser: &[f64] = if refine { &[1.0, 4.0, 16.0] } else { &[1.0] };
+            for coarser in coarser {
+                let tol = tol * coarser;
+                let turn = (angle.is_finite() && angle > 0.0)
+                    .then(|| crate::tess::size::Turn { angle: angle.max(MIN_DISPLAY_ANGLE), floor: tol * DISPLAY_ANGLE_FLOOR });
+                match guard("tessellate", || crate::tess::plan(&self.solid, tol, turn, self.boundary_tol)) {
+                    Ok((plan, _)) => return Ok(plan.evaluate()),
+                    Err(e) => log::debug!("no display plan at {tol} ({e})"),
+                }
             }
+            log::debug!("no display plan; meshing the reference way");
         }
         let deflection = if angle.is_finite() && angle > 0.0 {
             Deflection { chord: tol, angle: angle.max(MIN_DISPLAY_ANGLE), floor: tol * DISPLAY_ANGLE_FLOOR, display: true }

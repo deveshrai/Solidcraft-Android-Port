@@ -744,6 +744,7 @@ fn custom(pitch: f64) -> solidcraft_doc::HelicalInputs<'static> {
         start_offset: None,
         end_offset: None,
         left_handed: false,
+        start_angle: None,
     }
 }
 
@@ -908,4 +909,33 @@ fn an_iso_thread_with_clearance_in_too_small_a_hole_names_the_drill() {
     .unwrap();
     assert!((0.925 + t.depth + t.clearance - 1.05).abs() < 1e-9, "root at r {}", 0.925 + t.depth + t.clearance);
     run(&mut s, "solid.thread", json!({"face": [0.925, 0, 2], "designation": "M2", "helical": true, "clearance": "0.05 mm"}));
+}
+
+/// A helical thread's start angle turns its groove (the same volume, another body), is saved
+/// with the design and reopens the same; a cosmetic or faceted thread refuses one.
+#[test]
+fn helical_thread_start_angle_is_saved_and_only_for_helical_threads() {
+    use solidcraft_doc::Document;
+    let screw = |thread: Option<Value>| {
+        let mut s = Session::default();
+        run(&mut s, "solid.cylinder", json!({"radius": 5, "height": 30, "body_name": "Screw"}));
+        if let Some(p) = thread {
+            run(&mut s, "solid.thread", p);
+        }
+        s
+    };
+    let mut s = screw(None);
+    let e = s.execute("solid.thread", &json!({"face": [5, 0, 15], "designation": "M10", "modeled": true, "start_angle": "90 deg"})).unwrap_err();
+    assert!(e.to_string().contains("start angle"), "{e}");
+    let body = |s: &Session| s.model.state().body("Screw").unwrap().body.tessellate(0.01).unwrap().measure();
+    let plain = body(&screw(Some(json!({"face": [5, 0, 15], "designation": "M10", "helical": true}))));
+    let s = screw(Some(json!({"face": [5, 0, 15], "designation": "M10", "helical": true, "start_angle": "90 deg"})));
+    let turned = body(&s);
+    assert!((turned.volume - plain.volume).abs() < 1e-3 * plain.volume && (turned.area - plain.area).abs() < 1e-3 * plain.area);
+    assert!(turned.centroid.dist(plain.centroid) > 1e-4, "the groove did not turn");
+    let kind = serde_json::to_value(&s.doc.features.last().unwrap().kind).unwrap();
+    assert_eq!(kind["start_angle"], json!("90 deg"), "{kind}");
+    let reopened = Session::new(Document::from_json(&s.doc.to_json()).unwrap());
+    let again = body(&reopened);
+    assert!((again.volume - turned.volume).abs() < 1e-9 * turned.volume && again.centroid.dist(turned.centroid) < 1e-9);
 }

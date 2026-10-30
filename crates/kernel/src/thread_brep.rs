@@ -32,6 +32,10 @@ pub struct HelicalThread {
     pub from: f64,
     pub to: f64,
     pub left_handed: bool,
+    /// The groove turned about the face's axis (radians, right-handed about the axis): where
+    /// around the face it starts, to set its phase against a mating thread. Turning a thread by
+    /// θ moves its crests θ/2π of a pitch along the axis; 0 starts it on a fixed direction.
+    pub start_angle: f64,
 }
 
 /// The groove's section in the axial plane: its width at the face (`mouth`) and at the
@@ -43,9 +47,12 @@ pub struct GrooveSection {
     pub deep: f64,
 }
 
-/// Stations per turn of the helices' interpolation: off the true helix by about 1e-6 of the
-/// radius.
-const STATIONS_PER_TURN: f64 = 48.0;
+/// Stations per turn of the helices' interpolation: off the true helix by about 6e-5 of the
+/// radius along the groove and 7e-4 at its ends (0.3 and 3.3 µm on M10). Each station is a
+/// knot, and the tessellation planner evaluates a spline of at most `MAX_EVAL_KNOTS` knots, so
+/// a groove of more turns than that allows gets fewer per turn, down to 10 at `MAX_TURNS`
+/// (4e-3 of the radius at the ends).
+const STATIONS_PER_TURN: f64 = 16.0;
 /// Most turns a groove may make.
 const MAX_TURNS: f64 = 400.0;
 
@@ -117,9 +124,17 @@ impl HelicalThread {
     }
 }
 
+/// Stations along a groove of `turns` turns: a spline through them has stations + 4 knots,
+/// which the planner must be able to evaluate.
+pub(crate) fn helix_stations(turns: f64) -> usize {
+    let most = (solidcraft_geom::tess::MAX_EVAL_KNOTS - 5) as f64;
+    let per_turn = STATIONS_PER_TURN.min(most / turns.max(1.0)).floor();
+    ((turns * per_turn).ceil() as usize).max(8) + 1
+}
+
 /// The helices' clamped cubic B-spline through `pts` at uniform parameters (knots averaged),
 /// solved as the banded system it is: a long thread has thousands of stations.
-fn helix_spline(pts: &[Vec3]) -> Option<mt::BSplineCurve<mt::Point3>> {
+pub(crate) fn helix_spline(pts: &[Vec3]) -> Option<mt::BSplineCurve<mt::Point3>> {
     let m = pts.len();
     if m < 4 {
         return None;
@@ -302,6 +317,9 @@ pub fn helical_thread(body: &Body, at: Vec3, cyl: &CylinderFace, t: &HelicalThre
             s.mouth + 0.25 * t.pitch
         )));
     }
+    if !t.start_angle.is_finite() {
+        return Err(KernelError::Invalid("the start angle must be a number".into()));
+    }
     if turns > MAX_TURNS {
         return Err(KernelError::Invalid(format!("a thread is limited to {MAX_TURNS:.0} turns")));
     }
@@ -324,7 +342,7 @@ pub fn helical_thread(body: &Body, at: Vec3, cyl: &CylinderFace, t: &HelicalThre
     // The point `along` the axis from the groove's centre line and `radius` out, `a` radians
     // along the helix.
     let at_helix = |a: f64, radius: f64, along: f64| {
-        let th = hand * a;
+        let th = hand * a + t.start_angle;
         cyl.axis_point + k * (centre0 + t.pitch * a / std::f64::consts::TAU + along) + (u * th.cos() + v * th.sin()) * radius
     };
     // The section's corners: mouth (on the face) and root, below and above the centre line.
@@ -360,7 +378,7 @@ pub fn helical_thread(body: &Body, at: Vec3, cyl: &CylinderFace, t: &HelicalThre
         }
     }
 
-    let stations = ((turns * STATIONS_PER_TURN).ceil() as usize).max(8) + 1;
+    let stations = helix_stations(turns);
     let helices: Vec<mt::BSplineCurve<mt::Point3>> = corners
         .iter()
         .map(|(radius, along)| {
@@ -495,12 +513,26 @@ pub fn helical_thread(body: &Body, at: Vec3, cyl: &CylinderFace, t: &HelicalThre
             // edge by edge, so the solid needs no meshing to orient it (truck's mesher cannot
             // take a face trimmed by a helix of several turns).
             let b = Body::new_placed(solid, false, None, false)?;
-            let bad = b.validity();
-            if !bad.is_empty() {
-                last = bad.join("; ");
+            // Closed shells, then the volume the way a threaded body is meshed (`planned_volume`):
+            // not `Body::validity`, whose reference mesh of a face trimmed by a helix of many turns
+            // takes about a minute (a 100 mm M10 thread) and costs a second full mesh on every try.
+            let open: Vec<String> = b
+                .solid
+                .boundaries()
+                .iter()
+                .enumerate()
+                .filter(|(_, sh)| sh.shell_condition() != truck_topology::shell::ShellCondition::Closed)
+                .map(|(i, sh)| format!("shell {i} is {:?}, not closed", sh.shell_condition()))
+                .collect();
+            if !open.is_empty() {
+                last = open.join("; ");
                 continue;
             }
             let after = planned_volume(&b, measure_tol)?;
+            if !(after.is_finite() && after > 0.0) {
+                last = format!("volume {after}");
+                continue;
+            }
             let cut = volume_before - after;
             if (cut - removed).abs() > 0.05 * removed + 1e-6 * volume_before.abs() {
                 last = format!("the groove removes {cut:.4} mm³, not {removed:.4}");

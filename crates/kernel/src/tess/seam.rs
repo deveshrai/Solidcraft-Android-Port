@@ -420,8 +420,15 @@ pub(crate) fn turns_more_than_once(solid: &crate::body::Solid) -> bool {
             for e in wire.edge_iter() {
                 let c = e.oriented_curve();
                 let (t0, t1) = c.range_tuple();
-                // Samples dense enough that no step turns half way round.
-                let mut n = 16usize;
+                // Samples dense enough that no step turns half way round, and no fewer than the
+                // curve's control points: 16 samples of a helix of 144 turns step 9.03 turns
+                // each, which looks like a fifth of a radian. SolidCraft (Android port).
+                let points = match &c {
+                    mt::Curve::BSplineCurve(b) => b.control_points().len(),
+                    mt::Curve::NurbsCurve(b) => b.control_points().len(),
+                    _ => 0,
+                };
+                let mut n = points.max(16);
                 let steps = loop {
                     let xs: Vec<f64> = (0..=n).map(|i| angle(c.subs(t0 + (t1 - t0) * i as f64 / n as f64))).collect();
                     let ok = xs.windows(2).all(|w| ((w[1] - w[0] + std::f64::consts::PI).rem_euclid(tau) - std::f64::consts::PI).abs() < 1.0);

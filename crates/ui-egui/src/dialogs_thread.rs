@@ -163,6 +163,8 @@ pub struct HelixDraft {
     pub clearance: String,
     pub start_offset: String,
     pub end_offset: String,
+    /// The groove turned about the axis, to phase it against a mating thread.
+    pub start_angle: String,
     /// The last summary worked out, and what it was worked out from.
     pub summary: Option<(String, Result<[String; 3], String>)>,
 }
@@ -191,6 +193,7 @@ impl HelixDraft {
             ("clearance", &self.clearance, true),
             ("start_offset", &self.start_offset, true),
             ("end_offset", &self.end_offset, true),
+            ("start_angle", &self.start_angle, true),
         ];
         for (key, value, used) in fields {
             if used && !value.trim().is_empty() {
@@ -209,6 +212,7 @@ impl HelixDraft {
         clearance: Option<&str>,
         start_offset: Option<&str>,
         end_offset: Option<&str>,
+        start_angle: Option<&str>,
     ) -> Self {
         let s = |v: Option<&str>| v.unwrap_or_default().to_string();
         HelixDraft {
@@ -220,6 +224,7 @@ impl HelixDraft {
             clearance: s(clearance),
             start_offset: s(start_offset),
             end_offset: s(end_offset),
+            start_angle: s(start_angle),
             summary: None,
         }
     }
@@ -237,7 +242,7 @@ impl HelixDraft {
         let at = at?;
         let key = format!(
             "{at:?}|{designation}|{length}|{handedness:?}|{self:?}",
-            self = (&self.pitch, &self.depth, &self.angle, &self.clearance, &self.start_offset, &self.end_offset, self.custom)
+            self = (&self.pitch, &self.depth, &self.angle, &self.clearance, &self.start_offset, &self.end_offset, &self.start_angle, self.custom)
         );
         if let Some((k, v)) = &self.summary
             && *k == key
@@ -261,6 +266,7 @@ impl HelixDraft {
                 start_offset: value(&self.start_offset, length_kind)?,
                 end_offset: value(&self.end_offset, length_kind)?,
                 left_handed: handedness == ThreadHandedness::Left,
+                start_angle: value(&self.start_angle, solidcraft_engine::doc::expr::Kind::Angle)?,
             };
             let st = app.session.world_state();
             let (_, cyl, t) = solidcraft_engine::doc::helical_thread_on(&st, at, &h).map_err(|e| e.to_string())?;
@@ -296,6 +302,8 @@ pub(crate) fn helical_rows(
         enter |= crate::ui_kit::hint_row(ui, "Clearance", &mut helix.clearance, "0 mm");
         enter |= crate::ui_kit::hint_row(ui, "Start offset", &mut helix.start_offset, tr("half a pitch"));
         enter |= crate::ui_kit::hint_row(ui, "End offset", &mut helix.end_offset, tr("half a pitch"));
+        // SolidCraft (Android port): the phase against a mating thread.
+        enter |= crate::ui_kit::hint_row(ui, "Start angle", &mut helix.start_angle, "0°");
         match helix.summary(app, at, designation, length, handedness) {
             Some(Ok([turns, groove, crest])) => {
                 form_row(ui, "Turns", |ui| ui.label(turns));
@@ -809,9 +817,10 @@ mod contribution_tests {
             helix.pitch = "1.5 mm".into();
             helix.clearance = "0.1 mm".into();
             helix.end_offset = "3 mm".into();
+            helix.start_angle = "45 deg".into();
         }
         h.frames(3);
-        for label in ["Pitch", "Thread depth", "Thread angle", "Clearance", "Start offset", "End offset"] {
+        for label in ["Pitch", "Thread depth", "Thread angle", "Clearance", "Start offset", "End offset", "Start angle"] {
             assert!(crate::scenario::rect_of(&format!("dialog:row:{label}")).is_some(), "{label}");
         }
         let Some(Kind::Thread { helix, .. }) = h.app.dialog.as_ref().map(|d| &d.kind) else { panic!("thread") };
@@ -835,11 +844,15 @@ mod contribution_tests {
         let commands = apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
         let p = &commands[0].1;
         assert_eq!((p["pitch"].as_str(), p["helical"].as_bool(), p.get("designation")), (Some("1.5 mm"), Some(true), None), "{p}");
+        assert_eq!(p["start_angle"].as_str(), Some("45 deg"), "{p}");
         let id = h.app.run(&commands[0].0, p.clone()).unwrap()["feature"].as_u64().unwrap();
         h.app.dialog = None;
         let d = crate::dialogs::for_feature(&h.app, id, None).unwrap();
         let Kind::Thread { helix, .. } = &d.kind else { panic!("thread") };
-        assert!(helix.custom && helix.pitch == "1.5 mm" && helix.clearance == "0.1 mm" && helix.end_offset == "3 mm", "{helix:?}");
+        assert!(
+            helix.custom && helix.pitch == "1.5 mm" && helix.clearance == "0.1 mm" && helix.end_offset == "3 mm" && helix.start_angle == "45 deg",
+            "{helix:?}"
+        );
     }
 
     #[test]

@@ -108,6 +108,12 @@ pub(crate) fn plan(solid: &Solid, tol: f64, turn: Option<size::Turn>, boundary_t
     for (e, n) in edges.iter().zip(sampled) {
         nodes.insert(e.id(), n?);
     }
+    // SolidCraft (Android port): an edge cut short at the most nodes one may have leaves its
+    // faces a boundary coarser than the tolerance, which the planner then spends long on and
+    // fails (a 220 mm thread measured at a micron: 30 s). Fail now; the caller meshes coarser.
+    if nodes.values().any(|n| n.points.len() >= edges::MAX_EDGE_NODES - 1) {
+        return Err(unsupported(format!("an edge needs more than {} nodes at this tolerance", edges::MAX_EDGE_NODES)));
+    }
     relax_crowded_faces(&faces, &jobs, &rules, &mut nodes);
     divide_collapsed_faces(&faces, &jobs, &rules, &mut nodes);
     let indexed: Vec<(usize, &mt::Face)> = faces.iter().copied().enumerate().collect();

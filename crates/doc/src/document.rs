@@ -859,6 +859,11 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[walk(length = "End offset")]
         end_offset: Option<Expr>,
+        /// A helical thread's groove turned about the face's axis, to phase it against a mating
+        /// thread; `None` = 0.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(angle = "Start angle")]
+        start_angle: Option<Expr>,
         #[serde(default, skip_serializing_if = "ThreadHandedness::is_right")]
         handedness: ThreadHandedness,
     },

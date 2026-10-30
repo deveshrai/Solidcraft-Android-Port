@@ -64,7 +64,7 @@ fn a_long_thread_cuts_without_a_deep_tree() {
 }
 
 fn helical(pitch: f64, depth: f64, from: f64, to: f64) -> crate::HelicalThread {
-    crate::HelicalThread { pitch, depth, angle: PI / 3.0, clearance: 0.0, from, to, left_handed: false }
+    crate::HelicalThread { pitch, depth, angle: PI / 3.0, clearance: 0.0, from, to, left_handed: false, start_angle: 0.0 }
 }
 
 /// Removed volume of a helical groove: its section times its centroid's path (Pappus).
@@ -172,4 +172,84 @@ fn helical_brep_thread_refusal_names_a_depth_that_fits() {
         assert!(crate::HelicalThread { depth: most * 1.02, ..t }.section().is_err(), "{e}");
     }
     assert!(crate::HelicalThread { clearance: 0.6, ..helical(1.25, 0.5, 0.0, 10.0) }.section().unwrap_err().to_string().contains("clearance"));
+}
+
+/// The helices stay on the true helix at the stations a groove gets (worst at its ends: 7e-4
+/// of the radius at 16 a turn, 4e-3 at the most turns a groove may make), and their knots stay
+/// within what the tessellation planner evaluates.
+#[test]
+fn helical_brep_helices_follow_the_helix() {
+    use truck_modeling::ParametricCurve;
+    let (r, pitch) = (5.0f64, 1.5f64);
+    for (turns, within) in [(6.0, 1e-3), (145.0, 1e-3), (400.0, 5e-3)] {
+        let m = crate::thread_brep::helix_stations(turns);
+        let pts: Vec<Vec3> = (0..m)
+            .map(|i| {
+                let a = 2.0 * PI * turns * i as f64 / (m - 1) as f64;
+                Vec3::new(r * a.cos(), r * a.sin(), pitch * a / (2.0 * PI))
+            })
+            .collect();
+        let c = crate::thread_brep::helix_spline(&pts).unwrap();
+        assert!(c.knot_vec().len() <= solidcraft_geom::tess::MAX_EVAL_KNOTS, "{turns} turns: {} knots", c.knot_vec().len());
+        let worst = (0..=20_000)
+            .map(|i| {
+                let p = c.subs(i as f64 / 20_000.0);
+                let a = 2.0 * PI * p.z / pitch;
+                let on = Vec3::new(r * a.cos(), r * a.sin(), p.z);
+                (Vec3::new(p.x, p.y, p.z) - on).len()
+            })
+            .fold(0.0f64, f64::max);
+        assert!(worst < within * r, "{turns} turns: {worst} mm off the helix");
+    }
+}
+
+/// A lead screw's thread: M10×1.5 down 220 mm, about 145 turns. The tessellation planner
+/// meshes it (its helices once had more knots than the planner evaluates, and the reference
+/// mesh of the fallback came out inside out), and it removes the groove's volume. Measured at a
+/// micron (more nodes on a helix than the planner takes), it is meshed coarser by the planner,
+/// not the reference way; and it is seen to turn more than once (16 samples of its helix once
+/// stepped 9.03 turns each and read as a fifth of a radian).
+#[test]
+fn helical_brep_thread_of_many_turns() {
+    let shaft = cylinder(Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0), 5.0, 220.0).unwrap();
+    let at = Vec3::new(5.0, 0.0, 110.0);
+    let cyl = crate::cylinder_face_at(&shaft, at).unwrap();
+    let (s0, s1) = (cyl.start.min(cyl.end), cyl.start.max(cyl.end));
+    let t = helical(1.5, 0.81, s0 + 1.5, s1 - 1.5);
+    assert!(t.turns().unwrap() > 140.0);
+    let b = crate::helical_thread(&shaft, at, &cyl, &t).unwrap();
+    let planned = |b: &crate::Body| crate::tess::plan(&b.solid, 0.01, None, b.boundary_tol).unwrap().0.evaluate().measure().volume;
+    let removed = planned(&shaft) - planned(&b);
+    let want = groove_volume(&t, 5.0, false);
+    assert!((removed - want).abs() < 0.01 * want, "{removed} vs {want}");
+    assert!(crate::tess::seam::turns_more_than_once(&b.solid));
+    let fine = b.tessellate_with(1.26e-3, true).unwrap().measure().volume;
+    assert!((fine - planned(&b)).abs() < 0.002 * fine, "{fine} vs {}", planned(&b));
+}
+
+/// A start angle turns the groove about the axis, which is the same as moving it along: a
+/// quarter turn puts the grooves a quarter pitch from where they were (along any line on the
+/// face), and the thread removes the same volume.
+#[test]
+fn helical_brep_thread_start_angle_turns_the_groove() {
+    let shaft = cylinder(Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0), 4.0, 20.0).unwrap();
+    let at = Vec3::new(4.0, 0.0, 10.0);
+    let cyl = crate::cylinder_face_at(&shaft, at).unwrap();
+    let (s0, s1) = (cyl.start.min(cyl.end), cyl.start.max(cyl.end));
+    let p = 1.25;
+    let t = helical(p, 0.68, s0 + 2.0, s1 - 2.0);
+    let a = crate::helical_thread(&shaft, at, &cyl, &t).unwrap();
+    let b = crate::helical_thread(&shaft, at, &cyl, &crate::HelicalThread { start_angle: PI / 2.0, ..t }).unwrap();
+    let (ma, mb) = (a.tessellate(1e-3).unwrap(), b.tessellate(1e-3).unwrap());
+    let (va, vb) = (ma.measure().volume, mb.measure().volume);
+    assert!((va - vb).abs() < 1e-3 * va, "{va} vs {vb}");
+    // The middle of the first whole groove up a line 0.2 mm under the face, from z = 8.
+    let groove = |m: &solidcraft_geom::Mesh| {
+        let empty: Vec<bool> = (0..=3000).map(|i| !m.contains(Vec3::new(3.8, 0.0, 8.0 + i as f64 * 1e-3))).collect();
+        let start = (1..empty.len()).find(|&i| empty[i] && !empty[i - 1]).unwrap();
+        let end = (start..empty.len()).find(|&i| !empty[i]).unwrap();
+        8.0 + (start + end - 1) as f64 * 0.5e-3
+    };
+    let shift = (groove(&mb) - groove(&ma)).rem_euclid(p);
+    assert!((shift - p / 4.0).abs() < 0.02 || (shift - 3.0 * p / 4.0).abs() < 0.02, "moved {shift} mm, not a quarter pitch");
 }
