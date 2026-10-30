@@ -14,15 +14,14 @@
 //! - Windows portable `.zip` / standalone `.exe`: the running `solidcraft.exe` is renamed to
 //!   `solidcraft.exe.old` (Windows allows renaming a running executable), the new one takes its
 //!   name, and SolidCraft offers a restart; the `.old` file is deleted at the next start.
-//! - macOS: the `.dmg` is verified and opened; the user drags the app to Applications. SolidCraft
-//!   is ad-hoc signed and not notarized, so replacing the bundle in place would install code the
-//!   system can't vouch for without the user seeing it.
+//! - macOS: the `.dmg` is verified and opened; the user drags the app to Applications. The
+//!   bundle is never replaced in place from the background.
 //! - Flatpak, Snap, `.deb`, `.rpm`, `.tar.gz`: never replaced; the window shows the command.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 
@@ -146,16 +145,36 @@ pub struct Progress {
     pub done: AtomicU64,
     pub total: AtomicU64,
     pub cancel: AtomicBool,
+    /// Final release and whether the refresh failed; absent while checking.
+    selected: Mutex<Option<(Release, bool)>>,
+}
+
+impl Progress {
+    pub fn selection(&self) -> Option<(Release, bool)> {
+        self.selected.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn message(&self) -> String {
+        let selected = self.selected.lock().unwrap_or_else(|e| e.into_inner());
+        match selected.as_ref() {
+            None => crate::i18n::tr("update.refresh_checking").to_string(),
+            Some((release, fallback)) => {
+                crate::i18n::format(if *fallback { "update.refresh_fallback" } else { "update.refresh_selected" }, &[("version", release.version())])
+            }
+        }
+    }
 }
 
 /// What the update needs from the host.
 pub struct Net {
     pub get: super::HttpGet,
     pub download: HttpDownload,
+    pub feed: Option<PathBuf>,
 }
 
-/// Download, verify and apply `release` for `method`. Runs on a background thread. `staging` is
-/// a folder for downloads that aren't written next to their target (the `.msi`, the `.dmg`).
+/// Refresh the feed, then download, verify and apply the newest release for `method`, falling
+/// back to `release` when the check fails. Runs on a background thread. `staging` holds downloads
+/// that are not written next to their target (the `.msi`, the `.dmg`).
 pub fn run(
     release: &Release,
     kind: &InstallKind,
@@ -165,6 +184,17 @@ pub fn run(
     staging: &Path,
     progress: &Progress,
 ) -> Result<Outcome, String> {
+    // The release shown may be stale by now: install the newest one the feed names, or the one
+    // shown when the feed can't be read.
+    let (release, fallback) = match super::fetch_latest(net.feed.as_deref(), Some(&net.get)) {
+        Ok(latest) if super::is_newer(&latest.tag, &release.tag) => (latest, false),
+        Ok(_) => (release.clone(), false),
+        Err(_) => (release.clone(), true),
+    };
+    *progress.selected.lock().unwrap_or_else(|e| e.into_inner()) = Some((release.clone(), fallback));
+    if progress.cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
     let asset = release.asset_for(kind, arch).ok_or_else(|| format!("this release has no package for a {} on {arch}", kind.label()))?;
     if asset.size > MAX_PACKAGE {
         return Err(format!("{} is too large ({} bytes)", asset.name, asset.size));

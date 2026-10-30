@@ -31,14 +31,27 @@ pub(crate) fn icon_button_at(ui: &mut Ui, rect: egui::Rect, icon: &str, label: &
 
 /// Quiet secondary action: a small, muted glyph with the normal full-size hit target.
 pub(crate) fn quiet_icon_button_at(ui: &mut Ui, rect: egui::Rect, icon: &str, label: &str) -> Response {
-    icon_button_presentation(ui, rect, icon, label, None, true)
+    icon_button_presentation(ui, rect, icon, label, None, true, false)
+}
+
+/// Directional counterpart of an existing master, with the same hit target and accessibility.
+pub(crate) fn mirrored_icon_button_at(ui: &mut Ui, rect: egui::Rect, icon: &str, label: &str) -> Response {
+    icon_button_presentation(ui, rect, icon, label, None, false, true)
 }
 
 pub(super) fn icon_button_colored(ui: &mut Ui, rect: egui::Rect, icon: &str, label: &str, ink: Option<egui::Color32>) -> Response {
-    icon_button_presentation(ui, rect, icon, label, ink, false)
+    icon_button_presentation(ui, rect, icon, label, ink, false, false)
 }
 
-fn icon_button_presentation(ui: &mut Ui, rect: egui::Rect, icon: &str, label: &str, ink: Option<egui::Color32>, quiet: bool) -> Response {
+fn icon_button_presentation(
+    ui: &mut Ui,
+    rect: egui::Rect,
+    icon: &str,
+    label: &str,
+    ink: Option<egui::Color32>,
+    quiet: bool,
+    mirrored: bool,
+) -> Response {
     let t = Tokens::get();
     let response = ui.interact(rect, ui.make_persistent_id(("icon_button", icon, label)), egui::Sense::click());
     if response.clicked() {
@@ -47,7 +60,8 @@ fn icon_button_presentation(ui: &mut Ui, rect: egui::Rect, icon: &str, label: &s
     if response.hovered() {
         ui.painter().rect_filled(rect, t.control_radius, t.hover);
     }
-    crate::icons::paint_ink(
+    let paint = if mirrored { crate::icons::paint_ink_mirrored } else { crate::icons::paint_ink };
+    paint(
         ui.painter(),
         if quiet { egui::Rect::from_center_size(rect.center(), vec2(t.space_12, t.space_12)) } else { rect.shrink(t.form_icon_inset) },
         icon,
@@ -62,6 +76,17 @@ fn icon_button_presentation(ui: &mut Ui, rect: egui::Rect, icon: &str, label: &s
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), crate::i18n::tr_label(label)));
     pointer_on_hover(ui, &response);
     response.on_hover_text(crate::i18n::tr_label(label))
+}
+
+/// Plain secondary text action, sharing the kit's normal hit height and typography.
+pub(crate) fn text_button(ui: &mut Ui, label: &str, enabled: bool) -> Response {
+    let t = Tokens::get();
+    let response = ui.add_enabled(
+        enabled,
+        egui::Button::new(RichText::new(label).size(t.font_label).color(t.form_ink)).frame(false).min_size(vec2(0.0, t.control_height)),
+    );
+    scenario::publish_target(&format!("dialog:action:{label}"), response.rect);
+    response
 }
 
 /// Esc cancels; unowned Enter submits only when valid. Tokens: `none`.
@@ -86,6 +111,9 @@ pub(crate) struct Footer<'a> {
     /// Parent surface corners; the footer inherits only its two bottom corners.
     pub corners: Option<egui::CornerRadius>,
     pub secondary_left: bool,
+    /// Nothing to apply yet (nothing changed since the dialog opened or since the last Apply):
+    /// Apply is drawn and reported disabled, and clicking it does nothing (#8561).
+    pub nothing_to_apply: bool,
 }
 
 pub(crate) fn footer(ui: &mut Ui, ok_label: &str, cancel_label: &str, ok_enabled: bool, options: Footer<'_>) -> Action {
@@ -100,7 +128,7 @@ pub(super) fn footer_with_left(
     options: Footer<'_>,
     left: impl FnOnce(&mut Ui),
 ) -> Action {
-    let Footer { apply: apply_label, status, selected, danger, confirm, corners, secondary_left } = options;
+    let Footer { apply: apply_label, status, selected, danger, confirm, corners, secondary_left, nothing_to_apply } = options;
     let t = Tokens::get();
     let ok_enabled = ok_enabled && !ok_label.is_empty();
     // The footer is a full-width band (the card has no margin of its own): its own fill, a rule
@@ -121,7 +149,11 @@ pub(super) fn footer_with_left(
     let inner = band.shrink2(vec2(t.space_12, t.space_10));
     scenario::publish_rect("dialog:footer:actions", inner);
     let mut action = if ui.is_enabled() { keyboard(ui.ctx(), ok_enabled) } else { Action::None };
-    let look = ActionLook::new(ok_enabled, selected, danger);
+    let look = ActionLook::new(ok_enabled, !nothing_to_apply, selected, danger);
+    if apply_label.is_some() {
+        let live = if confirm { !nothing_to_apply } else { look.live(Action::Apply) };
+        scenario::publish_count("dialog:apply:enabled", f64::from(live && ui.is_enabled()));
+    }
     let mut actions_left = inner.right();
     let row = ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -159,7 +191,8 @@ pub(super) fn footer_with_left(
                     .stroke(egui::Stroke::new(1.0, if marked { t.form_primary } else { t.control_border }))
                     .corner_radius(t.control_radius);
             }
-            let response = ui.add(button);
+            // A confirmation's third choice (Don't Save, Keep) never waited for OK's inputs.
+            let response = ui.add_enabled(!nothing_to_apply, button);
             pointer_on_hover(ui, &response);
             scenario::publish_target("dialog:apply", response.rect);
             scenario::publish_handle(&format!("dialog:{label}"), response.rect.center());
@@ -182,13 +215,14 @@ pub(super) fn footer_with_left(
 /// What every OK, Apply and Cancel button shares, wherever the row of them sits.
 struct ActionLook {
     ok_enabled: bool,
+    apply_enabled: bool,
     selected: Option<Action>,
     primary_fill: egui::Color32,
     primary_ink: egui::Color32,
 }
 
 impl ActionLook {
-    fn new(ok_enabled: bool, selected: Option<Action>, danger: bool) -> Self {
+    fn new(ok_enabled: bool, apply_enabled: bool, selected: Option<Action>, danger: bool) -> Self {
         let t = Tokens::get();
         let primary_fill = if t.borders.bevel.is_some() && !danger {
             t.control_fill
@@ -204,7 +238,16 @@ impl ActionLook {
         } else {
             t.on_accent
         };
-        Self { ok_enabled, selected, primary_fill, primary_ink }
+        Self { ok_enabled, apply_enabled, selected, primary_fill, primary_ink }
+    }
+
+    /// Cancel always works; OK and Apply need valid inputs, and Apply also something to apply.
+    fn live(&self, kind: Action) -> bool {
+        match kind {
+            Action::Cancel => true,
+            Action::Apply => self.ok_enabled && self.apply_enabled,
+            Action::Ok | Action::None => self.ok_enabled,
+        }
     }
 
     /// OK carries the accent unless the keyboard marks another action.
@@ -220,11 +263,11 @@ fn action_button(ui: &mut Ui, label: &str, kind: Action, look: &ActionLook, padd
     let ok_enabled = look.ok_enabled;
     let marked = look.selected == Some(kind);
     let primary = look.primary(kind);
-    let live = kind == Action::Cancel || ok_enabled;
+    let live = look.live(kind);
     ui.spacing_mut().button_padding = vec2(padding, 0.0);
     let text = RichText::new(crate::i18n::tr_label(label)).size(t.font_label).color(if primary && ok_enabled {
         look.primary_ink
-    } else if primary {
+    } else if primary || !live {
         t.form_dim
     } else {
         t.form_ink
@@ -308,7 +351,7 @@ impl<'a> HeaderActions<'a> {
         let ok_enabled = ok_enabled && self.rect(Action::Ok).is_some();
         scenario::publish_count("dialog:ok:enabled", f64::from(ok_enabled && ui.is_enabled()));
         let mut action = if ui.is_enabled() { keyboard(ui.ctx(), ok_enabled) } else { Action::None };
-        let look = ActionLook::new(ok_enabled, None, false);
+        let look = ActionLook::new(ok_enabled, true, None, false);
         let padding = Tokens::get().space_8;
         for (kind, label, rect) in &self.slots {
             let builder = egui::UiBuilder::new()
@@ -555,6 +598,14 @@ pub(crate) fn icon_label_button(ui: &mut Ui, label: &str, icon: &str, enabled: b
     icon_label_presentation(ui, crate::i18n::tr_label(label), Some(icon), enabled, false, danger, false)
 }
 
+/// Icon-only action with an accessible name and tooltip, using the shared action
+/// geometry, enabled state and optional danger ink. Tokens: icon-label action tokens.
+pub(crate) fn icon_action(ui: &mut Ui, label: &str, icon: &str, enabled: bool, danger: bool) -> Response {
+    let response = icon_label_button(ui, "", icon, enabled, danger).on_hover_text(label);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled && ui.is_enabled(), label));
+    response
+}
+
 /// Compact stage actions share the icon-label button's frame, typography and hit target.
 pub(super) fn icon_label_width(ui: &Ui, label: &str, icon: Option<&str>, primary: bool) -> f32 {
     let t = Tokens::get();
@@ -571,12 +622,46 @@ pub(super) fn icon_label_width(ui: &Ui, label: &str, icon: Option<&str>, primary
         + if icon.is_some() { t.space_14 + t.space_6 } else { 0.0 }
 }
 
-pub(super) fn icon_label_action(ui: &mut Ui, label: &str, icon: Option<&str>, enabled: bool, primary: bool) -> Response {
+pub(crate) fn icon_label_action(ui: &mut Ui, label: &str, icon: Option<&str>, enabled: bool, primary: bool) -> Response {
     icon_label_presentation(ui, label, icon, enabled, primary, false, false)
 }
 
 pub(crate) fn compact_icon_label_button(ui: &mut Ui, label: &str, icon: &str, enabled: bool) -> Response {
     icon_label_presentation(ui, label, Some(icon), enabled, false, false, true)
+}
+
+/// A name chip and quiet actions in a selection card. Feature code supplies command data only.
+pub(crate) fn selection_actions(ui: &mut Ui, name: &str, actions: &[super::StageAction<'_>]) -> Option<usize> {
+    let t = Tokens::get();
+    let accent = crate::theme::TabAccent::current(ui.ctx());
+    ui.spacing_mut().interact_size.y = t.control_height - t.space_2;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = t.space_2;
+        let font = crate::fonts::semibold(t.font_small);
+        let width = ui.painter().layout_no_wrap(name.into(), font.clone(), accent.ink).size().x.min(t.form_label_width) + t.space_12;
+        let (rect, name_response) = ui.allocate_exact_size(vec2(width, t.control_height - t.space_2), egui::Sense::click());
+        name_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), name));
+        super::text::paint_text(ui, rect.shrink2(vec2(t.space_6, 0.0)), name, font, accent.ink, false);
+        scenario::publish_target("selection:name", rect);
+        let mut clicked = name_response.clicked().then_some(actions.len());
+        for (index, action) in actions.iter().enumerate() {
+            let response = ui
+                .add_enabled_ui(action.enabled, |ui| {
+                    let (rect, _) = ui.allocate_exact_size(vec2(t.control_height - t.space_2, t.control_height - t.space_2), egui::Sense::hover());
+                    icon_button_colored(ui, rect, action.icon.unwrap_or("inspect"), action.label, action.primary.then_some(accent.ink))
+                })
+                .inner;
+            scenario::publish_target(&format!("selection:action:{index}"), response.rect);
+            if response.clicked() {
+                clicked = Some(index);
+            }
+            if let Some(reason) = action.reason {
+                response.on_disabled_hover_text(reason);
+            }
+        }
+        clicked
+    })
+    .inner
 }
 
 fn icon_label_presentation(ui: &mut Ui, label: &str, icon: Option<&str>, enabled: bool, primary: bool, danger: bool, dense: bool) -> Response {

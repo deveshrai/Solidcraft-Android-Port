@@ -1,19 +1,19 @@
 //! Delete for everything that can be selected, in one undo step: sketch entities (while
 //! sketching), timeline features and sketches (with the features that depend on them),
 //! construction planes and axes, bodies (a Remove feature from here on in the timeline), occurrences and
-//! components, canvases and joints. `dry_run` reports what would go and what would fail without
+//! components, canvases, point clouds and joints. `dry_run` reports what would go and what would fail without
 //! changing anything, so the UI can ask first.
 
 use serde_json::{Value, json};
 use solidcraft_doc::FeatureKind;
 use solidcraft_geom::Vec3;
 
-use super::CommandSpec;
+use super::{CommandSpec, sketch_store};
 use crate::params::{bad, bool_};
 use crate::{EngineError, Result, Sel, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[CommandSpec::new("selection.delete", "Delete", delete).icon("delete").params(
-    "items?: [selection items]; components?, occurrences?, canvases?, joints?: [ids or names]; dry_run?: bool → deleted, deleted_joints, would_fail, skipped (one undo step)",
+    "items?: [selection items]; components?, occurrences?, canvases?, point_clouds?, joints?: [ids or names]; dry_run?: bool → deleted, deleted_joints, would_fail, skipped (one undo step)",
 )];
 
 /// Run another command's body inside this one (so the whole delete is one undo step).
@@ -119,7 +119,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
             // whole text, so no counters are left behind.
             Sel::Profile { sketch, index } if s.active_sketch == Some(*sketch) => {
                 let st = s.model.state();
-                let (Some(ss), Ok(sk)) = (st.sketch(*sketch), s.doc.sketch(*sketch)) else {
+                let (Some(ss), Ok(sk)) = (st.sketch(*sketch), sketch_store::read(&s.doc, *sketch)) else {
                     skip("nothing around that profile can be deleted".into());
                     continue;
                 };
@@ -210,6 +210,10 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     }
     for k in keys(p, "canvases") {
         sub(s, "canvas.delete", json!({ "canvas": k }))?;
+        done = true;
+    }
+    for k in keys(p, "point_clouds") {
+        sub(s, "pointcloud.delete", json!({ "cloud": k }))?;
         done = true;
     }
     if !done {

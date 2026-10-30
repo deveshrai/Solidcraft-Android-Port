@@ -159,6 +159,22 @@ fn results_kept_ahead_outlive_the_cache() {
     assert!(rel(measure(&m.state().bodies[0].body).unwrap().volume, 30000.0) < 1e-9);
 }
 
+/// A saved model whose feature warning is longer than 65,536 characters is still taken on open
+/// (#8541): Save writes it, so Open reads it.
+#[test]
+fn a_saved_model_with_a_long_warning_is_adopted() {
+    let (doc, _) = plate_doc();
+    let mut m = Model::new();
+    m.evaluate(&doc);
+    let mut saved = m.saved(&doc).unwrap();
+    let last = doc.features.last().unwrap().id;
+    let warning = "w".repeat(122_701);
+    let features = saved.records["features"].as_array_mut().unwrap();
+    features.last_mut().unwrap()["warning"] = warning.clone().into();
+    let reopened = Model::adopt(&doc, &saved).unwrap();
+    assert_eq!(reopened.result(last).and_then(|r| r.warning.as_deref()), Some(warning.as_str()));
+}
+
 /// Rolling the marker back must not discard unchanged results just because the bounded cache
 /// evicted them. Opening an earlier feature and returning to the end otherwise rebuilds it all.
 #[test]
@@ -550,7 +566,7 @@ fn feature_inserted_at_a_marker_inside_a_timeline_folder_joins_it() {
     let first = doc.add_feature(FeatureKind::Sketch { plane: PlaneRef::Origin { name: "XY".into() }, sketch: Sketch::new() }, Some("First")).unwrap();
     let second =
         doc.add_feature(FeatureKind::Sketch { plane: PlaneRef::Origin { name: "XY".into() }, sketch: Sketch::new() }, Some("Second")).unwrap();
-    doc.timeline_groups.push(TimelineGroup { id: 100, name: "Pair".into(), parent: None, features: vec![first, second] });
+    doc.timeline_groups.push(TimelineGroup { id: 100, name: "Pair".into(), parent: None, features: vec![first, second], joints: vec![] });
     doc.marker = Some(1);
 
     let inserted =
@@ -683,4 +699,19 @@ fn empty_boolean_targets_without_overlap_keep_plain_message() {
         model.evaluate(&doc);
         assert_eq!(model.result(cut).unwrap().error.as_deref(), Some("there is no body to cut or intersect"));
     }
+}
+
+#[test]
+fn timeline_group_legacy_json_omits_empty_joint_membership() {
+    let old = serde_json::json!({"id":100, "name":"Folder", "parent":null, "features":[]});
+    let group: TimelineGroup = serde_json::from_value(old.clone()).unwrap();
+    assert!(group.joints.is_empty());
+    assert_eq!(serde_json::to_value(&group).unwrap(), old);
+    let mut doc = Document::new("legacy folders");
+    doc.timeline_groups.push(group);
+    doc.next_id = 101;
+    let saved = doc.to_json();
+    let value: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert!(value["timeline_groups"][0].get("joints").is_none());
+    assert_eq!(Document::from_json(&saved).unwrap().to_json(), saved);
 }

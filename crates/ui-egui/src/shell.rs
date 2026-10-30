@@ -91,11 +91,17 @@ impl Cards {
 /// Shell panels measured after drawing the full-bleed viewport. No design or preferences data.
 #[derive(Default)]
 pub(crate) struct State {
+    /// Per-window Render view state; neither preferences nor document data.
+    pub render_focus: bool,
+    pub render_browser_open: bool,
     pub cards: Vec<Rect>,
     pub panels: Vec<Rect>,
     /// Actual floating workspace surfaces and their optional canvas reservation.
     pub workspace_panels: std::collections::BTreeMap<&'static str, (Rect, Option<crate::ui_kit::Edge>)>,
     pub browser: Option<Rect>,
+    /// The browser set to reveal on hover is out of sight this frame (#8692); its place stays
+    /// in `browser`, which the pointer reveals.
+    pub browser_hidden: bool,
     pub history: Option<Rect>,
     /// In-memory seam drag width, never serialized as a preference.
     pub history_drag_width: Option<f32>,
@@ -109,10 +115,13 @@ pub(crate) struct State {
     pub left_space: Option<Rect>,
     /// The left column an open dialog holds this frame (`dialog_column`).
     pub dialog_column: Option<Rect>,
+    /// The status bar along the window's bottom edge, while it is shown (#7243).
+    pub status_bar: Option<Rect>,
 }
 
 /// Register the actual card, so fitting and pointer shielding use the same rectangle.
 pub(crate) fn register_panel(app: &mut SolveApp, id: &'static str, rect: Option<Rect>, edge: Option<crate::ui_kit::Edge>) {
+    let rect = rect.filter(|_| !crate::render_ui::focused(app) || !id.starts_with("render:") || id == "render:focus:exit");
     if let Some(rect) = rect.filter(|r| r.is_finite() && r.is_positive()) {
         app.shell.workspace_panels.insert(id, (rect, edge));
     } else {
@@ -137,10 +146,19 @@ pub(crate) fn panel_bounds(app: &SolveApp, mut available: Rect) -> Rect {
     available
 }
 
-/// One source of occlusion for navigation, picking, overlays and fit.
+/// One source of occlusion for navigation, picking and overlays.
 pub(crate) fn covered_rects(app: &SolveApp) -> Vec<Rect> {
+    occluding_rects(app, false)
+}
+
+/// Selection controls follow the projected model, so they must not influence its fit.
+pub(crate) fn fit_rects(app: &SolveApp) -> Vec<Rect> {
+    occluding_rects(app, true)
+}
+
+fn occluding_rects(app: &SolveApp, fitting: bool) -> Vec<Rect> {
     let mut rects = Vec::new();
-    rects.extend(app.shell.workspace_panels.values().map(|(rect, _)| *rect));
+    rects.extend(app.shell.workspace_panels.iter().filter(|(id, _)| !fitting || **id != "render:selection").map(|(_, (rect, _))| *rect));
     if crate::render_workspace::active(app) || Container::for_layout(app.ui.layout, Surface::Panel).floating() {
         rects.extend(app.shell.cards.iter().copied());
         rects.extend(app.shell.panels.iter().copied());
@@ -156,6 +174,7 @@ pub(crate) fn covered_rects(app: &SolveApp) -> Vec<Rect> {
     rects.extend(app.viewport.palette_rect.filter(|_| app.session.active_sketch.is_some()));
     rects.extend(app.viewport.dialog_rect.filter(|_| app.dialog.is_some() || app.tree.redefine.is_some()));
     rects.extend(crate::view_confirm::rect(app));
+    rects.extend(app.shell.status_bar.filter(|_| crate::status_bar::shown(app)));
     rects.retain(|r| r.is_finite() && r.is_positive());
     rects
 }
@@ -193,6 +212,9 @@ pub(crate) fn content_rect(app: &SolveApp, viewport: Rect) -> Rect {
 /// their allocation; content-hugging Browser and floating overlays reserve their measured span.
 pub(crate) fn workspace_content(app: &SolveApp, mut content: Rect) -> Rect {
     if crate::render_workspace::active(app) {
+        if crate::render_ui::focused(app) {
+            return content;
+        }
         let gap = Container::floating_card(Surface::Panel).gap();
         for (rect, edge) in app.shell.workspace_panels.values() {
             match edge {

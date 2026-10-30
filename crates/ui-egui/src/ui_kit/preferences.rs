@@ -26,12 +26,26 @@ pub(crate) fn settings_scroll<R>(ui: &mut Ui, id: impl egui::AsIdSalt, add: impl
             scroll.floating_allocated_width = 0.0;
             scroll.bar_outer_margin = 0.0;
         }
-        egui::ScrollArea::vertical().id_salt(id).max_height(height).auto_shrink([false, false]).show(ui, |ui| {
+        let mut scroll = egui::ScrollArea::vertical().id_salt(id).max_height(height).auto_shrink([false, false]).show(ui, |ui| {
             if gutter > 0.0 {
-                ui.set_width(width);
+                // The scrollbar host extends into the gutter. Its content must neither use
+                // that extension nor grow the page/window when a child requests extra width.
+                let bounds = Rect::from_min_size(ui.next_widget_position(), vec2(width, ui.available_height()));
+                let mut content = ui.new_child(egui::UiBuilder::new().max_rect(bounds));
+                let clip = content.clip_rect();
+                content.set_clip_rect(clip.intersect(Rect::from_min_max(pos2(bounds.left(), clip.top()), pos2(bounds.right(), clip.bottom()))));
+                let result = add(&mut content);
+                ui.allocate_exact_size(vec2(width, content.min_size().y), Sense::hover());
+                result
+            } else {
+                add(ui)
             }
-            add(ui)
-        })
+        });
+        // Consumers publish the page's content well, not the extended scrollbar host.
+        if gutter > 0.0 {
+            scroll.inner_rect.max.x = scroll.inner_rect.left() + width;
+        }
+        scroll
     })
     .inner
 }
@@ -86,6 +100,19 @@ pub(crate) fn settings_section<R>(ui: &mut Ui, key: &str, title: &str, mut add: 
             scenario::publish_rect(&format!("prefs:section:{key}"), rect);
         }
         ui.spacing_mut().item_spacing.y = t.space_8;
+        add(ui)
+    })
+}
+
+/// Full-width settings detail group. Container owns its surface; content cannot shrink the card.
+pub(crate) fn settings_card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
+    let t = Tokens::get();
+    let container = super::Container::new(ui.ctx(), super::Surface::Navigation);
+    let frame = container
+        .frame(ui.ctx(), t.dialog_footer, crate::frame::Side::Left)
+        .inner_margin(egui::Margin::symmetric(t.space_12 as i8, t.space_10 as i8));
+    container.show_frame(ui, frame, ui.max_rect(), |ui| {
+        ui.set_min_width(dimension(ui.available_width()));
         add(ui)
     })
 }
@@ -564,16 +591,16 @@ pub(crate) fn tab_accent_strip(ui: &mut Ui) {
     }
     let t = Tokens::get();
     super::text(ui, crate::i18n::tr("prefs.tab_accent_note"), super::Text::Hint("tab_accent"));
-    let names =
-        [("MODEL", "Model"), ("SURFACE", "Surface"), ("MESH", "Mesh"), ("FORM", "Form"), ("SHEET METAL", "Sheet Metal"), ("RENDER", "Render")];
+    // Named as the ribbon names its tabs, so each reads as its tab does in every language.
+    let names = ["MODEL", "SURFACE", "MESH", "FORM", "SHEET METAL", "RENDER"];
     let (r, _) = ui.allocate_exact_size(vec2(dimension(ui.available_width()), t.space_24 + t.space_8), Sense::hover());
     let width = r.width() / names.len() as f32;
-    for (i, (name, display_label)) in names.iter().enumerate() {
+    for (i, name) in names.iter().enumerate() {
         let rect = Rect::from_min_size(r.min + vec2(i as f32 * width, 0.0), vec2((width - t.space_6).max(0.0), t.space_6));
         let accent = crate::theme::TabAccent::for_tab(&t, name);
         ui.painter().rect_filled(rect, t.radius_sm, accent.color);
         let label = Rect::from_min_size(pos2(rect.left(), rect.bottom() + t.space_4), vec2(rect.width(), t.space_16));
-        centred_text(ui.painter(), label, crate::i18n::tr_label(display_label), FontId::proportional(t.font_small), t.form_dim);
+        centred_text(ui.painter(), label, &crate::workspace::tab_name(name), FontId::proportional(t.font_small), t.form_dim);
     }
 }
 

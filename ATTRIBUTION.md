@@ -429,6 +429,20 @@ Original SolidCraft drawings, Open for owner review; no runtime assignments.
 | assets/icons/ui/design/svg/model/status_recovery.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/frame_member.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/render_environment.svg | SolidCraft contributors | original Studio icon master (64 grid): dome with a grey cube inside | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/style_shaded.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/style_wireframe.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/style_hidden_edges.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/style_translucent.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/select_faces_edges.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/select_bodies.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/select_features.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/select_parts.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/select_components.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/select_sketch.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/display.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/grid.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/ground_shadow.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/ambient_occlusion.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/placeholder.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/plane.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
 | assets/icons/ui/design/svg/model/plane_angle.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
@@ -581,6 +595,22 @@ Original SolidCraft drawings, Open for owner review; no runtime assignments.
 | assets/styles/ui/themes/cga.json | SolidCraft contributors | original SolidCraft theme file using the 16 colours of the IBM Color Graphics Adapter (black, cyan, magenta, and white of its high-intensity palette 1 for the interface) | MIT OR Apache-2.0 |
 | assets/styles/ui/themes/1-bit.json | SolidCraft contributors | original SolidCraft theme file | MIT OR Apache-2.0 |
 | assets/styles/ui/themes/1-bit-dark.json | SolidCraft contributors | original SolidCraft theme file | MIT OR Apache-2.0 |
+| `assets/locales/pending/navbar-customisation.json` | SolidCraft contributors | Original navigation bar editor translations | MIT OR Apache-2.0 |
+| `assets/locales/pending/navbar-slots.json` | SolidCraft contributors | Original navigation slot translations | MIT OR Apache-2.0 |
+| assets/locales/bs.json | Tarik Sijercic (tsijercic1) | Original Bosnian translation of SolidCraft's English catalog; no commercial CAD text used | MIT OR Apache-2.0 |
+| assets/locales/hr.json | Tarik Sijercic (tsijercic1) | Original Croatian translation of SolidCraft's English catalog; no commercial CAD text used | MIT OR Apache-2.0 |
+| assets/locales/sr.json | Tarik Sijercic (tsijercic1) | Original Serbian (ekavian, Cyrillic) translation of SolidCraft's English catalog; no commercial CAD text used | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/model/finish_edit.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
+| `assets/locales/pending/sketch-tracking-guides.json` | SolidCraft contributors | Original alignment-guide preference labels and help text | MIT OR Apache-2.0 |
+| assets/locales/pending/point-clouds.json | SolidCraft contributors | Original point-cloud UI strings and translations | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/model/feature_group.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/model/mesh_body.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/model/timeline_play.svg | SolidCraft contributors | Original history playback icon; canonical grey_cube base and original action cue | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/model/timeline_stop.svg | SolidCraft contributors | Original history playback icon; canonical grey_cube base and original action cue | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/flat/status_pin.svg | SolidCraft contributors | Original analytic pin icon for persistent viewport results | MIT OR Apache-2.0 |
+| assets/locales/pending/render-wear.json | SolidCraft contributors | Original UI labels and translations | MIT OR Apache-2.0 |
+| assets/icons/ui/design/svg/model/equation_curve.svg | SolidCraft contributors | two-tone modelling icon master (64 grid), original SolidCraft artwork | MIT OR Apache-2.0 |
+| assets/locales/pending/sketch-recent-snap.json | SolidCraft contributors | Original preference messages for the recent centre and midpoint snap | MIT OR Apache-2.0 |
 
 ## Code adapted from sibling projects
 

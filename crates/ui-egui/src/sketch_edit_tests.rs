@@ -367,3 +367,48 @@ mod exit_view_preference {
         assert_eq!(SketchExitView::UnlessRotated.view_after(before, facing, turned), None);
     }
 }
+
+/// #8127: a sketch inside an inserted fastener, opened from its row in the browser, activates the
+/// fastener's component while it is open; Finish and Cancel make the design active again, so the
+/// other bodies are no longer drawn faded. Editing it with the fastener already active leaves the
+/// fastener active, and so does activating another component while the sketch is open.
+#[test]
+fn a_sketch_opened_inside_a_component_gives_the_active_component_back() {
+    let mut app = sample_app();
+    let bolt = app.run("parts.insert", serde_json::json!({"family": "socket_head_cap_screw", "size": "M6", "point": [0, 0, 0]})).unwrap();
+    let comp = bolt["component"].as_u64().unwrap();
+    let path = app.session.doc.first_path(comp);
+    let sketch = app.session.doc.features.iter().find(|f| f.component == comp && matches!(f.kind, FeatureKind::Sketch { .. })).map(|f| f.id).unwrap();
+    let marker = app.session.doc.marker;
+    for leave in [SolveApp::finish_sketch as fn(&mut SolveApp), SolveApp::cancel_sketch] {
+        app.edit_sketch_in(sketch, Some((comp, &path)));
+        assert_eq!(
+            (app.session.active_sketch, app.session.active_component),
+            (Some(sketch), comp),
+            "the fastener is active while its sketch is open"
+        );
+        leave(&mut app);
+        assert_eq!((app.session.active_sketch, app.session.active_component), (None, 0), "the design is active again");
+        assert_eq!(app.session.active_occurrence_path, None);
+        assert_eq!(app.session.doc.marker, marker);
+    }
+    // Switching to a sketch of the design from the fastener's leaves nothing of the fastener active.
+    app.edit_sketch_in(sketch, Some((comp, &path)));
+    app.edit_sketch(first_sketch(&app));
+    assert_eq!(app.session.active_component, 0);
+    app.finish_sketch();
+    assert_eq!(app.session.active_component, 0);
+    // The fastener was active already: it stays active.
+    app.run("component.activate", serde_json::json!({"component": comp})).unwrap();
+    app.edit_sketch_in(sketch, Some((comp, &path)));
+    app.finish_sketch();
+    assert_eq!(app.session.active_component, comp);
+    // Another component activated while the sketch is open stays active.
+    app.run("component.activate", serde_json::json!({"component": 0})).unwrap();
+    let washer = app.run("parts.insert", serde_json::json!({"family": "washer", "size": "M6", "point": [20, 0, 0]})).unwrap();
+    let washer = washer["component"].as_u64().unwrap();
+    app.edit_sketch_in(sketch, Some((comp, &path)));
+    app.run("component.activate", serde_json::json!({"component": washer})).unwrap();
+    app.finish_sketch();
+    assert_eq!(app.session.active_component, washer, "the component activated meanwhile stays active");
+}

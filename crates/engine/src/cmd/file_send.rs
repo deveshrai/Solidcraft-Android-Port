@@ -53,6 +53,8 @@ pub(super) struct Send<'a> {
     /// The target as the caller named it: an id, a name, or a program path.
     pub spec: &'a str,
     pub bodies: Vec<String>,
+    /// 3MF objects with parts (`objects: "component"`, #8139). Only for [`Dest::Path`].
+    pub parts: Vec<(String, Vec<String>)>,
     pub format: Format,
     /// Only for [`Dest::Path`]; the slicer folder's file is always standard.
     pub quality: solidcraft_io::MeshQuality,
@@ -79,7 +81,7 @@ pub(super) fn send(s: &mut Session, r: Send<'_>) -> Result<Value> {
         return Err(bad(r.cmd, format!("{} does not take {}", target.name, format_name(r.format))));
     }
     let mut out = match r.dest {
-        Dest::Path(path) => export_to(s, path, r.format, &r.bodies, r.quality)?,
+        Dest::Path(path) => export_to(s, path, r.format, &r.bodies, &r.parts, r.quality)?,
         Dest::Folder => write_in_folder(s, &r)?,
     };
     let path = out.get("path").and_then(Value::as_str).unwrap_or_default().to_string();

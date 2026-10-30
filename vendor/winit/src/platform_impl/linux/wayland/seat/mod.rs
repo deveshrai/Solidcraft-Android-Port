@@ -9,6 +9,8 @@ use sctk::reexports::client::backend::ObjectId;
 use sctk::reexports::client::protocol::wl_seat::WlSeat;
 use sctk::reexports::client::protocol::wl_touch::WlTouch;
 use sctk::reexports::client::{Connection, Proxy, QueueHandle};
+// SolidCraft: the pinch gesture object of zwp_pointer_gestures_v1.
+use sctk::reexports::protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1;
 use sctk::reexports::protocols::wp::relative_pointer::zv1::client::zwp_relative_pointer_v1::ZwpRelativePointerV1;
 use sctk::reexports::protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextInputV3;
 
@@ -24,6 +26,8 @@ mod pointer;
 mod text_input;
 mod touch;
 
+// SolidCraft: the touchpad pinch and rotation gestures of zwp_pointer_gestures_v1.
+pub use pointer::pointer_gesture::PointerGesturesState;
 pub use pointer::relative_pointer::RelativePointerState;
 pub use pointer::{PointerConstraintsState, WinitPointerData, WinitPointerDataExt};
 pub use text_input::{TextInputState, ZwpTextInputV3Ext};
@@ -36,6 +40,9 @@ use touch::TouchPoint;
 pub struct WinitSeatState {
     /// The pointer bound on the seat.
     pointer: Option<Arc<ThemedPointer<WinitPointerData>>>,
+
+    /// SolidCraft: the pinch gesture object tracking the pointer of the seat.
+    pinch_gesture: Option<ZwpPointerGesturePinchV1>,
 
     /// The touch bound on the seat.
     touch: Option<WlTouch>,
@@ -124,6 +131,11 @@ impl SeatHandler for WinitState {
 
                 let themed_pointer = Arc::new(themed_pointer);
 
+                // SolidCraft: track the touchpad's pinch and rotation over our surfaces.
+                seat_state.pinch_gesture = self.pointer_gestures.as_ref().map(|gestures| {
+                    gestures.get_pinch_gesture(themed_pointer.pointer(), queue_handle)
+                });
+
                 // Register cursor surface.
                 self.pointer_surfaces.insert(surface_id, themed_pointer.clone());
 
@@ -171,6 +183,11 @@ impl SeatHandler for WinitState {
                 }
             },
             SeatCapability::Pointer => {
+                // SolidCraft: the gesture object references the pointer, so drop it first.
+                if let Some(pinch_gesture) = seat_state.pinch_gesture.take() {
+                    pinch_gesture.destroy();
+                }
+
                 if let Some(relative_pointer) = seat_state.relative_pointer.take() {
                     relative_pointer.destroy();
                 }

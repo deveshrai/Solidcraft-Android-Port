@@ -127,7 +127,7 @@ impl Kind {
 }
 
 /// Units a parameter or an expression may use: name, kind and size (mm or radians).
-pub const UNITS: [(&str, Kind, f64); 14] = [
+pub const UNITS: &[(&str, Kind, f64)] = &[
     ("mm", Kind::Length, 1.0),
     ("cm", Kind::Length, 10.0),
     ("m", Kind::Length, 1000.0),
@@ -145,7 +145,7 @@ pub const UNITS: [(&str, Kind, f64); 14] = [
 ];
 
 /// Functions an expression may call (name, signature) — for autocomplete and help.
-pub const FUNCTIONS: [(&str, &str); 23] = [
+pub const FUNCTIONS: &[(&str, &str)] = &[
     ("sin", "sin(angle)"),
     ("cos", "cos(angle)"),
     ("tan", "tan(angle)"),
@@ -172,7 +172,7 @@ pub const FUNCTIONS: [(&str, &str); 23] = [
 ];
 
 /// Constants an expression may use.
-pub const CONSTANTS: [&str; 2] = ["pi", "PI"];
+pub const CONSTANTS: &[&str] = &["pi", "PI"];
 
 /// Kind and size (mm or radians per unit) of a parameter's unit; empty means unit-less.
 pub fn unit_info(u: &str) -> Option<(Kind, f64)> {
@@ -351,6 +351,14 @@ fn lex_spans(s: &str) -> Result<Vec<(Tok, usize, usize)>, DocError> {
         && cs.get(k).is_some_and(|(_, c)| *c == '=')
     {
         i = k + 1;
+    }
+    // A value typed as a definition, `name = expression` (#4071), is worth its expression: the
+    // name is what it defines, not part of it (`Document::define_inline` stores it apart).
+    if i == 0
+        && definition(s).is_some()
+        && let Some(eq) = s.find('=')
+    {
+        i = cs.iter().position(|(b, _)| *b > eq).unwrap_or(cs.len());
     }
     while let Some(&(_, c)) = cs.get(i) {
         if c.is_whitespace() {
@@ -565,6 +573,10 @@ pub fn rename_reference(s: &str, old: &str, new: &str) -> String {
 
 /// Is the expression just a number (with an optional unit), like `20`, `20 mm` or `-1.5 in`?
 pub fn is_literal(s: &str) -> bool {
+    // A definition names its value: it is not just a number, whatever it defines (#4071).
+    if definition(s).is_some() {
+        return false;
+    }
     let Ok(toks) = lex(s) else { return false };
     let toks: &[Tok] = match toks.first() {
         Some(Tok::Op('-' | '+')) => toks.get(1..).unwrap_or_default(),
@@ -592,8 +604,8 @@ fn is_name_shaped(s: &str) -> bool {
 /// A value typed as a definition, `name = expression` (or `#name = expression`, #2371): the name
 /// without the `#` and the text after the first `=`, both trimmed (the text may be empty). `None` for anything else, including text whose
 /// left side is not shaped like a name (`2 = 3`), which stays an ordinary expression and fails
-/// to parse as before. The dimension input defines a user parameter this way (#2916); other
-/// value inputs can take the same form later.
+/// to parse as before. Every value input defines a user parameter this way (#2916, #4071): until
+/// `Document::define_inline` stores the parameter, the text evaluates as its expression.
 pub fn definition(s: &str) -> Option<(&str, &str)> {
     let (name, rhs) = s.split_once('=')?;
     let name = name.trim();
@@ -970,6 +982,24 @@ fn call(f: &str, args: &[Value], d: Defaults) -> Result<Value, DocError> {
     })
 }
 
+/// Evaluate a count: a unit-less whole number. A length or angle says how to fix it, and a
+/// fraction is refused rather than rounded to a different number of copies.
+pub fn eval_count(s: &str, vals: &BTreeMap<String, Value>) -> Result<f64, DocError> {
+    let e = s.trim();
+    let value = eval_with(e, &|n| vals.get(n).copied().ok_or_else(|| DocError::Expr(format!("unknown parameter `{n}`"))))?;
+    if let Some(kind @ (Kind::Length | Kind::Angle)) = value.kind() {
+        let subject = if vals.contains_key(e) { format!("`{e}`") } else { "this expression".into() };
+        let remedy = if vals.contains_key(e) { "set its Unit to none to use it as a count" } else { "use a unit-less expression as a count" };
+        return Err(DocError::Expr(format!("{subject} is {} ({}); {remedy}", value.describe(), kind.default_unit())));
+    }
+    let n = value.to_kind(Kind::Unitless)?;
+    // Allow float noise such as `10 / 3 * 3`, never a real fraction.
+    if !n.is_finite() || (n - n.round()).abs() > 1e-9 {
+        return Err(DocError::Expr(format!("a count must be a whole number; `{e}` is {n}")));
+    }
+    Ok(n.round())
+}
+
 /// Evaluate an expression; `lookup` resolves parameter names. Bare numbers are mm / degrees.
 pub fn eval_with(s: &str, lookup: &dyn Fn(&str) -> Result<Value, DocError>) -> Result<Value, DocError> {
     eval_with_defaults(s, lookup, Defaults::default())
@@ -979,6 +1009,9 @@ pub fn eval_with(s: &str, lookup: &dyn Fn(&str) -> Result<Value, DocError>) -> R
 pub fn eval_with_defaults(s: &str, lookup: &dyn Fn(&str) -> Result<Value, DocError>, defaults: Defaults) -> Result<Value, DocError> {
     let (toks, spans): (Vec<Tok>, Vec<(usize, usize)>) = lex_spans(s)?.into_iter().map(|(t, a, b)| (t, (a, b))).unzip();
     if toks.is_empty() {
+        if let Some((name, _)) = definition(s) {
+            return Err(DocError::Expr(format!("`{name} =` needs a value after the `=`")));
+        }
         return Err(DocError::Expr("empty expression".into()));
     }
     let mut p = Parser { toks, spans, pos: 0, lookup, depth: 0, defaults };
@@ -1467,6 +1500,27 @@ mod tests {
             "w == 3",
         ] {
             assert_eq!(definition(text), None, "{text:?}");
+        }
+    }
+
+    /// Until the design stores it, a definition is worth its expression (#4071): the name is
+    /// not a reference, it is never a plain number, and it renames like its expression.
+    #[test]
+    fn a_definition_evaluates_as_its_expression() {
+        let look = |n: &str| if n == "a" { Ok(Value::length(4.0)) } else { Err(DocError::Expr(format!("unknown parameter `{n}`"))) };
+        let ev = |s: &str| eval_with(s, &look).and_then(|v| v.to_kind(Kind::Length));
+        assert_eq!(ev("w = 20").ok(), Some(20.0));
+        assert_eq!(ev("#w = a * 2").ok(), Some(8.0));
+        assert_eq!(ev("szerokość=1 in").ok(), Some(25.4));
+        assert_eq!(references("w = a + b"), ["a", "b"]);
+        assert!(references("w = 3").is_empty());
+        assert_eq!(rename_reference("w = a * 2", "a", "len"), "w = len * 2");
+        assert_eq!(rename_reference("a = a * 2", "a", "len"), "a = len * 2");
+        assert!(!is_literal("w = 20") && !is_bare_number("w = 20"));
+        assert!(ev("w = w").unwrap_err().to_string().contains("unknown parameter `w`"));
+        assert!(ev("w =").unwrap_err().to_string().contains("`w =` needs a value after the `=`"));
+        for bad in ["w = = 3", "2 = 3", "w == 3", "w = 3 = 4", "= 5 ="] {
+            assert!(ev(bad).is_err(), "{bad}");
         }
     }
 

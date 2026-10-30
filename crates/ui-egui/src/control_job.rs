@@ -38,7 +38,7 @@ use crate::control::ControlRequest;
 
 /// Areas whose commands only compute the design (no files written, nothing started outside the
 /// app), so evaluating them ahead on a copy has no effect but a warm cache.
-const AHEAD_AREAS: [&str; 22] = [
+const AHEAD_AREAS: &[&str] = &[
     "appearance",
     "assembly",
     "body",
@@ -64,16 +64,16 @@ const AHEAD_AREAS: [&str; 22] = [
 ];
 
 /// Parameters that name a file or folder: a command given one runs here, as before.
-const NAMES_A_FILE: [&str; 8] = ["path", "paths", "file", "files", "dir", "folder", "url", "out"];
+const NAMES_A_FILE: &[&str] = &["path", "paths", "file", "files", "dir", "folder", "url", "out"];
 
 /// Commands that change nothing in the design and write a file: they run on a copy.
-const ANSWERED_ON_A_COPY: [&str; 2] = ["file.export", "file.save_mesh"];
+const ANSWERED_ON_A_COPY: &[&str] = &["file.export", "file.save_mesh"];
 
 /// Commands that only read the design, which can take long on a large one (a measure of every
 /// body, an inspection that measures them, #4604; a clearance or interference check of every pair
 /// of bodies, minutes on an assembly of 150): they run on a copy too, whatever the preference,
 /// since an answer from the design as it was when asked has no order to keep.
-const READ_ON_A_COPY: [&str; 4] = ["inspect.measure", "document.inspect", "inspect.clearance", "inspect.interference"];
+const READ_ON_A_COPY: &[&str] = &["inspect.measure", "document.inspect", "inspect.clearance", "inspect.interference"];
 
 /// Exports and readings computing at once; more run here.
 const MAX_ANSWERING: usize = 4;

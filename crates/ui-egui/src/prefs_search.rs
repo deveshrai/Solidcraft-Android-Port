@@ -37,6 +37,8 @@ struct NavStore {
     query: String,
     cursor: usize,
     hits: Vec<NavHit>,
+    /// The cursor moved this frame, so this frame's passes scroll the selected row into view.
+    scroll: bool,
 }
 
 /// The row to scroll to and outline after a result is chosen.
@@ -258,6 +260,7 @@ pub(crate) fn begin_page(ui: &Ui, index: usize, label: &str) {
         state.page = label.to_string();
         state.page_shown = false;
         state.section.clear();
+        state.key.clear();
         state.section_matches = false;
         state.section_shown.clear();
         state.heading_open = false;
@@ -270,6 +273,8 @@ pub(crate) fn begin_section(ui: &Ui, title: &str) {
         state.section = title.to_string();
         state.section_matches = matches || state.force > 0;
         state.section_shown.clear();
+        // A dropdown with no row of its own must not store its value under the last row's key.
+        state.key.clear();
         state.heading_open = false;
     });
 }
@@ -592,6 +597,7 @@ pub(crate) fn nav(ctx: &Context) -> (String, usize, Vec<NavHit>) {
 pub(crate) fn set_cursor(ctx: &Context, cursor: usize) {
     ctx.data_mut(|data| {
         let store = data.get_temp_mut_or_default::<NavStore>(Id::new(NAV));
+        store.scroll = store.cursor != cursor;
         store.cursor = cursor;
     });
 }
@@ -619,7 +625,10 @@ pub(crate) fn remember(ui: &mut Ui, label: &str, rect: Rect) {
     if with(ui, |state| state.hiding > 0).unwrap_or(true) {
         return;
     }
-    let cursor = ui.ctx().data(|data| data.get_temp::<NavStore>(Id::new(NAV)).unwrap_or_default().cursor);
+    let (cursor, scroll) = ui.ctx().data(|data| {
+        let store = data.get_temp::<NavStore>(Id::new(NAV)).unwrap_or_default();
+        (store.cursor, store.scroll)
+    });
     let selected = with(ui, |state| {
         let selected = state.nav.len() == cursor;
         state.nav.push(PaintedHit { page: state.page_index, label: label.to_string() });
@@ -631,7 +640,10 @@ pub(crate) fn remember(ui: &mut Ui, label: &str, rect: Rect) {
     }
     let t = Tokens::get();
     ui.painter().rect_stroke(rect, t.radius_sm, egui::Stroke::new(t.space_2, t.form_primary), egui::StrokeKind::Outside);
-    ui.scroll_to_rect(rect, Some(egui::Align::Center));
+    // Only when Up/Down moved the cursor: following it every frame pins the list to the match.
+    if scroll {
+        ui.scroll_to_rect(rect, Some(egui::Align::Center));
+    }
     crate::scenario::publish_handle("prefs:search:current", rect.center());
 }
 
@@ -684,6 +696,17 @@ mod tests {
         assert!(!matches_text("dark", &["Units of new designs"]));
     }
 
+    /// The search field and its empty result name the window they search (#8318): "Search
+    /// settings" under a "Preferences" title read as two names for one window.
+    #[test]
+    fn the_search_field_names_the_window_it_searches() {
+        let name = crate::i18n::tr("ui.preferences").to_lowercase();
+        for id in ["prefs.search", "prefs.search_empty"] {
+            let text = crate::i18n::tr(id).to_lowercase();
+            assert!(text.contains(&name), "`{text}` should name the window `{name}`");
+        }
+    }
+
     /// Typing focuses the field, Enter opens that setting, and Escape returns to the page
     /// that was up when the search started. Recording a shortcut keeps the key.
     #[test]
@@ -723,6 +746,55 @@ mod tests {
         assert_eq!(h.app.prefs_window.section, crate::prefs::PAGE_GRAPHICS, "Escape returns to the page from before the search");
     }
 
+    /// Typing in a number field (the largest STEP file) edits that field instead of starting
+    /// a search.
+    #[test]
+    fn preferences_number_fields_keep_typed_text() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        crate::prefs::open_at(&mut h.app, crate::prefs::PAGE_GENERAL);
+        h.frames(2);
+        let field = crate::scenario::rect_of("prefs:max_step_file_mb").expect("STEP limit field");
+        h.step(&serde_json::json!({"click": [field.center().x, field.center().y]})).expect("click the field");
+        h.frames(2);
+        h.step(&serde_json::json!({"text": "7"})).expect("type");
+        h.frames(2);
+        assert!(h.app.prefs_window.filter.is_empty(), "typed `{}` into the search", h.app.prefs_window.filter);
+    }
+
+    /// The selected match is scrolled to when the arrows move it, not on every frame, so the
+    /// wheel can scroll the results away from it.
+    #[test]
+    fn preferences_search_results_scroll_freely() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        crate::prefs::open_at(&mut h.app, crate::prefs::PAGE_GENERAL);
+        h.frames(2);
+        h.app.prefs_window.filter = "view".into();
+        h.frames(3);
+        let first = crate::scenario::handle_at("prefs:search:current").expect("first match");
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -400.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        };
+        // The wheel scrolls smoothly: give it time to come to rest before each check.
+        h.frame_with(vec![egui::Event::PointerMoved(first), wheel.clone()]);
+        h.frames(60);
+        let scrolled = crate::scenario::handle_at("prefs:search:current").expect("match still drawn");
+        assert!(scrolled.y < first.y - 100.0, "the wheel scrolls past the first match ({} -> {})", first.y, scrolled.y);
+        h.step(&serde_json::json!({"key": "ArrowDown"})).expect("next match");
+        h.frames(60);
+        let next = crate::scenario::handle_at("prefs:search:current").expect("next match");
+        let body = crate::scenario::rect_of("dialog:page_body").expect("page body");
+        assert!(body.contains(next), "Down brings the next match into view ({next:?} in {body:?})");
+        h.frame_with(vec![egui::Event::PointerMoved(next), wheel]);
+        h.frames(60);
+        let after = crate::scenario::handle_at("prefs:search:current").expect("match still drawn");
+        assert!(after.y < next.y - 100.0, "the wheel still scrolls after Down ({} -> {})", next.y, after.y);
+    }
+
     #[test]
     fn preferences_search_filters_live_controls_across_pages() {
         let mut h = crate::scenario::Harness::new();
@@ -758,7 +830,7 @@ mod tests {
         assert!(h.widget("Mouse mapping").is_some(), "the dropdown's current value counts");
         h.app.prefs_window.filter = "zzzz-no-setting".into();
         h.frames(2);
-        assert!(h.widget("No matching settings").is_some());
+        assert!(h.widget("No matching preferences").is_some());
         h.app.prefs_window.filter = "units".into();
         h.frames(2);
         h.step(&serde_json::json!({"click": {"handle": "prefs:page:Design"}})).expect("design page");

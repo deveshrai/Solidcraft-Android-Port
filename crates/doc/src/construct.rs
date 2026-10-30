@@ -215,10 +215,16 @@ fn named_vertex(st: &ModelState, at: Vec3, names: &[String]) -> Option<Vec3> {
     let ends: Vec<[Vec3; 2]> = names
         .iter()
         .map(|n| {
-            // The edge with that name itself, never the one nearest the old pick.
-            let on = bodies(st).find_map(|b| crate::naming::find_edge(b, n, at).ok())?.0;
-            let pts = edge_points(st, on, &None).ok()?;
-            Some([*pts.first()?, *pts.last()?])
+            // The edge with that name itself, never the one nearest the old pick, and its ends
+            // on the body that has it: picked again by a point on it, a corner found the first
+            // edge of any body through that corner, such as another body's edge running past
+            // it, so a vertex took that edge's end (#8650).
+            bodies(st).find_map(|b| {
+                let hit = crate::name_lookup::locate_edge(b, n, at).ok()?;
+                let m = b.mesh();
+                let pts = m.edges.get(hit.edge)?;
+                Some([*pts.first()?, *pts.last()?])
+            })
         })
         .collect::<Option<_>>()?;
     let (first, rest) = ends.split_first()?;

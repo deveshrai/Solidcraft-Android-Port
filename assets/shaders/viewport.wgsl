@@ -10,7 +10,7 @@ struct U {
     acc_u: vec4<f32>,  // accessibility map axes (xyz, offset)
     acc_v: vec4<f32>,
     eye: vec4<f32>,    // eye position, w = 1 for perspective (0: orthographic, looking along -back)
-    ao: vec4<f32>,     // radius in world units (zero: disabled)
+    ao: vec4<f32>,     // x: radius in world units (zero: disabled), y: samples per pixel
     // analysis colours (`theme::AnalysisColors`): draft positive, between, negative; reachable,
     // blocked; curvature flat, middle, tight
     ana_c: array<vec4<f32>, 8>,
@@ -18,6 +18,8 @@ struct U {
     depth: vec4<f32>,  // x = 1: reversed depth (1 near, 0 far); y, z: the faces' push (`FACE_BIAS`)
     tint: vec4<f32>,   // xyz added to a whole hovered body's colour before lighting
     sel: vec4<f32>,    // xyz a whole selected body's colour before lighting
+    product_lights_meta: vec4<f32>, // explicit preview flag and bounded count
+    product_lights: array<vec4<f32>,84>, // position/kind, radiance, axis/cone, attenuation
 };
 
 fn reversed() -> bool {
@@ -333,9 +335,12 @@ fn occlusion(i: TOut) -> f32 {
     // the buffer runs reversed). The map is cleared to its far plane either way, so a texel
     // with nothing in it reads as 1 and the `d < 1.0` test below skips it.
     let flip = reversed();
+    // Fewer samples while the view moves (#7165), spread over the same hemisphere. 32 is the
+    // still picture's count, `AO_SAMPLES` in view.rs.
+    let count = u32(clamp(u.ao.y, 1.0, 32.0));
     var blocked = 0.0;
-    for (var j = 0u; j < 32u; j = j + 1u) {
-        let f = (f32(j) + 0.5) / 32.0;
+    for (var j = 0u; j < count; j = j + 1u) {
+        let f = (f32(j) + 0.5) / f32(count);
         let angle = f32(j) * 2.39996323;
         let direction = t * (cos(angle) * sqrt(f)) + b * (sin(angle) * sqrt(f)) + n * sqrt(1.0 - f);
         let reach = radius * (0.2 + 0.8 * fract(f32(j) * 0.61803399 + 0.5));
@@ -356,7 +361,7 @@ fn occlusion(i: TOut) -> f32 {
             blocked = blocked + smoothstep(0.005, 0.15, delta) * (1.0 - smoothstep(0.5, 1.0, delta));
         }
     }
-    return 1.0 - 0.85 * blocked / 32.0;
+    return 1.0 - 0.85 * blocked / f32(count);
 }
 
 /// How fast the normal turns across the pixel (per mm).
@@ -468,6 +473,36 @@ fn shade(i: TOut) -> vec4<f32> {
     return lit(i, 1.0);
 }
 
+fn product_light_unit(v: vec3<f32>) -> vec3<f32> {
+    let scale=max(max(abs(v.x),abs(v.y)),abs(v.z));
+    if scale == 0.0 { return vec3<f32>(0.0,0.0,1.0); }
+    return normalize(v/scale);
+}
+
+// Direction and incident radiance for an unshadowed analytic preview sample.
+fn product_light_sample(k: u32, p: vec3<f32>) -> mat2x3<f32> {
+    let source=u.product_lights[k*4u];
+    let colour=u.product_lights[k*4u+1u];
+    let axis=u.product_lights[k*4u+2u];
+    let falloff=u.product_lights[k*4u+3u];
+    var direction=product_light_unit(source.xyz);
+    var weight=1.0;
+    if source.w > 0.5 {
+        let delta=source.xyz-p;
+        let distance=max(length(delta),falloff.y);
+        direction=product_light_unit(delta);
+        weight=falloff.x/max(distance*distance,0.000001);
+        if source.w == 2.0 {
+            let cosine=dot(product_light_unit(axis.xyz),-direction);
+            var cone=select(0.0,1.0,cosine>=colour.w);
+            if axis.w-colour.w>0.000001 {cone=smoothstep(colour.w,axis.w,cosine);}
+            weight *= cone;
+        }
+        if source.w == 3.0 {weight *= max(dot(product_light_unit(axis.xyz),-direction),0.0);}
+    }
+    return mat2x3<f32>(direction,colour.xyz*weight);
+}
+
 fn lit(i: TOut, visibility: f32) -> vec4<f32> {
     return lit_color(i, visibility, i.c);
 }
@@ -482,6 +517,17 @@ fn lit_color(i: TOut, visibility: f32, base: vec4<f32>) -> vec4<f32> {
     let v = normalize(u.back.xyz);
     var n = normalize(i.n);
     if (dot(n, v) < 0.0) { n = -n; }
+    if u.product_lights_meta.x>0.0 {
+        var radiance=vec3<f32>(0.0);
+        for (var k=0u;k<min(u32(u.product_lights_meta.y),21u);k+=1u) {
+            if u.product_lights[k*4u].w == 4.0 {radiance+=to_linear(base.rgb)*u.product_lights[k*4u+1u].xyz/3.141592653589793;continue;}
+            let sample=product_light_sample(k,i.wp);
+            radiance+=to_linear(base.rgb)*sample[1]*(max(dot(n,sample[0]),0.0)/3.141592653589793);
+        }
+        let mapped=radiance/(vec3<f32>(1.0)+radiance);
+        let encoded=select(mapped*12.92,1.055*pow(mapped,vec3<f32>(1.0/2.4))-vec3<f32>(0.055),mapped>vec3<f32>(0.0031308));
+        return out_color(vec4<f32>(encoded,base.a));
+    }
     let key = normalize(v * 0.8 + vec3<f32>(-0.3, 0.2, 0.6));
     let diff = max(dot(n, key), 0.0);
     let fill = max(dot(n, v), 0.0);
@@ -648,5 +694,41 @@ fn fs_img(i: IOut) -> @location(0) vec4<f32> {
 /// Lines the section never cuts (the grid, highlights drawn on top).
 @fragment
 fn fs_line_all(i: LOut) -> @location(0) vec4<f32> {
+    return out_color(i.c);
+}
+
+// Point clouds: each point is a round dot a few pixels across, facing the screen, depth-tested
+// and written like the model's faces, so the model hides the points behind it and they hide it.
+// The colour's alpha carries the dot's size (eighths of a pixel).
+
+struct POut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) c: vec4<f32>,
+    @location(1) wp: vec3<f32>,
+    @location(2) at: vec2<f32>,
+};
+
+@vertex
+fn vs_point(@builtin(vertex_index) vi: u32, @location(0) p: vec3<f32>, @location(1) c: vec4<f32>) -> POut {
+    var xs = array<f32, 6>(-1.0, 1.0, 1.0, -1.0, 1.0, -1.0);
+    var ys = array<f32, 6>(-1.0, -1.0, 1.0, -1.0, 1.0, 1.0);
+    let at = vec2<f32>(xs[vi], ys[vi]);
+    let size = max(c.a * 255.0 / 8.0, 1.0);
+    let centre = u.vp * vec4<f32>(p, 1.0);
+    let half = u.screen.xy * 0.5;
+    var o: POut;
+    o.pos = vec4<f32>(centre.xy + at * size * 0.5 / half * centre.w, centre.z, centre.w);
+    // Behind the eye: nothing.
+    if (near_z(centre) < 0.0) { o.pos = vec4<f32>(0.0, 0.0, 0.0, -1.0); }
+    o.c = vec4<f32>(c.rgb, 1.0);
+    o.wp = p;
+    // Dots under two pixels are squares: a disc that small loses its centre pixel.
+    o.at = at * select(1.0, 0.0, size < 2.0);
+    return o;
+}
+
+@fragment
+fn fs_point(i: POut) -> @location(0) vec4<f32> {
+    if (clipped(i.wp) || dot(i.at, i.at) > 1.0) { discard; }
     return out_color(i.c);
 }

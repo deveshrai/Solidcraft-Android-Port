@@ -551,8 +551,9 @@ impl Sketch {
         self.links.iter().find(|l| l.id == id)
     }
 
-    /// The expressions of the sketch's texts and of its points placed by parameters, each with
-    /// what it sets (`Text height`, `Point X`…).
+    /// The expressions of the sketch's texts, of its points placed by parameters and of its
+    /// equation curves, each with what it sets (`Text height`, `Point X`, `Curve Y`…). An equation
+    /// curve's own variable (`t` or `x`) is among the names its formulas refer to.
     pub fn text_exprs(&self) -> Vec<(&'static str, &String)> {
         self.links
             .iter()
@@ -562,6 +563,7 @@ impl Sketch {
             })
             .flatten()
             .chain(self.points.iter().filter_map(|p| p.exprs.as_deref()).flat_map(crate::PointExprs::list))
+            .chain(self.equations.iter().flat_map(crate::EquationCurve::list))
             .collect()
     }
 
@@ -587,7 +589,9 @@ impl Sketch {
             .collect()
     }
 
-    /// Mutable view of [`Sketch::text_exprs`], for renaming the parameters they refer to.
+    /// Mutable view of [`Sketch::text_exprs`], for renaming the parameters they refer to. An
+    /// equation curve's formulas are not in it: [`Sketch::equation_exprs_mut`] gives them with the
+    /// variable a rename must leave alone.
     pub fn text_exprs_mut(&mut self) -> Vec<&mut String> {
         self.links
             .iter_mut()
@@ -714,7 +718,7 @@ impl Sketch {
                 LCurve::Line(a, b) => (CurveKind::Line { a: point(self, a)?, b: point(self, b)? }, "l"),
                 LCurve::Circle(c, r) => (CurveKind::Circle { c: point(self, c)?, r }, "c"),
                 LCurve::Arc(c, a, b) => (CurveKind::Arc { c: point(self, c)?, a: point(self, a)?, b: point(self, b)? }, "a"),
-                LCurve::Conic(a, b, x, rho) => (CurveKind::Conic { a: point(self, a)?, b: point(self, b)?, apex: point(self, x)?, rho }, "k"),
+                LCurve::Conic(a, b, x, rho) => (CurveKind::Conic { a: point(self, a)?, b: point(self, b)?, apex: point(self, x)?, rho }, "n"),
                 LCurve::Ellipse(c, m, r) => (CurveKind::Ellipse { c: point(self, c)?, m: point(self, m)?, r }, "e"),
                 LCurve::Spline(a, b, f, n, control, degree, periodic) => {
                     let mut pts = vec![point(self, a)?];
@@ -1058,6 +1062,26 @@ impl Sketch {
                 }
             }
             return Ok(false);
+        }
+        // A face seen edge-on was once saved as two lines on the same two points, one each way;
+        // it is one line now. Keep the first line (an offset or a constraint may name it) and
+        // drop only the second, instead of rebuilding both under new ids.
+        if let Some([LCurve::Line(0, 1), LCurve::Line(1, 0)]) = cur.as_deref()
+            && let [LCurve::Line(0, 1)] = new.as_slice()
+            && let [_, second] = curves[..]
+            && let [p0, p1] = points[..]
+            && lay.lone.is_empty()
+            && let Some(a) = order.first().and_then(|li| lay.pts.get(*li)).copied()
+            && let Some(b) = order.get(1).and_then(|li| lay.pts.get(*li)).copied()
+        {
+            if let Some(p) = self.points.get_mut(p0) {
+                p.pos = a;
+            }
+            if let Some(p) = self.points.get_mut(p1) {
+                p.pos = b;
+            }
+            self.remove_curves(&[second]);
+            return Ok(true);
         }
         // Rebuild: drop the old entities (constraints on them go too) and make new ones.
         self.drop_link_entities(id);

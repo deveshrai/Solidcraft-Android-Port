@@ -46,6 +46,43 @@ An appearance sets colour and surface finish only. It has no effect on mass or s
 - **Elsewhere:** appearance, visual material, colour.
 - **For translators:** not the physical material.
 
+### bill of materials
+
+The list of the components placed in a design or in one component, with the quantity of each.
+
+It lists every part at any depth, or only the direct children. Each component's *bill of
+materials type* decides whether it has a row and whether what it holds is counted.
+
+- **In SolidCraft:** `assembly.bom` ("Bill of Materials") and its window on the INSPECT panel;
+  each row's `item`, `part_number` and `count`; a component's `metadata` and `properties`
+  design-file keys, which `component.metadata.set` changes.
+- **Don't use:** BOM in labels; parts list (for the bill of materials itself).
+- **Elsewhere:** bill of materials, BOM, parts list.
+- **For translators:** not a parts list on a drawing, which is one table that shows it.
+
+### bill of materials type
+
+The rule that decides whether a component has a row in a bill of materials, and whether what it
+holds is counted there.
+
+There are five:
+
+- *normal*, something you make: a row; each occurrence adds one to its quantity.
+- *phantom*, something just to group: no row; what it holds counts where it is placed.
+- *reference*, something to use as a reference: no row, and nothing inside it counts.
+- *purchased*, something you buy: one row; nothing inside it is counted or listed.
+- *inseparable*, something made as one piece (welded, glued, riveted and so on): one row; of
+  what it holds, only the purchased components are listed, and only in a list of every part.
+
+- **In SolidCraft:** the `bom_type` part property, which `component.metadata.set` changes and
+  `component.metadata` reads; the `bom_type` of each `assembly.bom` row.
+- **Don't use:** BOM structure, item type, kind; made (for *normal*: it reads as "already
+  made").
+- **Elsewhere:** BOM structure, BOM type.
+- **For translators:** *normal* here is not the sketch line type, a direction or the display
+  quality (see *Words with more than one meaning*); *reference* is not a construction plane;
+  *phantom* is not a hidden or see-through display.
+
 ### body
 
 One connected solid or surface shape that features create and change.
@@ -169,6 +206,19 @@ A dimension can drive the sketch, or be driven by it and only show the value.
 - **Elsewhere:** dimension, dimensional constraint, driving dimension.
 - **For translators:** not a drawing dimension and not a measured value.
 
+### equation curve
+
+A sketch curve whose shape comes from formulas over a range of one variable.
+
+It is a fit point spline through fixed points that the formulas place, and they place them again
+when the design's parameters change. Compare *spline*, whose points are placed by hand.
+
+- **In SolidCraft:** `sketch.equation_curve`, `sketch.equation_curve.edit`; the `equations`
+  design-file key of a sketch.
+- **Don't use:** formula curve, function curve, parametric curve (for the command).
+- **Elsewhere:** equation-driven curve, curve from equation, function plot.
+- **For translators:** "equation" is a mathematical formula, not a balance or an equality constraint.
+
 ### feature
 
 One step in the timeline that creates or changes geometry, such as an extrude, a fillet or a
@@ -222,6 +272,22 @@ A material sets mass, centre of gravity and strength values. How the body looks 
 - **Don't use:** material for a render or visual material.
 - **Elsewhere:** material, physical material.
 - **For translators:** not an appearance.
+
+### moment of inertia
+
+How a body's mass resists turning about an axis: the mass times the square of its distance from
+that axis, summed over the body.
+
+SolidCraft reports the whole inertia tensor about the centre of mass in world axes, with its
+*principal moments* and *principal axes*: the three axes with no products of inertia between
+them. The *first moments* are the mass times the centre of mass.
+
+- **In SolidCraft:** `inertia_g_mm2`, `principal_moments_g_mm2`, `principal_axes`,
+  `first_moment_g_mm` and `about` in `component.properties` and `occurrence.properties`; the
+  Properties window's Moment of inertia section.
+- **Don't use:** rotational inertia, second moment of mass, mass moment.
+- **Elsewhere:** moment of inertia, inertia tensor, mass moment of inertia.
+- **For translators:** not the second moment of area of a cross-section, a different quantity.
 
 ### occurrence
 
@@ -287,6 +353,24 @@ are kept, not deleted.
 - **For translators:** "history" is the undo history, not the timeline. French had three names
   for this marker while English did.
 
+### settings profile
+
+A named set of input and interface preferences that can be switched, exported and imported as
+one.
+
+A settings profile holds the Interface, Navigation and Sketch preferences, the interface
+language, keyboard shortcuts, the toolbar and the S box favourites. Settings that belong to one
+computer (the 3D mouse, graphics, units) stay out. It is an app setting, not part of a design.
+
+- **In SolidCraft:** `settings.profile.list`, `settings.profile.save`, `settings.profile.apply`,
+  `settings.profile.rename`, `settings.profile.delete`, `settings.profile.export`,
+  `settings.profile.import`; the `settings_profiles` key of the stored preferences; the
+  `solidcraft-profile/1` file format.
+- **Don't use:** preset, configuration, workspace (for the set of settings).
+- **Elsewhere:** settings profile, user profile, preferences set.
+- **For translators:** not a sketch profile and not a frame profile (see *Words with more than
+  one meaning*, "Profile"), and not a design configuration.
+
 ### sketch
 
 A set of points and curves, with their constraints, on one plane, that features use as profiles,
@@ -329,6 +413,22 @@ The ordered list of a design's features, which SolidCraft computes from first to
 - **Elsewhere:** timeline, history, feature tree.
 - **For translators:** not the undo history.
 
+### view angles
+
+The yaw, pitch and roll, in degrees, that give the direction a view looks along and how its
+picture is turned.
+
+Yaw is the heading of the line of sight about the up axis (Front view 0°, Left 90°, Right −90°,
+Back 180°); pitch is how far the eye is above the ground plane (Top view 90°, Bottom −90°); a
+positive roll turns the picture clockwise. They are the camera's own angles, which `view.apply`
+and the MCP camera take in radians.
+
+- **In SolidCraft:** `view.angle_readout` and the View angles readout under the orientation
+  gizmo; the `yaw`, `pitch` and `roll` of `view.apply`'s `camera`.
+- **Don't use:** camera angles, view rotation.
+- **Elsewhere:** view orientation, azimuth and elevation.
+- **For translators:** the view's pitch is a tilt, not a thread's or a pattern's pitch.
+
 ### web browser
 
 A program that shows web pages, such as the one that runs SolidCraft's web build.
@@ -354,6 +454,9 @@ share a catalogue entry. Each meaning below gets its own term and, in time, its 
 | Part | a standard part | *standard part* | `parts.*` |
 | | a body, an occurrence or the design | *body*, *occurrence*, *design* | catalogue texts that say "part" |
 | | a design property | *part number* | Design Properties |
+| Profile | a closed region of a sketch that a feature uses | profile | `solid.extrude`, `solid.revolve` |
+| | the cross-section a frame member follows | frame profile | `frame.profile.*` |
+| | a named set of preferences | *settings profile* | `settings.profile.*`, Preferences › General |
 | Gap | the space a hem leaves | hem gap | the Hem dialog's Gap row |
 | | an open end in the sketch continuity legend | open end | the sketch continuity legend |
 | Clearance | the Clearance command | clearance check | `inspect.clearance` |
@@ -365,6 +468,7 @@ share a catalogue entry. Each meaning below gets its own term and, in time, its 
 | Normal | a sketch entity that isn't a construction entity | normal (line type) | the sketch palette's line type |
 | | the direction perpendicular to a surface | normal (direction) | the ruled surface's Normal mode |
 | | the middle display quality | normal (quality) | `ui.display_quality_normal` |
+| | a component with a row of its own in a bill of materials | normal (bill of materials type) | `bom_type` |
 | Quantity | the number of pattern instances | count | the pattern dialogs' Quantity rows, `ui.quantity` |
 | | what the motion plot shows: value, velocity or acceleration | plotted quantity | the motion study's Quantity row, `motion.plot_quantity` |
 | Reference | an edge a hole or cylinder keeps its distance from | *reference edge* | `references` of `solid.hole` and `solid.cylinder`, `ui.reference_1` |

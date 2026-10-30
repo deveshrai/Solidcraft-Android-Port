@@ -377,7 +377,9 @@ fn frame(scene: &Scene, cam: &Camera, [width, height]: [u32; 2], key: u64, acces
     let cap = scene.cap.unwrap_or(SECTION_CAP);
     let mode = scene.analysis.map(|a| a.mode);
     Frame {
+        product_lights: None,
         product: false,
+        upload_error: None,
         key,
         slot: Arc::new(Mutex::new(Some(scene_geometry(scene)))),
         sketch_key: 0,
@@ -393,12 +395,14 @@ fn frame(scene: &Scene, cam: &Camera, [width, height]: [u32; 2], key: u64, acces
         clip: scene.clip.map_or([0.0; 4], |(n, d)| [n.x as f32, n.y as f32, n.z as f32, d as f32]),
         cap: [f32::from(cap.0) / 255.0, f32::from(cap.1) / 255.0, f32::from(cap.2) / 255.0, if scene.plain_cap { 0.0 } else { 1.0 }],
         images: Vec::new(),
+        points: Vec::new(),
         analysis: analysis_uniform(mode, access.as_ref()),
         analysis_colors: scene.analysis.map_or([0.0; 36], |a| analysis_colors(&a.colors)),
         access,
         outline: true,
         eye: [eye[0], eye[1], eye[2], if cam.fov > 0.0 { 1.0 } else { 0.0 }],
         ao_radius: 0.0,
+        ao_samples: crate::view::AO_SAMPLES,
         ssaa: 1.0,
         hover_tint: [0.0; 3],
         selection_tint: [0.0; 3],

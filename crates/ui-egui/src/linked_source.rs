@@ -106,6 +106,99 @@ fn report(app: &mut SolveApp, result: &serde_json::Value, done: &str) {
     }
 }
 
+/// A linked design file as it is on disk: its modification time and size (`None`: not there,
+/// not allowed, or the platform keeps no times).
+pub(crate) type Stamp = Option<(std::time::SystemTime, u64)>;
+
+fn stamp(file: &str) -> Stamp {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let meta = std::fs::metadata(file).ok()?;
+        Some((meta.modified().ok()?, meta.len()))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = file;
+        None
+    }
+}
+
+/// The shown design's linked components with their files as they are on disk now: `None` for a
+/// file that is missing, or on a network location not allowed, which is never looked at
+/// (`component.links` reports it unfound). The web build keeps no times, so it looks at nothing.
+fn disk_stamps(app: &mut SolveApp) -> Vec<(u64, Stamp)> {
+    let on = app.preferences.update_changed_links;
+    stamps_of(&mut app.session, on)
+}
+
+/// [`disk_stamps`] for any open design (`on`: the preference `update_changed_links`).
+pub(crate) fn stamps_of(session: &mut solidcraft_engine::Session, on: bool) -> Vec<(u64, Stamp)> {
+    if cfg!(target_arch = "wasm32") || !on || session.doc.links.is_empty() {
+        return Vec::new();
+    }
+    let Ok(links) = session.execute("component.links", &json!({})) else { return Vec::new() };
+    links["links"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|l| {
+            let found = l["found"].as_bool() == Some(true);
+            Some((l["component"].as_u64()?, if found { stamp(l["file"].as_str()?) } else { None }))
+        })
+        .collect()
+}
+
+/// Set `component`'s entry in `stamps` (each link's file as the design last read it).
+pub(crate) fn record(stamps: &mut Vec<(u64, Stamp)>, component: u64, stamp: Stamp) {
+    match stamps.iter_mut().find(|(c, _)| *c == component) {
+        Some(entry) => entry.1 = stamp,
+        None => stamps.push((component, stamp)),
+    }
+}
+
+/// The links of the shown design it holds no record of yet (it was just opened, a link was just
+/// made) are taken as their files are now.
+pub(crate) fn note_unread(app: &mut SolveApp) {
+    if app.session.doc.links.keys().all(|c| app.docs.link_stamps.iter().any(|(k, _)| k == c)) {
+        return;
+    }
+    for (c, s) in disk_stamps(app) {
+        if !app.docs.link_stamps.iter().any(|(k, _)| *k == c) {
+            app.docs.link_stamps.push((c, s));
+        }
+    }
+}
+
+/// The shown design came back to its tab: read again, off the window thread as Update Links
+/// does, the linked designs whose files changed since it last read them. Each is a run of its
+/// own, so one that cannot be read holds up no other; one that fails is tried again next time.
+pub(crate) fn update_changed(app: &mut SolveApp) {
+    let now = disk_stamps(app);
+    let changed: Vec<u64> =
+        now.iter().filter(|(c, s)| s.is_some() && app.docs.link_stamps.iter().any(|(k, was)| k == c && was != s)).map(|(c, _)| *c).collect();
+    for (c, s) in now {
+        if !app.docs.link_stamps.iter().any(|(k, _)| *k == c) {
+            app.docs.link_stamps.push((c, s));
+        }
+    }
+    // More than can wait at once: the rest are still changed when the tab next comes back.
+    let room = app.file_load.room();
+    for component in changed.into_iter().take(room) {
+        let mut request = crate::file_load::Request::new("", crate::file_load::Kind::UpdateLinks);
+        request.options.insert("component".into(), json!(component));
+        request.design.clone_from(&app.session.path);
+        let _ = crate::file_load::begin_request(app, request);
+    }
+}
+
+/// Update Links read the shown design's link to `component` (`None`: all of them) without an
+/// error: those links are now as their files are.
+pub(crate) fn read_again(app: &mut SolveApp, component: Option<u64>) {
+    for (c, s) in disk_stamps(app).into_iter().filter(|(c, _)| component.is_none_or(|o| o == *c)) {
+        record(&mut app.docs.link_stamps, c, s);
+    }
+}
+
 /// Components Extract to File found to build the same bodies as the one it linked.
 #[derive(Clone, Debug)]
 pub struct Copies {
@@ -315,6 +408,259 @@ mod tests {
         assert!(link_copies(&mut app, true));
         assert!(app.session.doc.components.iter().all(|c| c.id != copy));
         assert_eq!(app.session.doc.occurrences.iter().find(|o| o.id == copy_occurrence).map(|o| o.component), Some(component));
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn changed_linked_designs_update_the_assembly_when_its_tab_returns() {
+        let folder = std::env::temp_dir().join(format!("solidcraft-changed-link-ui-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("plate.solidcraft");
+        let mut part = Session::default();
+        part.execute("solid.box", &json!({"length": 10, "width": 20, "height": 30})).unwrap();
+        part.execute("file.save", &json!({"path": file})).unwrap();
+        let mut app = SolveApp::new(Session::default(), Default::default());
+        app.run("component.insert_design", json!({"path": file})).unwrap();
+        let volume = |app: &SolveApp| {
+            app.session.world_state().bodies.iter().map(|b| solidcraft_engine::kernel::measure(&b.body).unwrap().volume).sum::<f64>()
+        };
+        let ctx = egui::Context::default();
+        let settle = |app: &mut SolveApp| {
+            let began = std::time::Instant::now();
+            while !app.file_load.idle() {
+                assert!(began.elapsed() < std::time::Duration::from_secs(120), "Update Links went on");
+                crate::file_load::tick(app, &ctx);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        };
+        let saved_box = |app: &mut SolveApp| {
+            crate::documents::switch(app, 1);
+            app.run("solid.box", json!({"length": 10, "width": 10, "height": 10, "operation": "new"})).unwrap();
+            app.run("file.save", json!({})).unwrap();
+            crate::documents::switch(app, 0);
+        };
+        assert!((volume(&app) - 6000.0).abs() < 1e-6);
+        let mut opened = Session::default();
+        opened.execute("doc.open", &json!({"path": file})).unwrap();
+        crate::documents::open_tab(&mut app, opened).unwrap();
+        assert_eq!(app.docs.active, 1);
+        // Back without saving: nothing to take up
+        crate::documents::switch(&mut app, 0);
+        assert!(app.file_load.idle());
+        assert!((volume(&app) - 6000.0).abs() < 1e-6);
+        // Changed and saved there: coming back updates the link, off the window thread
+        saved_box(&mut app);
+        assert!(app.file_load.busy(), "the update runs as Update Links does");
+        settle(&mut app);
+        assert!((volume(&app) - 7000.0).abs() < 1e-6, "{}", volume(&app));
+        assert_eq!(app.status.as_ref().map(|s| s.0.as_str()), Some("Update Links done"));
+        // Changed outside the app (another window, a checkout) while the tab was away: the same.
+        // The part's own tab now refuses to save over that change, so it stays out of the rest
+        let saved_elsewhere = |app: &mut SolveApp| {
+            crate::documents::switch(app, 1);
+            let mut elsewhere = Session::default();
+            elsewhere.execute("doc.open", &json!({"path": file})).unwrap();
+            elsewhere.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10, "operation": "new"})).unwrap();
+            elsewhere.execute("file.save", &json!({})).unwrap();
+            crate::documents::switch(app, 0);
+        };
+        saved_elsewhere(&mut app);
+        settle(&mut app);
+        assert!((volume(&app) - 8000.0).abs() < 1e-6, "{}", volume(&app));
+        // Turned off, the link waits for Update Links as before
+        app.preferences.update_changed_links = false;
+        saved_elsewhere(&mut app);
+        assert!(app.file_load.idle());
+        assert!((volume(&app) - 8000.0).abs() < 1e-6, "{}", volume(&app));
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    /// An assembly saved in `folder` linking a 10x20x30 plate and a 10 mm cube, with a blank
+    /// second tab to step away to; the helpers save a part, settle the background work and
+    /// measure the assembly.
+    fn two_links(name: &str) -> (SolveApp, std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let folder = std::env::temp_dir().join(format!("solidcraft-two-links-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let (plate, cube) = (folder.join("plate.solidcraft"), folder.join("cube.solidcraft"));
+        save_part(&plate, [10.0, 20.0, 30.0], false);
+        save_part(&cube, [10.0, 10.0, 10.0], false);
+        let mut app = SolveApp::new(Session::default(), Default::default());
+        app.run("component.insert_design", json!({"path": plate})).unwrap();
+        app.run("component.insert_design", json!({"path": cube, "translate": [100, 0, 0]})).unwrap();
+        app.run("file.save", json!({"path": folder.join("case.solidcraft")})).unwrap();
+        crate::documents::open_tab(&mut app, Session::default()).unwrap();
+        crate::documents::switch(&mut app, 0);
+        (app, folder, plate, cube)
+    }
+
+    /// A box design at `path`; `extra` adds a 5x5x10 box on top (250 mm³).
+    fn save_part(path: &std::path::Path, size: [f64; 3], extra: bool) {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length": size[0], "width": size[1], "height": size[2]})).unwrap();
+        if extra {
+            s.execute("solid.box", &json!({"length": 5, "width": 5, "height": 10, "corner": [0, 0, size[2]], "operation": "join"})).unwrap();
+        }
+        s.execute("file.save", &json!({"path": path, "overwrite": true})).unwrap();
+    }
+
+    fn settle(app: &mut SolveApp) {
+        let ctx = egui::Context::default();
+        let began = std::time::Instant::now();
+        while !app.file_load.idle() {
+            assert!(began.elapsed() < std::time::Duration::from_secs(120), "Update Links went on");
+            crate::file_load::tick(app, &ctx);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    fn volume(app: &SolveApp) -> f64 {
+        app.session.world_state().bodies.iter().map(|b| solidcraft_engine::kernel::measure(&b.body).unwrap().volume).sum()
+    }
+
+    /// Away to the blank tab and back to the assembly.
+    fn come_back(app: &mut SolveApp) {
+        crate::documents::switch(app, 1);
+        crate::documents::switch(app, 0);
+        settle(app);
+    }
+
+    #[test]
+    fn a_link_that_cannot_be_read_holds_up_no_other_and_is_read_again_next_time() {
+        let (mut app, folder, plate, cube) = two_links("unreadable");
+        assert!((volume(&app) - 7000.0).abs() < 1e-6);
+        std::fs::write(&plate, b"not a design").unwrap();
+        save_part(&cube, [10.0, 10.0, 10.0], true);
+        come_back(&mut app);
+        assert!((volume(&app) - 7250.0).abs() < 1e-6, "the cube is read, the plate keeps its bodies: {}", volume(&app));
+        // Readable again (and changed): the next return takes it up
+        save_part(&plate, [10.0, 20.0, 30.0], true);
+        come_back(&mut app);
+        assert!((volume(&app) - 7500.0).abs() < 1e-6, "{}", volume(&app));
+        // Nothing changed since: nothing is read
+        crate::documents::switch(&mut app, 1);
+        crate::documents::switch(&mut app, 0);
+        assert!(app.file_load.idle());
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_change_made_while_the_assembly_is_shown_is_read_when_it_next_comes_back() {
+        let (mut app, folder, plate, _) = two_links("shown");
+        // Changed elsewhere while the assembly is the tab in front
+        save_part(&plate, [10.0, 20.0, 30.0], true);
+        come_back(&mut app);
+        assert!((volume(&app) - 7250.0).abs() < 1e-6, "{}", volume(&app));
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn closing_tabs_together_reads_nothing_on_the_way() {
+        let (mut app, folder, plate, _) = two_links("batch");
+        crate::documents::switch(&mut app, 1);
+        save_part(&plate, [10.0, 20.0, 30.0], true);
+        // Close All from the blank tab: the assembly is shown on the way, and closed
+        crate::documents::close_many(&mut app, vec![0, 1]);
+        assert!(app.file_load.idle(), "no Update Links for a tab that is closing");
+        assert_eq!(app.docs.count(), 1);
+        assert!(app.status.as_ref().is_none_or(|(_, _, error)| !error), "{:?}", app.status);
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn saving_a_tab_from_its_save_changes_prompt_is_not_held_up_by_its_links() {
+        let (mut app, folder, plate, _) = two_links("prompt");
+        app.run("solid.box", json!({"length": 1, "width": 1, "height": 1, "corner": [0, 300, 0], "operation": "new"})).unwrap();
+        crate::documents::switch(&mut app, 1);
+        save_part(&plate, [10.0, 20.0, 30.0], true);
+        // Closing the unsaved assembly from the other tab asks; Save shows it, saves and closes it
+        crate::documents::close(&mut app, 0, false);
+        assert_eq!(app.docs.closing, Some(0));
+        crate::documents::answer_prompt(&mut app, crate::documents::Answer::Save);
+        assert!(app.file_load.idle(), "no link read before the save");
+        crate::save_job::tick(&mut app, true);
+        crate::documents::saved_for_close(&mut app);
+        assert_eq!(app.docs.count(), 1, "saved and closed: {:?}", app.status);
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_design_opened_in_place_of_the_blank_one_reads_what_changes_while_it_is_shown() {
+        let (app, folder, plate, _) = two_links("adopted");
+        drop(app);
+        let mut app = SolveApp::new(Session::default(), Default::default());
+        let mut opened = Session::default();
+        opened.execute("doc.open", &json!({"path": folder.join("case.solidcraft")})).unwrap();
+        crate::documents::adopt(&mut app, opened);
+        assert_eq!(app.docs.count(), 1);
+        save_part(&plate, [10.0, 20.0, 30.0], true);
+        crate::documents::open_tab(&mut app, Session::default()).unwrap();
+        crate::documents::switch(&mut app, 0);
+        settle(&mut app);
+        assert!((volume(&app) - 7250.0).abs() < 1e-6, "{}", volume(&app));
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn cancelling_a_close_all_reads_what_the_tab_left_in_front_missed() {
+        let (assembly, folder, plate, _) = two_links("cancelled");
+        drop(assembly);
+        // An unsaved design, a blank tab (shown) and the assembly after it
+        let mut unsaved = Session::default();
+        unsaved.execute("solid.box", &json!({"length": 1, "width": 1, "height": 1})).unwrap();
+        let mut app = SolveApp::new(unsaved, Default::default());
+        crate::documents::open_tab(&mut app, Session::default()).unwrap();
+        let mut opened = Session::default();
+        opened.execute("doc.open", &json!({"path": folder.join("case.solidcraft")})).unwrap();
+        crate::documents::open_tab(&mut app, opened).unwrap();
+        settle(&mut app);
+        crate::documents::switch(&mut app, 1);
+        save_part(&plate, [10.0, 20.0, 30.0], true);
+        // Closing the first two shows the assembly on the way, then asks about the unsaved one
+        crate::documents::close_many(&mut app, vec![0, 1]);
+        assert_eq!(app.docs.closing, Some(0));
+        assert!(app.file_load.idle());
+        crate::documents::answer_prompt(&mut app, crate::documents::Answer::Cancel);
+        settle(&mut app);
+        assert!(app.session.path.as_deref().is_some_and(|p| p.ends_with("case.solidcraft")));
+        assert!((volume(&app) - 7250.0).abs() < 1e-6, "{}", volume(&app));
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_link_whose_file_comes_back_is_read() {
+        let (app, folder, plate, _) = two_links("returns");
+        drop(app);
+        std::fs::remove_file(&plate).unwrap();
+        let mut app = SolveApp::new(Session::default(), Default::default());
+        let mut opened = Session::default();
+        opened.execute("doc.open", &json!({"path": folder.join("case.solidcraft")})).unwrap();
+        crate::documents::adopt(&mut app, opened);
+        crate::documents::open_tab(&mut app, Session::default()).unwrap();
+        crate::documents::switch(&mut app, 0);
+        assert!(app.file_load.idle(), "a missing file is not read");
+        save_part(&plate, [10.0, 20.0, 30.0], true);
+        come_back(&mut app);
+        assert!((volume(&app) - 7250.0).abs() < 1e-6, "{}", volume(&app));
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn reads_waiting_for_a_design_no_longer_shown_are_dropped_and_done_on_its_return() {
+        let (mut app, folder, plate, cube) = two_links("dropped");
+        save_part(&plate, [10.0, 20.0, 30.0], true);
+        save_part(&cube, [10.0, 10.0, 10.0], true);
+        crate::documents::switch(&mut app, 1);
+        crate::documents::switch(&mut app, 0);
+        assert!(app.file_load.busy());
+        // Another design is shown before the two reads are done (the control channel can)
+        crate::documents::switch(&mut app, 1);
+        settle(&mut app);
+        assert!(app.session.doc.links.is_empty() && app.session.path.is_none(), "the blank design is left alone");
+        assert!(!app.status.as_ref().is_some_and(|(s, _, _)| s.contains("not linked")), "{:?}", app.status);
+        crate::documents::switch(&mut app, 0);
+        settle(&mut app);
+        assert!((volume(&app) - 7500.0).abs() < 1e-6, "both are read on the return: {}", volume(&app));
         let _ = std::fs::remove_dir_all(folder);
     }
 

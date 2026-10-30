@@ -33,6 +33,8 @@ use crate::event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase, Wind
 use crate::platform_impl::wayland::state::WinitState;
 use crate::platform_impl::wayland::{self, DeviceId, WindowId};
 
+// SolidCraft: trackpad pinch and rotation gestures (pointer_gesture.rs).
+pub mod pointer_gesture;
 pub mod relative_pointer;
 
 impl PointerHandler for WinitState {

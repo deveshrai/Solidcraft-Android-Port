@@ -326,6 +326,20 @@ impl Session {
         })
     }
 
+    /// Is the leaf of `path` placed inside a component that has more than one placement? Its
+    /// transform lives in that shared definition, so moving it moves it in every placement.
+    /// Top-level placements and unknown ids are never shared.
+    pub fn occurrence_shared(&self, path: &[u64]) -> bool {
+        let Some((_, ancestors)) = path.split_last() else { return false };
+        ancestors.iter().take(64).any(|id| {
+            self.doc
+                .occurrences
+                .iter()
+                .find(|o| o.id == *id)
+                .is_some_and(|a| self.doc.occurrences.iter().filter(|o| o.component == a.component).nth(1).is_some())
+        })
+    }
+
     /// Children are definitions shared by every placement of the parent component.
     pub fn occurrence_children(&self, path: &[u64]) -> Result<Vec<OccurrencePlacement>> {
         let component = if path.is_empty() { 0 } else { self.occurrence_placement(path)?.component };
@@ -369,11 +383,14 @@ impl Session {
             }
             if let Some(cache) = cache.as_mut() {
                 if !cache.bodies.contains_key(&key) && cache.bodies.len() >= OCCURRENCE_BODIES_CACHED {
-                    // Retire one remembered answer, not the whole cache: a burst of other
-                    // paths (a Browser reveal, a hover) no longer evicts the active
-                    // occurrence's entry and forces a full re-expansion on the next
-                    // highlight build (#7502).
-                    if let Some(evict) = cache.bodies.keys().next().cloned() {
+                    // Retire the deepest path first, preferring direct-body answers over
+                    // subtree answers at equal depth, then the greatest full key for a
+                    // stable tie break. Broader assembly listings survive bursts of per-copy
+                    // queries (#7502). Selecting a victim scans at most 256 cached keys,
+                    // avoiding extra eviction bookkeeping while keeping the cache bounded.
+                    if let Some(evict) =
+                        cache.bodies.keys().max_by(|a, b| a.0.len().cmp(&b.0.len()).then_with(|| b.1.cmp(&a.1)).then_with(|| a.cmp(b))).cloned()
+                    {
                         cache.bodies.remove(&evict);
                     }
                 }

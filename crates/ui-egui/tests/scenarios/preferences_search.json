@@ -1,5 +1,5 @@
 [
-  {"note": "With Preferences open and nothing being edited, typing focuses Search settings and the letters are the query. Enter opens that setting on its own page."},
+  {"note": "With Preferences open and nothing being edited, typing focuses Search preferences and the letters are the query. Enter opens that setting on its own page."},
   {"click": {"handle": "titlebar:preferences"}},
   {"expect": {"shown": "Restore Defaults", "prefs": {"dialog": "General"}}},
   {"text": "zo"},

@@ -27,6 +27,17 @@ impl AssistantTone {
 pub(crate) fn assistant_badge(ui: &mut Ui, label: &str, tone: AssistantTone) -> Response {
     let t = Tokens::get();
     let (ink, fill) = tone.colors(&t);
+    badge(ui, label, ink, fill)
+}
+
+/// A compact informational chip in the active workspace colours.
+pub(crate) fn workspace_chip(ui: &mut Ui, label: &str) -> Response {
+    let accent = crate::theme::TabAccent::current(ui.ctx());
+    badge(ui, label, accent.ink, accent.soft)
+}
+
+fn badge(ui: &mut Ui, label: &str, ink: egui::Color32, fill: egui::Color32) -> Response {
+    let t = Tokens::get();
     let font = egui::FontId::proportional(t.font_caption);
     let width = ui.painter().layout_no_wrap(label.to_owned(), font.clone(), ink).size().x + t.space_12;
     let (rect, response) = ui.allocate_exact_size(vec2(width, t.form_close_size - t.space_4), egui::Sense::hover());
@@ -221,7 +232,7 @@ pub(crate) fn assistant_approval<R>(ui: &mut Ui, title: &str, body: impl FnOnce(
 #[cfg(any(not(target_arch = "wasm32"), test))]
 pub(crate) fn assistant_input(ui: &mut Ui, id: egui::Id, value: &mut String, hint: &str) -> Response {
     let t = Tokens::get();
-    ui.add(
+    let mut response = ui.add(
         super::fields::text_input(egui::TextEdit::multiline(value))
             .id(id)
             .frame(egui::Frame::NONE)
@@ -231,7 +242,9 @@ pub(crate) fn assistant_input(ui: &mut Ui, id: egui::Id, value: &mut String, hin
             .desired_width(f32::INFINITY)
             .min_size(vec2(0.0, t.control_height + t.space_8))
             .font(egui::FontId::proportional(t.font_label)),
-    )
+    );
+    super::text_menu::menu(ui, &mut response, value, super::text_menu::Field::LINES);
+    response
 }
 
 /// Compact right-aligned approval actions; wrapping grows by control rows, not the remaining card height.
@@ -319,6 +332,11 @@ pub(crate) fn assistant_empty<R>(ui: &mut Ui, title: &str, body: &str, add: impl
 /// Semantic warning/error/information band with caller-owned text and actions.
 #[cfg(any(not(target_arch = "wasm32"), test))]
 pub(crate) fn assistant_banner<R>(ui: &mut Ui, tone: AssistantTone, add: impl FnOnce(&mut Ui) -> R) -> InnerResponse<R> {
+    banner(ui, tone, add)
+}
+
+/// Shared semantic notice band, also available to workspace inspectors on wasm.
+pub(crate) fn banner<R>(ui: &mut Ui, tone: AssistantTone, add: impl FnOnce(&mut Ui) -> R) -> InnerResponse<R> {
     let t = Tokens::get();
     let (_, fill) = tone.colors(&t);
     egui::Frame::NONE.fill(fill).stroke(t.container_border(t.dialog_rule)).corner_radius(t.radius_lg).inner_margin(t.space_10).show(ui, |ui| {

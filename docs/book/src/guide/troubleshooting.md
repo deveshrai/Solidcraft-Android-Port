@@ -117,6 +117,14 @@ on the command line.
 [Wayland, XWayland and niri](https://github.com/tangency-labs/solidcraft/blob/main/docs/nix.md#wayland-xwayland-and-niri)
 has the details.
 
+## Trackpad pinch does nothing on Linux
+
+A Wayland compositor reports touchpad gestures only to native Wayland windows. Through
+XWayland there is no gesture protocol, so a pinch never reaches SolidCraft at all (two-finger
+scrolling still works there, because X11 reports it as a wheel). Run SolidCraft on native
+Wayland (see above) and pinch zooms the view at the cursor, as it already did on macOS and
+the browser.
+
 ## SolidCraft closes right away on Windows
 
 A graphics driver can crash the app while it starts, before SolidCraft can show anything (an

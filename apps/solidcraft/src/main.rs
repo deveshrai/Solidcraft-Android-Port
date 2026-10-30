@@ -20,6 +20,7 @@
 #[cfg(not(target_os = "macos"))]
 #[path = "../../../assets/icons/app/shared/source/app_icon.rs"]
 mod app_icon;
+mod come_forward;
 mod control_server;
 mod device_lost;
 #[cfg(target_os = "windows")]
@@ -84,6 +85,8 @@ struct App {
     frames: u32,
     /// Started over the control channel: the window doesn't ask for the foreground.
     take_focus_unwanted: bool,
+    /// Coming forward after a close that asks about unsaved designs.
+    come_forward: come_forward::ComeForward,
     /// The graphics device: lost, it can't draw again (`App::watch_device`, #4172).
     gpu: Option<LostWatch>,
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
@@ -139,7 +142,13 @@ impl eframe::App for App {
         if ctx.input(|i| i.viewport().close_requested()) && !self.solve.quit_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             solidcraft_ui_egui::documents::request_quit(&mut self.solve);
+            // Closed from the taskbar or a window switcher while another app had the focus: the
+            // "save changes?" prompt is only seen once the window comes forward.
+            if !self.solve.quit_requested {
+                self.come_forward.start(std::time::Instant::now());
+            }
         }
+        self.come_forward.tick(ctx, _frame);
         #[cfg(target_os = "macos")]
         for f in if self.solve.file_picker_busy() { Vec::new() } else { open_documents::take() } {
             self.solve.open_path_async(&f);
@@ -752,12 +761,15 @@ fn main() -> eframe::Result {
     let mut sample = false;
     // `--theme-file PATH`: follow that theme file for this run without saving it (#7573).
     let mut theme_file: Option<String> = None;
+    let mut max_file_size = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--control" => control_port = args.next().and_then(|p| p.parse().ok()),
             "--sample" => sample = true,
             "--theme-file" => theme_file = args.next(),
+            "--max-file-size" => max_file_size = Some(args.next()),
+            s if s.starts_with("--max-file-size=") => max_file_size = Some(s.strip_prefix("--max-file-size=").map(str::to_string)),
             "--safe-mode" => safe_mode = true,
             "--version" | "-V" => {
                 println!("solidcraft {}", env!("CARGO_PKG_VERSION"));
@@ -778,11 +790,19 @@ fn main() -> eframe::Result {
             }
             "--help" | "-h" => {
                 println!(
-                    "usage: solidcraft [--control PORT] [--sample] [--theme-file THEME.json] [--crash-log] [--safe-mode] [design.sc | part.step]"
+                    "usage: solidcraft [--control PORT] [--sample] [--theme-file THEME.json] [--crash-log] [--safe-mode] [--max-file-size SIZE] [design.sc | part.step]"
                 );
                 return Ok(());
             }
             _ => files.push(a),
+        }
+    }
+    // `--max-file-size 2GB`: the largest files this run reads, over Preferences, never saved (#4086).
+    if let Some(value) = max_file_size {
+        let applied = startup::max_file_size(value.as_deref()).and_then(|bytes| solidcraft_engine::io::limits::set_override(Some(bytes)));
+        if let Err(error) = applied {
+            eprintln!("SolidCraft: {error}");
+            return Err(eframe::Error::AppCreation(std::io::Error::other(error).into()));
         }
     }
     // Settings that don't read are moved aside; launches that never got a window are counted,
@@ -1060,6 +1080,7 @@ fn main() -> eframe::Result {
                 starting,
                 frames: 0,
                 take_focus_unwanted: control_port.is_some(),
+                come_forward: come_forward::ComeForward::default(),
                 gpu,
                 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
                 space_mouse,
@@ -1103,6 +1124,8 @@ fn wgpu_options(cpu: bool, preference: Option<&str>) -> eframe::egui_wgpu::WgpuC
         let intel_mac = cfg!(all(target_os = "macos", target_arch = "x86_64"));
         let indirect = std::env::var(startup::INDIRECT_VALIDATION_ENV).ok();
         setup.instance_descriptor.flags = startup::window_instance_flags(setup.instance_descriptor.flags, intel_mac, indirect.as_deref());
+        // Never a `dxcompiler.dll` another program put on PATH (#6756).
+        setup.instance_descriptor.backend_options.dx12.shader_compiler = solidcraft_gpu::dx12_compiler();
         let environment = std::env::var("WGPU_ADAPTER_NAME").ok();
         let adapter = graphics().and_then(|v| v.get("adapter").and_then(serde_json::Value::as_str).map(str::to_string));
         startup::configure_adapter(setup, cpu, environment, adapter);

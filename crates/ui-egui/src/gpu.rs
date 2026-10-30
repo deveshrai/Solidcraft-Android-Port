@@ -8,9 +8,10 @@ use std::sync::{Arc, Mutex};
 
 use egui_wgpu::wgpu;
 pub use solidcraft_gpu::view::{
-    AccessMap, BlockBuilder, BlockBytes, BlockTris, DrawStats, DrawStatsHandle, Frame, GpuImage, GpuScene, GpuTarget, INSTANCE_SIZE, InstanceLook,
-    InstancedMesh, LINE_SIZE, LOD_PX, MAX_PALETTE, PBR_SIZE, Palette, PaletteIndex, PlannedBody, Renderer, SHARED_SIZE, SceneBlock, SceneSlot,
-    SharedTris, TRI_SIZE, TriClass, extend_runs, level_for, lifted_width, placement_scale, runs_within, supersampled_size,
+    AccessMap, BlockBuilder, BlockBytes, BlockTris, CLOUD_POINT_SIZE, DrawStats, DrawStatsHandle, Frame, GpuImage, GpuPoints, GpuScene, GpuTarget,
+    INSTANCE_SIZE, InstanceLook, InstancedMesh, LINE_SIZE, LOD_PX, MAX_PALETTE, PBR_SIZE, Palette, PaletteIndex, PlannedBody, Renderer, SHARED_SIZE,
+    SceneBlock, SceneSlot, SharedTris, TRI_SIZE, TriClass, UploadError, cloud_point, extend_runs, level_for, lifted_width, placement_scale,
+    runs_within, supersampled_size,
 };
 
 /// A frame of the viewport as an egui paint callback.
@@ -209,13 +210,14 @@ pub fn analysis_colors(c: &crate::theme::AnalysisColors) -> [f32; 36] {
 pub(crate) fn offscreen_backends() -> wgpu::Backends {
     static CHOSEN: std::sync::OnceLock<wgpu::Backends> = std::sync::OnceLock::new();
     *CHOSEN.get_or_init(|| {
-        let default = wgpu::InstanceDescriptor::new_without_display_handle_from_env().backends;
+        let default = solidcraft_gpu::instance_descriptor_from_env().backends;
         if !cfg!(target_os = "windows") || std::env::var("WGPU_BACKEND").is_ok_and(|v| !v.trim().is_empty()) {
             return default;
         }
         let hardware = |backends: wgpu::Backends| {
             let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
             desc.backends = backends;
+            desc.backend_options.dx12.shader_compiler = solidcraft_gpu::dx12_compiler();
             let adapters = pollster::block_on(wgpu::Instance::new(desc).enumerate_adapters(backends));
             adapters.iter().any(|a| a.get_info().device_type != wgpu::DeviceType::Cpu)
         };
@@ -231,7 +233,7 @@ pub(crate) fn offscreen_backends() -> wgpu::Backends {
 pub(crate) fn offscreen_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
     static STARTING: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _one_at_a_time = STARTING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    let mut desc = solidcraft_gpu::instance_descriptor_from_env();
     desc.backends = offscreen_backends();
     let instance = wgpu::Instance::new(desc);
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
@@ -279,13 +281,23 @@ pub(crate) fn render_offscreen(
         back,
         eye,
         size,
-        Offscreen { tess, product: false, srgb: false, analysis, analysis_colors: colors, ssaa: 1.0, ao_radius: 0.0 },
+        Offscreen {
+            tess,
+            product: false,
+            srgb: false,
+            analysis,
+            analysis_colors: colors,
+            ssaa: 1.0,
+            ao_radius: 0.0,
+            ao_samples: solidcraft_gpu::view::AO_SAMPLES,
+        },
     )
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn render_product_offscreen(
     scene: GpuScene,
+    highlight: Option<GpuScene>,
     view_proj: [[f32; 4]; 4],
     back: [f32; 3],
     eye: [f32; 4],
@@ -294,12 +306,21 @@ pub(crate) fn render_product_offscreen(
 ) -> Option<Vec<u8>> {
     offscreen(
         scene,
-        None,
+        highlight,
         view_proj,
         back,
         eye,
         size,
-        Offscreen { tess: None, product: true, srgb, analysis: [0.0; 8], analysis_colors: [0.0; 36], ssaa: 1.0, ao_radius: 0.0 },
+        Offscreen {
+            tess: None,
+            product: true,
+            srgb,
+            analysis: [0.0; 8],
+            analysis_colors: [0.0; 36],
+            ssaa: 1.0,
+            ao_radius: 0.0,
+            ao_samples: solidcraft_gpu::view::AO_SAMPLES,
+        },
     )
 }
 
@@ -312,6 +333,7 @@ struct Offscreen<'a> {
     analysis_colors: [f32; 36],
     ssaa: f32,
     ao_radius: f32,
+    ao_samples: u32,
 }
 
 /// [`render_offscreen`] of a scene supersampled `ssaa` times (1: off).
@@ -331,11 +353,21 @@ pub(crate) fn render_offscreen_ssaa(
         back,
         eye,
         size,
-        Offscreen { tess: None, product: false, srgb: false, analysis: [0.0; 8], analysis_colors: [0.0; 36], ssaa, ao_radius: 0.0 },
+        Offscreen {
+            tess: None,
+            product: false,
+            srgb: false,
+            analysis: [0.0; 8],
+            analysis_colors: [0.0; 36],
+            ssaa,
+            ao_radius: 0.0,
+            ao_samples: solidcraft_gpu::view::AO_SAMPLES,
+        },
     )
 }
 
-/// [`render_offscreen`] of a scene with ambient occlusion of `ao_radius` (world units; 0: off).
+/// [`render_offscreen`] of a scene with ambient occlusion of `ao_radius` (world units; 0: off),
+/// `ao_samples` samples per pixel.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn render_offscreen_ao(
     scene: GpuScene,
@@ -344,6 +376,7 @@ pub(crate) fn render_offscreen_ao(
     eye: [f32; 4],
     size: u32,
     ao_radius: f32,
+    ao_samples: u32,
 ) -> Option<Vec<u8>> {
     offscreen(
         scene,
@@ -352,7 +385,7 @@ pub(crate) fn render_offscreen_ao(
         back,
         eye,
         size,
-        Offscreen { tess: None, product: false, srgb: false, analysis: [0.0; 8], analysis_colors: [0.0; 36], ssaa: 1.0, ao_radius },
+        Offscreen { tess: None, product: false, srgb: false, analysis: [0.0; 8], analysis_colors: [0.0; 36], ssaa: 1.0, ao_radius, ao_samples },
     )
 }
 
@@ -366,7 +399,7 @@ fn offscreen(
     size: u32,
     options: Offscreen<'_>,
 ) -> Option<Vec<u8>> {
-    let Offscreen { tess, product, srgb, analysis, analysis_colors, ssaa, ao_radius } = options;
+    let Offscreen { tess, product, srgb, analysis, analysis_colors, ssaa, ao_radius, ao_samples } = options;
     let (adapter, device, queue) = offscreen_device()?;
     eprintln!("offscreen adapter: {:?}", adapter.get_info().backend);
     let format = if srgb { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm };
@@ -377,7 +410,9 @@ fn offscreen(
     resources.insert(Renderer::new(&device, target, compute));
     let none = || Arc::new(Mutex::new(None));
     let cb = ViewportCallback(Frame {
+        product_lights: None,
         product,
+        upload_error: None,
         key: 1,
         slot: Arc::new(Mutex::new(Some(scene))),
         sketch_key: 0,
@@ -393,12 +428,14 @@ fn offscreen(
         clip: [0.0; 4],
         cap: [0.0; 4],
         images: Vec::new(),
+        points: Vec::new(),
         analysis,
         analysis_colors,
         access: None,
         outline: false,
         eye,
         ao_radius,
+        ao_samples,
         ssaa,
         hover_tint: [0.0; 3],
         selection_tint: [0.0; 3],

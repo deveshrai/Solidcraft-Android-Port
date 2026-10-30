@@ -15,14 +15,23 @@ it.
 | Construct | offset plane (at a distance or through a point), plane at angle, plane along path |
 | Inspect | measure, section analysis, interference, compare bodies, curvature comb and map, zebra, draft, minimum radius, isocurves, centre of mass |
 
-Extrude automatically selects **Join** for additions when the active component already has a
-solid, including sideways elbow connections and screw bosses that meet only part of a face.
-Extruding into existing material selects **Cut**. In an empty component it selects **New Body**;
-choose **New Body** explicitly to keep an addition separate. Changing the default does not alter
-operations already saved in a design. A Join (of an extrude, revolve, sweep, loft, primitive…)
-whose material touches none of its target bodies still joins it, to the first one as a separate
-piece, and the feature's warning says so: "`Body1` is now in 2 separate pieces". Combine joins
-the bodies it is given without that warning.
+Extrude, Revolve, Sweep, Loft, Coil and the Box, Cylinder, Sphere and Torus choose their
+operation from what their material does, until you pick one: **Join** when it makes one body with
+a body it touches (a block against a wall, a ring round a hole, a boss meeting only part of a
+face), **New Body** when it would be a separate piece, and **Cut** when it goes into a body
+(Extrude) or lies inside one (Revolve and the Box, Cylinder, Sphere and Torus). The window finds
+out by running the Join on a copy of the design in the background, so its choice is what OK
+makes; it changes only when that check is in, and OK waits for it. An operation you pick stays,
+and a feature you edit keeps its own. Pipe, Thicken and Boundary Fill start as a New Body. Only
+shown bodies take part: with some bodies hidden, the feature names the shown ones as its targets,
+so a hidden body is never joined or cut, and showing it again later changes nothing.
+**Choose the operation automatically** (Preferences › Design, on by default) turns this choice
+off: each window then keeps the operation it opens with, Extrude its own Join or Cut, as before.
+
+A Join you pick whose material touches none of its target bodies still joins it, to the first
+one as a separate piece, and the feature's warning says so: "`Body1` is now in 2 separate
+pieces". Combine joins the bodies it is given without that warning. Changing the default does not
+alter operations already saved in a design.
 
 **Extrude to a picked target** (Preferences › Design, off by default) lets a pick choose the
 extent. With it on and a profile selected in the solid Extrude dialog, picking a face away from

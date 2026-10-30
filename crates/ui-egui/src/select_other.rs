@@ -194,7 +194,7 @@ fn hit_depth(
     let along = |p: solidcraft_engine::geom::Vec3| Some((p - o).dot(d)).filter(|t| t.is_finite());
     match h {
         Hit::Vertex { point, .. } | Hit::Face { point, .. } => along(*point),
-        Hit::Edge { body, index: ei, mid } => {
+        Hit::Edge { body, index: ei, mid, .. } => {
             let under = index.get(body.as_str()).and_then(|i| st.bodies.get(*i)).and_then(|b| {
                 let (m, place) = b.mesh_in_place();
                 let at = |p: solidcraft_engine::geom::Vec3| solidcraft_engine::doc::apply_point(&place, p);
@@ -267,13 +267,14 @@ fn sketch_name(app: &SolveApp, sketch: u64) -> String {
 }
 
 /// "Line 3" (its kind and number), with what kind of geometry it is when that matters.
-fn curve_label(sk: &solidcraft_engine::sketch::Sketch, id: &str) -> String {
+pub(crate) fn curve_label(sk: &solidcraft_engine::sketch::Sketch, id: &str) -> String {
     if let Some((i, c)) = sk.curves.iter().enumerate().find(|(_, c)| c.id == id) {
         let kind = curve_kind_name(&c.kind);
         let n = id_number(id).unwrap_or_else(|| sk.curves.iter().take(i + 1).filter(|x| curve_kind_name(&x.kind) == kind).count() as u64);
         let mut s = format!("{kind} {n}");
-        if c.link.is_some() {
-            s.push_str(" (projected)");
+        if let Some(link) = &c.link {
+            let kind = sk.links.iter().find(|l| &l.id == link).map(|l| l.kind);
+            s.push_str(if kind == Some(solidcraft_engine::sketch::LinkKind::Intersect) { " (intersected)" } else { " (projected)" });
         } else if c.construction {
             s.push_str(" (construction)");
         }

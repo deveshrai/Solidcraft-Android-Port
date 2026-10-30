@@ -45,6 +45,7 @@ pub fn boxes_for(cmd: &str, n: usize) -> Vec<DimBox> {
         ("sketch.circle.center", 1) => vec![b("Diameter", Length)],
         // The two points are a diameter's ends (#3278).
         ("sketch.circle.two_point", 1) => vec![b("Diameter", Length)],
+        ("sketch.circle.two_tangent", 2) => vec![b("Radius", Length)],
         ("sketch.arc.center_point" | "sketch.slot.arc_center", 1) => vec![b("Radius", Length)],
         ("sketch.arc.center_point" | "sketch.slot.arc_center", 2) => vec![b("Sweep", Angle)],
         ("sketch.polygon.inscribed" | "sketch.polygon.circumscribed", 1) => vec![b("Radius", Length), b("Sides", Unitless)],
@@ -271,6 +272,9 @@ fn live(app: &SolveApp, t: &Tool, e: Vec2, px: f64) -> Vec<(f64, Vec2)> {
         }
         ("sketch.circle.center", 1) => vec![(2.0 * (e - a).len(), (a + e) * 0.5 + dir_or_x(e - a).perp() * off)],
         ("sketch.circle.two_point", 1) => vec![((e - a).len(), (a + e) * 0.5 + dir_or_x(e - a).perp() * off)],
+        ("sketch.circle.two_tangent", 2) => {
+            vec![(crate::sketch_tools::two_tangent_default_radius(app, t), (first + a) * 0.5 + dir_or_x(a - first).perp() * off)]
+        }
         ("sketch.arc.center_point" | "sketch.slot.arc_center", 1) | ("sketch.polygon.inscribed" | "sketch.polygon.circumscribed", 1) => {
             vec![((e - a).len(), (a + e) * 0.5), (6.0, a + (e - a) * 0.5 + (e - a).perp() * 0.3)]
         }
@@ -278,7 +282,12 @@ fn live(app: &SolveApp, t: &Tool, e: Vec2, px: f64) -> Vec<(f64, Vec2)> {
             let a0 = (a - first).angle();
             // Out along the radius, clear of the cursor: a box on it would take the hover and
             // the click meant for a point there (#2201).
-            vec![(((e - first).angle() - a0).rem_euclid(std::f64::consts::TAU), e + dir_or_x(e - first) * (2.5 * off))]
+            // A centre-point arc runs the way the cursor went round (#6645): its sweep is signed.
+            let sweep = match t.cmd {
+                "sketch.arc.center_point" => crate::tools::center_arc_sweep(t, e),
+                _ => ((e - first).angle() - a0).rem_euclid(std::f64::consts::TAU),
+            };
+            vec![(sweep, e + dir_or_x(e - first) * (2.5 * off))]
         }
         ("sketch.conic", 2) => {
             // `rho` is the curve's fullness, not a distance: the conic passes through
@@ -348,6 +357,21 @@ pub fn reset(t: &mut Tool) {
     t.dim_history.clear();
     t.dims_stage = usize::MAX;
     t.dims_focus = false;
+}
+
+/// After a draw-drag press that only placed the first point, a short release (or one that lands
+/// on the same sketch point, #8899) must keep the stage-1 value boxes rather than wiping them
+/// with [`reset`] and waiting for the next frame to rebuild them.
+pub fn keep_stage_one(t: &mut Tool) {
+    if t.pts.len() != 1 {
+        return;
+    }
+    if t.dims_stage != 1 || t.dims.is_empty() {
+        t.dim_history.clear();
+        t.dims = boxes_for(t.cmd, 1);
+        t.dims_stage = 1;
+    }
+    t.dims_focus = !t.dims.is_empty();
 }
 
 pub fn has_locked(t: &Tool, label: &str) -> bool {
@@ -428,6 +452,11 @@ pub fn locked_value(app: &SolveApp, t: &Tool, label: &str) -> Option<f64> {
     locked(app, t, label)
 }
 
+/// The expression typed into a locked value box, kept verbatim for a command parameter.
+pub(crate) fn locked_expression<'a>(t: &'a Tool, label: &str) -> Option<&'a str> {
+    t.dims.iter().chain(&t.dim_history).find(|dimension| dimension.label == label && dimension.locked).map(|dimension| dimension.value.as_str())
+}
+
 /// Give the keyboard back to the box it was in, after a click in another panel took it (#2927).
 /// The box that owned the keyboard is still the one that had it last frame; the active tool must
 /// still show its boxes, so a finished or restarted shape is left alone.
@@ -463,7 +492,10 @@ fn boxes(app: &SolveApp, ui: &mut egui::Ui, proj: &Proj, t: &mut Tool) -> Option
     let sid = app.session.active_sketch?;
     let st = app.session.world_state();
     let plane = st.sketch(sid)?.plane;
-    let e = shown(app, t, t.hover.as_ref()?);
+    // When the pointer is over the value box itself after releasing on a shared centre (#8899),
+    // the tool may have no hover for a frame: still show the boxes from the first point.
+    let hover = t.hover.clone().or_else(|| t.pts.last().map(|(p, id)| (*p + Vec2::X, id.clone())));
+    let e = shown(app, t, hover.as_ref()?);
     let px = 2.0 * app.cam.half_height() / f64::from(proj.rect.height().max(1.0));
     let lv = live(app, t, e, px);
     let focus = std::mem::take(&mut t.dims_focus);
@@ -509,7 +541,8 @@ fn boxes(app: &SolveApp, ui: &mut egui::Ui, proj: &Proj, t: &mut Tool) -> Option
             s.store(ui.ctx(), id);
         }
         let pos = in_view(sp + vec2(-34.0, -11.0), view, ui.ctx().pointer_latest_pos());
-        Container::new(ui.ctx(), Surface::Canvas).area(egui::Id::new(("sc_dim_area", i))).fixed_pos(pos).order(egui::Order::Foreground).show(
+        // Background: under Preferences and Report a bug (#9016), like canvas value boxes.
+        Container::new(ui.ctx(), Surface::Canvas).area(egui::Id::new(("sc_dim_area", i))).fixed_pos(pos).order(egui::Order::Background).show(
             ui.ctx(),
             |ui| {
                 let fill = if b.locked { tk.accent_soft } else { tk.panel };

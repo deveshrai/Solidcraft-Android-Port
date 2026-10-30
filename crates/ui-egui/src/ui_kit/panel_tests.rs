@@ -265,6 +265,50 @@ fn top_placement_shows_the_compute_status_in_the_title_row() {
     assert!(scenario::rect_of("dialog:header").unwrap().contains_rect(scenario::rect_of("dialog:cancel").unwrap()));
 }
 
+/// With the buttons in the footer, the busy spinner sits in the footer's row: at its side inset
+/// and on the buttons' centre line, not against the card's edge (it used to hang there).
+#[test]
+fn bottom_placement_puts_the_busy_spinner_in_the_footer_row() {
+    let ctx = crate::fonts::test_context();
+    let vp = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 480.0));
+    for _ in 0..3 {
+        scenario::clear_handles();
+        crate::test_support::frame(&ctx, egui::RawInput { screen_rect: Some(vp), ..Default::default() }, |_| {
+            DialogButtons::Bottom.publish(&ctx);
+            let side = crate::frame::Side::Right;
+            let anchor = egui::pos2(vp.right() - crate::shell::SHELL_GAP, vp.top());
+            let panel = Panel::new(
+                "Fillet",
+                egui::Id::new("bottom_status"),
+                anchor,
+                vp,
+                side,
+                Panel::feature_frame(&ctx, crate::shell::LayoutMode::Floating, side),
+            );
+            panel.window(&ctx).show(&ctx, |ui| {
+                let heading = FeatureOptions {
+                    icon: "fillet",
+                    title: "Fillet",
+                    drag_key: "bottom_status",
+                    moved: egui::Vec2::ZERO,
+                    docked: anchor,
+                    apply_label: None,
+                };
+                panel.feature(ui, heading, true, true, |ui| {
+                    text(ui, "Input", Text::Note("row"));
+                    ComputeStatus { text: Some("Computing… 3 s".into()), busy: true, applying: true }
+                });
+            });
+        });
+    }
+    let spinner = scenario::rect_of("dialog:footer:spinner").expect("the spinner shows while busy");
+    let actions = scenario::rect_of("dialog:footer:actions").unwrap();
+    let ok = scenario::rect_of("dialog:ok").unwrap();
+    assert!(actions.contains_rect(spinner), "{spinner:?} inside the footer row {actions:?}");
+    assert!((spinner.left() - actions.left()).abs() < 0.5, "at the footer's inset: {spinner:?} {actions:?}");
+    assert!((spinner.center().y - ok.center().y).abs() < 0.5, "on the buttons' line: {spinner:?} {ok:?}");
+}
+
 #[test]
 fn top_placement_keeps_a_managers_fold_beside_the_actions() {
     let ctx = crate::fonts::test_context();
@@ -809,6 +853,7 @@ fn universal_containers_follow_one_layout_without_changing_transient_surfaces() 
             Surface::Canvas,
             Surface::Toast,
             Surface::Navigation,
+            Surface::ViewportStatus,
             Surface::Viewport,
             Surface::InputShield,
         ] {

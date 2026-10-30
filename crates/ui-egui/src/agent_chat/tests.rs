@@ -214,7 +214,7 @@ fn a_messages_changes_undo_as_one_step() {
 #[test]
 fn file_actions_wait_for_the_user() {
     let (mut app, tx) = app_in_a_turn();
-    let dir = std::env::temp_dir().join(format!("sc-agent-chat-approve-{}", std::process::id()));
+    let dir = solidcraft_engine::io::vfs::temp_dir().join(format!("sc-agent-chat-approve-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.solidcraft");
     let save = json!({"command": "file.save", "params": {"path": path.to_string_lossy()}, "allow_paths": [dir.to_string_lossy()]});
@@ -466,7 +466,7 @@ fn permission_modes_decide_what_asks() {
     decline_all(&mut app, "test");
     // Allow everything, set for this agent only.
     app.preferences.agent_permissions.insert("codex".into(), agents::Mode::All);
-    let dir = std::env::temp_dir().join(format!("sc-agent-chat-all-{}", std::process::id()));
+    let dir = solidcraft_engine::io::vfs::temp_dir().join(format!("sc-agent-chat-all-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("b.solidcraft");
     let save = ask(

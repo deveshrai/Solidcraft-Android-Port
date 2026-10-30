@@ -5,7 +5,7 @@ members = ["crates/*", "apps/*", "xtask"]
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.25.1"
+version = "0.27.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -80,7 +80,7 @@ cadmpeg-ir = "=0.6.3"
 cadmpeg-registry = { version = "=0.6.3", default-features = false, features = ["fcstd", "rhino", "step"] }
 
 # fonts (sketch text outlines; MIT OR Apache-2.0, pure Rust)
-ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
+ttf-parser = { version = "0.25", default-features = false, features = ["std", "variable-fonts"] }
 
 # Ends a process group with the system call (MIT; already in the tree through zip).
 nix = { version = "0.31", default-features = false, features = ["signal"] }
@@ -161,7 +161,9 @@ matext4cgmath = { path = "vendor/matext4cgmath" }
 # Keep OpenGL pipelines, resolve textures and CAD callbacks at the same safe sample count.
 egui-wgpu = { path = "vendor/egui-wgpu" }
 
-# Android: a mouse as a mouse (cursor, every button, the wheel) and the keyboard's modifiers.
+# Deliver trackpad pinch and rotation gestures on Wayland (zwp_pointer_gestures_v1), which
+# winit 0.30 never binds and eframe 0.36 still requires winit 0.30. Android port: a mouse as a
+# mouse (cursor, every button, the wheel) and the keyboard's modifiers.
 winit = { path = "vendor/winit" }
 
 # Mutation testing (cargo-mutants, docs/mutation-testing.md): the ci profile with incremental

@@ -1971,6 +1971,14 @@ fn placement_digest(doc: &Document, f: &Feature, st: Option<&ModelState>) -> u64
                 reads.placed_body(st, tool);
             }
         }
+        // A pattern of bodies copies them along its directions or about its axis in its own
+        // component's frame, so it follows where each body it copies is placed relative to that
+        // frame: copies of a root block, patterned in a component, move with the component.
+        FeatureKind::Pattern { bodies, .. } if !bodies.is_empty() => {
+            for b in bodies {
+                reads.placed_body(st, &b.0);
+            }
+        }
         // Joins, cuts and intersects meet their targets where those are placed (#3383).
         kind if drawn_tools_change_bodies(kind) => reads.drawn_targets(st, f),
         FeatureKind::Sketch { plane, sketch } => {
@@ -2438,7 +2446,7 @@ impl Model {
                 }
                 Err(e) => Some(e.to_string().trim_start_matches("the operation failed: ").to_string()),
             };
-            if !self.no_cache {
+            if !self.no_cache && !watched.cancelled() {
                 let e = CachedEval {
                     error: error.clone(),
                     warning: warning.clone(),
@@ -2621,11 +2629,38 @@ fn point(vals: &BTreeMap<String, Value>, p: &crate::PointExpr) -> Result<Vec3> {
 
 pub(crate) fn val(vals: &BTreeMap<String, Value>, e: &str, k: Kind) -> Result<f64> {
     let scale = vals.get(DESIGN_LEN).map(|x| x.v).unwrap_or(1.0);
+    // Non-literal lengths (a parameter ± a bare number) must read that bare number in the design's
+    // units during the expression, not only when the whole result is unit-less (#9015).
     if k == Kind::Length && scale != 1.0 && !expr::is_literal(e) {
-        let v = expr::eval_with(e, &|n| vals.get(n).copied().ok_or_else(|| DocError::Expr(format!("unknown parameter `{n}`"))))?;
-        return v.to_kind_in(k, expr::Defaults { len: scale, ..expr::Defaults::default() });
+        let defaults = expr::Defaults { len: scale, ..expr::Defaults::default() };
+        let look = |n: &str| vals.get(n).copied().ok_or_else(|| DocError::Expr(format!("unknown parameter `{n}`")));
+        return expr::eval_with_defaults(e, &look, defaults)?.to_kind_in(k, defaults);
     }
     Document::eval_in(vals, e, k)
+}
+
+#[cfg(test)]
+mod design_unit_val_tests {
+    use super::*;
+    use expr::Value;
+
+    /// #9015: with inches as the design unit, `baseLength - 1` subtracts one inch (not one mm).
+    #[test]
+    fn bare_offsets_beside_a_length_follow_the_design_units() {
+        let mut vals = BTreeMap::new();
+        vals.insert(DESIGN_LEN.into(), Value::num(25.4));
+        vals.insert("baseLength".into(), Value::length(76.0 * 25.4));
+        let got = val(&vals, "baseLength - 1", Kind::Length).unwrap();
+        assert!((got - 75.0 * 25.4).abs() < 1e-9, "got {got} mm, want 75 in");
+        let got = val(&vals, "baseLength - 1.5", Kind::Length).unwrap();
+        assert!((got - 74.5 * 25.4).abs() < 1e-9, "got {got} mm, want 74.5 in");
+        // An explicit millimetre still wins.
+        let got = val(&vals, "baseLength - 1 mm", Kind::Length).unwrap();
+        assert!((got - (76.0 * 25.4 - 1.0)).abs() < 1e-9, "got {got}");
+        // A bare literal stays millimetres (feature inputs write the design unit in when typed).
+        let got = val(&vals, "2", Kind::Length).unwrap();
+        assert!((got - 2.0).abs() < 1e-12, "got {got}");
+    }
 }
 
 /// Collapsing the outline and its holes onto one apex cannot make a manifold solid.
@@ -2827,10 +2862,22 @@ fn note_join_apart(before: &ModelState, after: &ModelState, f: &Feature, warning
     if operation != Operation::Join {
         return;
     }
+    for (name, n) in join_pieces_added(before, after) {
+        append_warning(
+            warning,
+            format!("the joined piece doesn't touch `{name}`, so `{name}` is now in {n} separate pieces (New Body makes it a body of its own)"),
+        );
+    }
+}
+
+/// The bodies a Join from `before` to `after` left in more separate pieces than it found, with
+/// their piece counts now: empty when the joined material made one body with what it touched
+/// (or bridged pieces). A lid closing a cavity adds a void, not a piece.
+pub fn join_pieces_added(before: &ModelState, after: &ModelState) -> Vec<(String, usize)> {
     let pieces = |b: &Body| b.lumps().map_or(1, |l| l.len());
     // Pieces of the bodies the join changed or absorbed before it, and of those it kept after.
     let (mut had, mut have) = (0usize, 0usize);
-    let mut grown: Vec<(&str, usize)> = Vec::new();
+    let mut grown: Vec<(String, usize)> = Vec::new();
     for was in &before.bodies {
         match after.body(&was.name) {
             Some(now) if now.body.same_shape(&was.body) => {}
@@ -2839,21 +2886,13 @@ fn note_join_apart(before: &ModelState, after: &ModelState, f: &Feature, warning
                 had += old;
                 have += new;
                 if new > old {
-                    grown.push((now.name.as_str(), new));
+                    grown.push((now.name.clone(), new));
                 }
             }
             None => had += pieces(&was.body),
         }
     }
-    if have <= had {
-        return;
-    }
-    for (name, n) in grown {
-        append_warning(
-            warning,
-            format!("the joined piece doesn't touch `{name}`, so `{name}` is now in {n} separate pieces (New Body makes it a body of its own)"),
-        );
-    }
+    if have <= had { Vec::new() } else { grown }
 }
 
 /// Add tool bodies to the model according to the operation.
@@ -6346,7 +6385,7 @@ pub fn pattern_matrices(doc: &Document, st: &ModelState, p: &crate::PatternKind)
 
 fn pattern_transforms(doc: &Document, vals: &BTreeMap<String, Value>, st: &ModelState, component: u64, p: &crate::PatternKind) -> Result<Vec<Mat>> {
     let count = |e: &str| -> Result<usize> {
-        let n = val(vals, e, Kind::Unitless)?.round();
+        let n = expr::eval_count(e, vals)?;
         if !(1.0..=MAX_INSTANCES as f64).contains(&n) {
             return Err(DocError::Invalid(format!("pattern count must be 1…{MAX_INSTANCES}")));
         }

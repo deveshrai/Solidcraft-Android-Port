@@ -342,14 +342,42 @@ SolidCraft changes:
   `egui_pipeline` shader compilation, #6648) returns `WgpuError::CreateRendererError` through
   eframe so startup can retry another backend instead of invoking wgpu's panic handler.
 
-## winit 0.30.13 (Apache-2.0, the winit contributors, https://github.com/rust-windowing/winit)
+## winit 0.30.13 (Apache-2.0, © The winit contributors, https://github.com/rust-windowing/winit)
 
-Changes, all in `src/platform_impl/android/mod.rs` (the other platforms are untouched):
-- A motion event from a mouse (tool type mouse, which includes a touchpad driving the pointer)
-  is reported as `CursorEntered`/`CursorMoved`/`CursorLeft`, `MouseInput` for every button
-  whose state changed (left, right, middle, back, forward) and `MouseWheel` for the scroll
-  axes, as winit reports a mouse on the desktop. Upstream sent every motion event as a touch,
-  so there was no hover, no right or middle button and no wheel.
-- Key and motion events report `ModifiersChanged` from their meta state when Shift, Ctrl, Alt
-  or Meta changed: Android has no separate modifier events, and upstream sent none, so
-  shortcuts with a modifier never matched.
+Original package sources from the 0.30.13 release, with the upstream licence retained. Example
+and test targets are dropped (their sources are not vendored); the new gesture module's unit
+tests stay in `src/platform_impl/linux/wayland/seat/pointer/pointer_gesture.rs`
+(`cargo test -p winit --lib -- pointer_gesture`).
+
+SolidCraft changes:
+- `src/platform_impl/linux/wayland/seat/pointer/pointer_gesture.rs` (new): bind
+  `zwp_pointer_gestures_v1` (versions 1..=3) when the compositor has it, create one pinch
+  gesture object per pointer and destroy it before the pointer is released, and turn
+  begin/update/end into `WindowEvent::PinchGesture` and `WindowEvent::RotationGesture` for
+  the window the gesture began over. Two fingers only; the protocol's scale is relative to
+  the gesture's beginning, so the event carries the change since the previous update;
+  rotation is negated to winit's counterclockwise degrees; a non-finite scale is dropped, and
+  so are updates of a gesture whose begin we never saw; surfaces that are not one of our
+  windows (decorations, subsurfaces, other clients) do not take part. Backport of the gesture
+  part of rust-windowing/winit#4338 (winit 0.31's Wayland gesture support; the 0.30 backport
+  rust-windowing/winit#4778 was closed unmerged). A trackpad pinch otherwise produces no
+  input at all on Wayland: egui-winit already maps `PinchGesture` to `egui::Event::Zoom`, and
+  `navigation::handle` already zooms the camera from that, so the Wayland backend is the only
+  missing piece. eframe 0.36 requires winit 0.30, so this cannot come from a newer winit.
+- `src/platform_impl/linux/wayland/seat/mod.rs`, `state.rs`, `seat/pointer/mod.rs`: the
+  global bound with the connection, the gesture object of each seat's pointer, and the
+  module wiring.
+- `Cargo.toml`: enable the `unstable` feature of `wayland-protocols` on the Linux dependency
+  (the `wp::pointer_gestures` module); drop the example and test targets.
+- `src/event.rs`, `src/changelog/unreleased.md`: the platform notes of both events and the
+  changelog entry.
+- `src/platform_impl/android/mod.rs` (Android port; re-applied from
+  `apps/solidcraft-android/patches/winit-android-input.patch`):
+  - A motion event from a mouse (tool type mouse, which includes a touchpad driving the pointer)
+    is reported as `CursorEntered`/`CursorMoved`/`CursorLeft`, `MouseInput` for every button
+    whose state changed (left, right, middle, back, forward) and `MouseWheel` for the scroll
+    axes, as winit reports a mouse on the desktop. Upstream sent every motion event as a touch,
+    so there was no hover, no right or middle button and no wheel.
+  - Key and motion events report `ModifiersChanged` from their meta state when Shift, Ctrl, Alt
+    or Meta changed: Android has no separate modifier events, and upstream sent none, so
+    shortcuts with a modifier never matched.

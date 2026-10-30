@@ -12,9 +12,9 @@
 use std::sync::{Arc, Mutex};
 
 use solidcraft_geom::Vec3;
-use wgpu::util::DeviceExt;
 
 use crate::pbr;
+use wgpu::util::DeviceExt;
 
 mod ao;
 #[cfg(not(target_arch = "wasm32"))]
@@ -152,7 +152,7 @@ fn octahedral6(n: [f32; 3]) -> u32 {
 /// The shader's `U`: the view-projection matrix, 10 `vec4`s (the tenth carries the ambient
 /// occlusion radius), the 8 analysis colours, their flags, the depth direction and the two
 /// whole-body highlight colours (`uniform_bytes`).
-const UNIFORM_SIZE: u64 = 416;
+const UNIFORM_SIZE: u64 = 416 + 16 + 21 * 64;
 
 /// A body drawn from its display plan, evaluated on the GPU: the plan, and a palette index per
 /// face (the plan's face numbering; faces past the end take the last index).
@@ -761,6 +761,15 @@ impl BlockBuilder {
         self.hidden.extend_from_slice(&line_record(a, b, c, width.to_bits()));
     }
 
+    /// A vertex marker: a square `size` pixels across at `p`, the same size at every zoom. It is a
+    /// line from `p` to itself (the line shader caps each end by half its width), lifted toward
+    /// the eye by half its size so a face through the vertex seen at a slant does not bury half of
+    /// it; `hidden` draws it only where the model hides it, as a hidden edge.
+    pub fn marker(&mut self, p: [f32; 3], c: PaletteIndex, size: f32, hidden: bool) {
+        let out = if hidden { &mut self.hidden } else { &mut self.lines };
+        out.extend_from_slice(&line_record(p, p, c, lifted_width(size, [[0.0; 3]; 2])));
+    }
+
     /// How many vertices the block holds so far.
     pub fn vertices_len(&self) -> usize {
         self.vertices.len() / TRI_SIZE
@@ -891,6 +900,10 @@ fn line_record(a: [f32; 3], b: [f32; 3], c: PaletteIndex, width: u32) -> [u8; LI
 
 pub type SceneSlot = Arc<Mutex<Option<GpuScene>>>;
 
+/// Where the product preview's geometry upload reports a GPU error it caught (out of memory, a
+/// buffer the device refused): the preview shows it instead of drawing.
+pub type UploadError = Arc<Mutex<Option<String>>>;
+
 /// A reference image (canvas or decal): a textured quad, depth-tested against the model.
 #[derive(Clone)]
 pub struct GpuImage {
@@ -908,10 +921,50 @@ pub struct GpuImage {
 /// Image vertex: position (3 × f32), uv (2 × f32), opacity (f32).
 const IMG_SIZE: usize = 24;
 
+/// A point cloud: round dots of a size on screen, depth-tested and written like the model's
+/// faces.
+#[derive(Clone)]
+pub struct GpuPoints {
+    pub id: u64,
+    /// Changes when the points change (they are uploaded again).
+    pub version: u64,
+    /// [`CLOUD_POINT_SIZE`] bytes per point: position (3 × f32, in the design), colour (RGBA8,
+    /// the alpha the dot's size in eighths of a pixel, see [`cloud_point`]).
+    pub bytes: Arc<Vec<u8>>,
+}
+
+/// Bytes per point of a [`GpuPoints`].
+pub const CLOUD_POINT_SIZE: usize = 16;
+
+/// A point of a [`GpuPoints`]: where it is, its colour and its size on screen (pixels, up to 31).
+pub fn cloud_point(out: &mut Vec<u8>, p: [f32; 3], rgb: [u8; 3], size: f32) {
+    for v in p {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&rgb);
+    out.push((size * 8.0).round().clamp(8.0, 255.0) as u8);
+}
+
+fn point_layout() -> wgpu::VertexBufferLayout<'static> {
+    const A: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4];
+    wgpu::VertexBufferLayout { array_stride: CLOUD_POINT_SIZE as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &A }
+}
+/// Ambient occlusion samples per shaded pixel in a still picture (the shader's most).
+pub const AO_SAMPLES: u32 = 32;
+
+/// Ambient occlusion samples per shaded pixel while the view moves (#7165): a quarter of the
+/// still picture's, on the same turned pattern, so orbiting costs less and shows no copies of
+/// nearby parts (#4167).
+pub const AO_SAMPLES_MOVING: u32 = 8;
+
 /// Per-frame parameters.
 pub struct Frame {
+    /// Bounded unshadowed product-light preview. None retains the fixed studio.
+    pub product_lights: Option<Vec<[f32; 16]>>,
     /// Product preview uses its own batches, retaining the Design viewport's uploads.
     pub product: bool,
+    /// Product preview only: receives a GPU error raised by its geometry upload.
+    pub upload_error: Option<UploadError>,
     pub key: u64,
     pub slot: SceneSlot,
     pub sketch_key: u64,
@@ -936,6 +989,8 @@ pub struct Frame {
     pub cap: [f32; 4],
     /// Canvases and decals.
     pub images: Vec<GpuImage>,
+    /// Point clouds.
+    pub points: Vec<GpuPoints>,
     /// Surface analysis: (mode: 0 none, 1 zebra, 2 draft, 3 curvature, 4 environment,
     /// 5 accessibility; parameter; scale; size) and the pull / access direction.
     pub analysis: [f32; 8],
@@ -950,6 +1005,9 @@ pub struct Frame {
     pub eye: [f32; 4],
     /// World-space occlusion radius; zero skips the depth prepass and all AO sampling.
     pub ao_radius: f32,
+    /// Occlusion samples per shaded pixel: [`AO_SAMPLES`] for a still picture,
+    /// [`AO_SAMPLES_MOVING`] while the view moves (#7165).
+    pub ao_samples: u32,
     /// Supersampling (#1288): draw the frame this many times the viewport's pixels in each
     /// direction and filter it down (1: off). Under 1 the frame is drawn smaller and filtered up
     /// (the product preview past its pixel budget, #1464).
@@ -1113,13 +1171,11 @@ impl SharedGpu {
         if tris.vertices.len() as u64 > limit || index_bytes > limit {
             return upload(device, "sc_instanced_unshared", &tris.unshared(), SHARED_SIZE).map(SharedGpu::Unshared);
         }
-        let buffer = |label: &str, contents: &[u8], usage: wgpu::BufferUsages| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents, usage })
-        };
+        let buffer = |label: &str, contents: &[u8], usage: wgpu::BufferUsages| buffer_init(device, label, contents, usage);
         let indices: Vec<u8> = tris.indices.iter().flat_map(|i| i.to_le_bytes()).collect();
         Some(SharedGpu::Indexed {
-            vertices: buffer("sc_instanced_vertices", &tris.vertices, wgpu::BufferUsages::VERTEX),
-            indices: buffer("sc_instanced_indices", &indices, wgpu::BufferUsages::INDEX),
+            vertices: buffer("sc_instanced_vertices", &tris.vertices, wgpu::BufferUsages::VERTEX)?,
+            indices: buffer("sc_instanced_indices", &indices, wgpu::BufferUsages::INDEX)?,
             count: u32::try_from(tris.indices.len()).unwrap_or(u32::MAX),
         })
     }
@@ -1746,11 +1802,10 @@ impl Batches {
                     },
                 };
                 // Until the first cull, every placement is drawn in full.
-                let instances = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("sc_instances"),
-                    contents: &placements,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                });
+                let Some(instances) = buffer_init(device, "sc_instances", &placements, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST)
+                else {
+                    continue;
+                };
                 self.uploads.placements += placements.len() as u64;
                 let count = if i == 0 { count } else { 0 };
                 levels.push(LevelDraw { tris: gpu.1.clone(), flat: tris.flat, error, instances, count });
@@ -2005,6 +2060,10 @@ pub struct Renderer {
     textures: std::collections::HashMap<u64, (u64, wgpu::BindGroup)>,
     /// This frame's quads: (image id, vertices).
     quads: Vec<(u64, Batch)>,
+    /// Point clouds' dots.
+    point: wgpu::RenderPipeline,
+    /// Point clouds by id: (version, points).
+    clouds: std::collections::HashMap<u64, (u64, Batch)>,
     access_bgl: wgpu::BindGroupLayout,
     /// The accessibility depth map (a 1 × 1 stand-in when there is none) and its version.
     access_bind: wgpu::BindGroup,
@@ -2816,6 +2875,7 @@ impl Renderer {
                 pipeline("sc_guide_lines", "vs_line", "fs_line_all", line_layout(), depth(wgpu::CompareFunction::LessEqual, false), alpha),
             )
         };
+        let point = || pipeline("sc_points", "vs_point", "fs_point", point_layout(), depth(wgpu::CompareFunction::Less, true), None);
         let guide_trans = || pipeline("sc_guide_trans", "vs_tri", "fs_tri_all", tri_layout(), depth(wgpu::CompareFunction::LessEqual, false), alpha);
         // Each job on a thread of its own where the device allows it: D3D12 compiles every shader
         // as its pipeline is made, which took seconds one after another (#4860).
@@ -2832,6 +2892,7 @@ impl Renderer {
             let lines = jobs.spawn(lines);
             let lines_all = jobs.spawn(lines_all);
             let guide_trans = jobs.spawn(guide_trans);
+            let point = jobs.spawn(point);
             let image = jobs.spawn(image);
             let ao = jobs.spawn(ao);
             let oit = jobs.spawn(oit);
@@ -2880,6 +2941,8 @@ impl Renderer {
                 sampler,
                 textures: Default::default(),
                 quads: Vec::new(),
+                point: point.join(),
+                clouds: Default::default(),
                 tri,
                 tri_cut: cut(tri_marks, tri_cap),
                 tri_planned,
@@ -3017,12 +3080,26 @@ fn upload_with(device: &wgpu::Device, label: &str, bytes: &[u8], stride: usize, 
     let parts = bytes
         .chunks(chunk)
         .filter(|part| part.len() >= stride)
-        .map(|part| {
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents: part, usage });
-            (buffer, u32::try_from(part.len() / stride).unwrap_or(0))
-        })
-        .collect();
+        .map(|part| Some((buffer_init(device, label, part, usage)?, u32::try_from(part.len() / stride).unwrap_or(0))))
+        .collect::<Option<Vec<_>>>()?;
     Some(Batch { parts, chunk })
+}
+
+/// As `create_buffer_init`, without its panic when the device refused the buffer (an allocation
+/// error caught by an error scope): `None` instead, so the upload fails.
+fn buffer_init(device: &wgpu::Device, label: &str, contents: &[u8], usage: wgpu::BufferUsages) -> Option<wgpu::Buffer> {
+    let len = contents.len() as u64;
+    let size = len.div_ceil(wgpu::COPY_BUFFER_ALIGNMENT) * wgpu::COPY_BUFFER_ALIGNMENT;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage, mapped_at_creation: true });
+    match buffer.get_mapped_range_mut(..len) {
+        Ok(mut mapped) => mapped.copy_from_slice(contents),
+        Err(error) => {
+            log::error!("geometry upload failed: {error}");
+            return None;
+        }
+    }
+    buffer.unmap();
+    Some(buffer)
 }
 
 /// Bytes per GPU buffer for vertices of `stride` bytes: within the device's limit and a
@@ -3171,6 +3248,7 @@ fn frame_key(cb: &Frame) -> u64 {
     use std::hash::Hash as _;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     cb.product.hash(&mut h);
+    cb.product_lights.as_ref().map(|lights| lights.iter().take(21).map(|light| light.map(f32::to_bits)).collect::<Vec<_>>()).hash(&mut h);
     cb.key.hash(&mut h);
     cb.sketch_key.hash(&mut h);
     cb.hl_key.hash(&mut h);
@@ -3190,6 +3268,7 @@ fn frame_key(cb: &Frame) -> u64 {
     cb.selection_tint.map(f32::to_bits).hash(&mut h);
     cb.outline.hash(&mut h);
     cb.ao_radius.to_bits().hash(&mut h);
+    cb.ao_samples.hash(&mut h);
     cb.ssaa.to_bits().hash(&mut h);
     for img in &cb.images {
         img.id.hash(&mut h);
@@ -3197,6 +3276,10 @@ fn frame_key(cb: &Frame) -> u64 {
         img.size.hash(&mut h);
         img.corners.iter().flatten().for_each(|v| v.to_bits().hash(&mut h));
         img.opacity.to_bits().hash(&mut h);
+    }
+    for cloud in &cb.points {
+        cloud.id.hash(&mut h);
+        cloud.version.hash(&mut h);
     }
     match &cb.access {
         Some(a) => {
@@ -3240,8 +3323,27 @@ impl Renderer {
         }
         res.cached = None;
         if cb.product {
+            // A large product scene can exceed what the device will allocate. Its upload runs under
+            // its own error scopes, so the failure reaches the preview instead of the device's
+            // uncaptured-error handler, and nothing half-uploaded is drawn.
+            let scopes =
+                [wgpu::ErrorFilter::OutOfMemory, wgpu::ErrorFilter::Internal, wgpu::ErrorFilter::Validation].map(|f| device.push_error_scope(f));
             res.product.take(device, queue, &res.uniform, &res.uniform_bgl, cb.key, &cb.slot, None, false);
+            let mut failed = None;
+            for scope in scopes.into_iter().rev() {
+                if let Some(e) = crate::popped(scope.pop()) {
+                    failed.get_or_insert(e.to_string());
+                }
+            }
+            if let Some(error) = failed {
+                log::error!("product preview upload failed: {error}");
+                res.product = Batches { key: Some(cb.key), ..Batches::default() };
+                if let Some(Ok(mut sink)) = cb.upload_error.as_ref().map(|e| e.lock()) {
+                    *sink = Some(error);
+                }
+            }
             res.product.sort_glass(queue, cb.back);
+            res.highlight.take(device, queue, &res.uniform, &res.uniform_bgl, cb.hl_key, &cb.hl_slot, None, false);
             queue.write_buffer(&res.uniform, 0, &uniform_bytes(cb, cb.size_px[0], cb.size_px[1], res.linear_out, res.target.reversed_depth()));
             // The product picture goes through the window's pass too: offscreen when the targets
             // differ or it is drawn smaller, else straight into the window's pass.
@@ -3326,6 +3428,20 @@ impl Renderer {
             }
             if let Some(b) = upload(device, "sc_image_quad", &bytes, IMG_SIZE) {
                 res.quads.push((img.id, b));
+            }
+        }
+        // Point clouds: upload new or changed ones, drop removed ones.
+        res.clouds.retain(|id, _| cb.points.iter().any(|c| c.id == *id));
+        for c in &cb.points {
+            if res.clouds.get(&c.id).is_none_or(|(v, _)| *v != c.version) {
+                match upload(device, "sc_points", &c.bytes, CLOUD_POINT_SIZE) {
+                    Some(b) => {
+                        res.clouds.insert(c.id, (c.version, b));
+                    }
+                    None => {
+                        res.clouds.remove(&c.id);
+                    }
+                }
             }
         }
         res.ss_ready = (cb.ssaa != 1.0 || see_through || res.window_differs()) && res.supersample(device, encoder, cb, see_through);
@@ -3434,7 +3550,7 @@ impl Renderer {
             }
         };
         let (m, sk, h, pv) = if cb.product {
-            (&res.product, &res.empty, &res.empty, &res.empty)
+            (&res.product, &res.empty, &res.highlight, &res.empty)
         } else if cb.pv_hide {
             (&res.model, &res.sketch, &res.highlight, &res.empty)
         } else {
@@ -3556,6 +3672,16 @@ impl Renderer {
         }
         pass.set_bind_group(0, scene_bind(m, &res.bind), &[]);
         tris(pass, &res.pbr, &m.pbr);
+        if !cb.product {
+            for (_, b) in res.clouds.values() {
+                pass.set_pipeline(&res.point);
+                for (buffer, count) in &b.parts {
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                    pass.draw(0..6, 0..*count);
+                    tally.triangles(6, *count);
+                }
+            }
+        }
         // Whole-body tints first, so a face or an edge highlighted over the body (in `h.tris`
         // and `h.lines`) keeps its own colour, as it did when the body's triangles were built
         // into the same list before them.
@@ -3613,6 +3739,7 @@ impl Renderer {
         pass.set_bind_group(0, scene_bind(pv, &res.bind), &[]);
         tris(pass, &res.ghost, &pv.ghost);
         pass.set_bind_group(0, scene_bind(m, &res.bind), &[]);
+        tris(pass, &res.ghost, &m.ghost);
         tris(pass, &res.trans, &m.shadow);
         if phase == Phase::BeforeSeeThrough {
             return;
@@ -3999,11 +4126,21 @@ pub fn uniform_bytes(cb: &Frame, w: f32, h: f32, linear: bool, reversed: bool) -
         None => v.extend([0.0; 8]),
     }
     v.extend(cb.eye);
-    v.extend([cb.ao_radius, 0.0, 0.0, 0.0]);
+    v.extend([cb.ao_radius, cb.ao_samples.clamp(1, AO_SAMPLES) as f32, 0.0, 0.0]);
     v.extend(cb.analysis_colors);
     v.extend([if reversed { 1.0 } else { 0.0 }, FACE_STEPS as f32, FACE_SLOPE, 0.0]);
     v.extend([cb.hover_tint[0], cb.hover_tint[1], cb.hover_tint[2], 0.0]);
     v.extend([cb.selection_tint[0], cb.selection_tint[1], cb.selection_tint[2], 0.0]);
+    v.extend([
+        if cb.product_lights.is_some() { 1.0 } else { 0.0 },
+        cb.product_lights.as_ref().map_or(0, |lights| lights.len().min(21)) as f32,
+        0.0,
+        0.0,
+    ]);
+    for index in 0..21 {
+        let light = cb.product_lights.as_ref().and_then(|lights| lights.get(index)).copied().unwrap_or([0.0; 16]);
+        v.extend(light.map(|value| if value.is_finite() { value } else { 0.0 }));
+    }
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
 
@@ -4124,6 +4261,21 @@ mod tests {
         assert_eq!(SharedTris::new(&smooth).indices.len(), 6);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn rejected_geometry_allocation_returns_without_panicking() {
+        let Ok((_, device, _)) = crate::open_headless() else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        // Invalid mapping usage provides a deterministic failed allocation without exhausting memory.
+        let result =
+            super::upload_with(&device, "rejected geometry", &[0; 288], super::PBR_SIZE, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::VERTEX);
+        assert!(result.is_none());
+        assert!(pollster::block_on(scope.pop()).is_some());
+    }
+
     /// Only the FirePro under Metal skips GPU evaluation; the same card under another backend
     /// and other Metal GPUs keep it.
     #[test]
@@ -4165,12 +4317,51 @@ mod tests {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap();
     }
 
+    /// The ambient occlusion sample count rides in the uniform's `ao.y`, beside the radius, kept
+    /// within the 1 to 32 samples the shader draws (#7165).
+    #[test]
+    fn ambient_occlusion_samples_follow_the_radius_in_the_uniform() {
+        let samples_sent = |samples: u32| {
+            let mut f = cached_frame();
+            f.ao_radius = 123.5;
+            f.ao_samples = samples;
+            let bytes = super::uniform_bytes(&f, 64.0, 64.0, false, false);
+            let v: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
+            let radius = v.iter().position(|&x| x == 123.5).unwrap();
+            v[radius + 1]
+        };
+        assert_eq!(samples_sent(super::AO_SAMPLES), 32.0);
+        assert_eq!(samples_sent(super::AO_SAMPLES_MOVING), 8.0);
+        assert_eq!(samples_sent(0), 1.0, "at least one sample");
+        assert_eq!(samples_sent(1000), 32.0, "at most the shader's 32");
+    }
+
+    #[test]
+    fn render_lights_preview_shader_uniform_and_frame_cache_include_light_state() {
+        let source = format!("{}\n{}", super::SHADER, crate::pbr::SOURCE);
+        let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|error| panic!("{}", error.emit_to_string(&source)));
+        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap();
+        let uniform = module.types.iter().find(|(_, ty)| ty.name.as_deref() == Some("U")).unwrap().1;
+        let naga::TypeInner::Struct { span, .. } = &uniform.inner else { panic!("U is a uniform struct") };
+        assert_eq!(u64::from(*span), super::UNIFORM_SIZE);
+        let mut frame = cached_frame();
+        let previous = super::frame_key(&frame);
+        frame.product_lights = Some(vec![[0.0; 16]]);
+        assert_ne!(super::frame_key(&frame), previous);
+        assert_eq!(super::uniform_bytes(&frame, 800.0, 600.0, false, false).len() as u64, super::UNIFORM_SIZE);
+        let previous = super::frame_key(&frame);
+        frame.product_lights = Some(Vec::new());
+        assert_ne!(super::frame_key(&frame), previous);
+    }
+
     /// A frame with a fixed picture, and a key that names everything it shows.
     fn cached_frame() -> super::Frame {
         use std::sync::{Arc, Mutex};
         let slot = || Arc::new(Mutex::new(None));
         super::Frame {
+            product_lights: None,
             product: false,
+            upload_error: None,
             key: 1,
             slot: slot(),
             sketch_key: 2,
@@ -4186,6 +4377,7 @@ mod tests {
             clip: [0.0; 4],
             cap: [0.0; 4],
             images: Vec::new(),
+            points: Vec::new(),
             analysis: [0.0; 8],
             analysis_colors: [0.0; 36],
             access: None,
@@ -4194,6 +4386,7 @@ mod tests {
             outline: false,
             eye: [0.0; 4],
             ao_radius: 0.0,
+            ao_samples: crate::view::AO_SAMPLES,
             ssaa: 1.0,
         }
     }
@@ -4237,6 +4430,8 @@ mod tests {
             ("selection tint", key(|f| f.selection_tint = [0.4, 0.5, 0.6])),
             ("outline", key(|f| f.outline = true)),
             ("ambient occlusion", key(|f| f.ao_radius = 1.0)),
+            // The settled view's full count replaces the moving view's picture (#7165).
+            ("ambient occlusion samples", key(|f| f.ao_samples = super::AO_SAMPLES_MOVING)),
             ("supersampling", key(|f| f.ssaa = 2.0)),
             ("image", key(|f| f.images.push(image(1)))),
             ("image pixels", key(|f| f.images.push(image(2)))),
@@ -4438,6 +4633,63 @@ mod glass_tests {
         assert_eq!(*block.freeze().lines, expected);
     }
 
+    /// A vertex marker (#7834) is a lifted line from the vertex to itself, among the block's
+    /// lines or, hidden, among its hidden lines.
+    #[test]
+    fn a_marker_is_a_lifted_line_to_itself() {
+        let (p, c) = ([1.0f32, -2.0, 3.5], PaletteIndex(4));
+        let mut block = BlockBuilder::default();
+        block.marker(p, c, 4.0, false);
+        block.marker(p, c, 4.0, true);
+        let bytes = block.freeze();
+        let mut sc = GpuScene::default();
+        sc.lifted_line(p, p, c, 4.0, [[0.0; 3]; 2]);
+        assert_eq!(*bytes.lines, sc.lines);
+        assert_eq!(*bytes.hidden, sc.lines);
+    }
+
+    /// A marker shows as a square of its size at its vertex, over a face through the vertex even
+    /// where the face rises toward the eye beside it (lifted, as a highlight band), and not
+    /// through a face in front of it; a hidden marker shows only there. Skipped without a GPU.
+    #[test]
+    fn a_marker_shows_over_a_slanted_face_and_hides_behind_one() {
+        let face = |sc: &mut GpuScene, slope: f32, z: f32, x0: f32| {
+            let grey = sc.color([128, 128, 128, 255]);
+            // A plane through (x0, 0, z), rising toward the eye (+z) along +x.
+            let at = |x: f32, y: f32| [x, y, z + slope * (x - x0)];
+            let n = [-slope, 0.0, 1.0];
+            for t in [[at(-9.0, -9.0), at(9.0, -9.0), at(9.0, 9.0)], [at(-9.0, -9.0), at(9.0, 9.0), at(-9.0, 9.0)]] {
+                for p in t {
+                    sc.tri(p, n, grey);
+                }
+            }
+        };
+        // The middle pixel's centre is 0.16 mm right of the view's centre (0.31 mm a pixel): a
+        // marker 0.3 mm left of it still covers that pixel, where the face stands 0.69 mm nearer
+        // the eye than the vertex.
+        let x0 = -0.3;
+        let marker = |hidden: bool| {
+            let mut b = BlockBuilder::default();
+            b.marker([x0, 0.0, 0.0], PaletteIndex(0), 4.0, hidden);
+            SceneBlock { key: u64::from(hidden), bytes: b.freeze() }
+        };
+        let scene = |slope: f32, z: f32, hidden: bool| {
+            let mut sc = GpuScene::with_palette(Palette::with_stable(vec![[255, 0, 0, 255]]));
+            face(&mut sc, slope, z, x0);
+            sc.blocks.push(marker(hidden));
+            sc
+        };
+        let red = [255, 0, 0, 255];
+        let Some(slanted) = middle_pixel(scene(1.5, 0.0, false), false) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        assert_eq!(slanted, red, "on a slanted face through the vertex");
+        assert_ne!(middle_pixel(scene(0.0, 5.0, false), false), Some(red), "behind a face in front");
+        assert_eq!(middle_pixel(scene(0.0, 5.0, true), false), Some(red), "a hidden marker behind a face in front");
+        assert_ne!(middle_pixel(scene(1.5, 0.0, true), false), Some(red), "no hidden marker where it is seen");
+    }
+
     /// Without order-independent transparency, the sorted glass stream is kept while the blocks'
     /// see-through triangles stay the same: a colour edit (a new palette) uploads palette rows
     /// and no geometry; a class change rebuilds the stream.
@@ -4494,7 +4746,9 @@ mod glass_tests {
         }
         let none = || Arc::new(Mutex::new(None));
         let frame = Frame {
+            product_lights: None,
             product: false,
+            upload_error: None,
             key: 1,
             slot: Arc::new(Mutex::new(Some(scene))),
             sketch_key: 0,
@@ -4510,12 +4764,14 @@ mod glass_tests {
             clip: [0.0; 4],
             cap: [0.0; 4],
             images: Vec::new(),
+            points: Vec::new(),
             analysis: [0.0; 8],
             analysis_colors: [0.0; 36],
             access: None,
             outline: false,
             eye: [0.0, 0.0, 100.0, 0.0],
             ao_radius: 0.0,
+            ao_samples: crate::view::AO_SAMPLES,
             ssaa: 1.0,
             hover_tint: [0.0; 3],
             selection_tint: [0.0; 3],
@@ -4665,7 +4921,9 @@ mod glass_tests {
         const SIZE: u32 = 64;
         let none = || Arc::new(Mutex::new(None));
         Frame {
+            product_lights: None,
             product: false,
+            upload_error: None,
             key: 1,
             slot: Arc::new(Mutex::new(Some(scene))),
             sketch_key: 0,
@@ -4681,6 +4939,7 @@ mod glass_tests {
             clip: [0.0; 4],
             cap: [0.0; 4],
             images: Vec::new(),
+            points: Vec::new(),
             analysis: [0.0; 8],
             analysis_colors: [0.0; 36],
             access: None,
@@ -4689,6 +4948,7 @@ mod glass_tests {
             outline: false,
             eye: [0.0, 0.0, 100.0, 0.0],
             ao_radius: 0.0,
+            ao_samples: crate::view::AO_SAMPLES,
             ssaa,
         }
     }
@@ -4701,6 +4961,31 @@ mod glass_tests {
         scene.tri([5.0, -5.0, 0.0], [0.0, 0.0, 1.0], red);
         scene.tri([0.0, 5.0, 0.0], [0.0, 0.0, 1.0], red);
         scene
+    }
+
+    #[test]
+    fn a_cached_point_cloud_picture_updates_after_recoloring_and_hiding() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut renderer = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let mut frame = test_frame(GpuScene::default(), 2.0);
+        let mut bytes = Vec::new();
+        cloud_point(&mut bytes, [0.0; 3], [255, 0, 0], 20.0);
+        frame.points.push(GpuPoints { id: 1, version: 1, bytes: Arc::new(bytes) });
+        let red = render_frame(&mut renderer, &device, &queue, &frame, true);
+        assert!(red.as_chunks::<4>().0.iter().any(|p| p[0] > 200 && p[1] < 30 && p[2] < 30), "the cloud is drawn");
+        render_frame(&mut renderer, &device, &queue, &frame, true);
+        assert!(renderer.cached.is_some());
+        let mut bytes = Vec::new();
+        cloud_point(&mut bytes, [0.0; 3], [0, 0, 255], 20.0);
+        frame.points = vec![GpuPoints { id: 1, version: 2, bytes: Arc::new(bytes) }];
+        let blue = render_frame(&mut renderer, &device, &queue, &frame, true);
+        assert!(blue.as_chunks::<4>().0.iter().any(|p| p[0] < 30 && p[1] < 30 && p[2] > 200), "the edited cloud replaces the cached picture");
+        assert_ne!(red, blue);
+        frame.points.clear();
+        let hidden = render_frame(&mut renderer, &device, &queue, &frame, true);
+        assert!(!hidden.as_chunks::<4>().0.iter().any(|p| p[0] < 30 && p[1] < 30 && p[2] > 200), "hiding the cloud removes its dots");
     }
 
     /// A still view shows the picture it drew last: a reused frame (whose filtered picture is

@@ -390,7 +390,7 @@ impl JsonSchema for StringList {
 
 /// The spellings `Operation::parse` accepts, canonical ones first (it also ignores case, spaces,
 /// '_' and '-', which an enum can't say).
-const OPERATIONS: [&str; 13] = [
+const OPERATIONS: &[&str] = &[
     "new",
     "join",
     "cut",
@@ -447,7 +447,7 @@ impl JsonSchema for OperationParam {
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         enum_schema(
-            &OPERATIONS,
+            OPERATIONS,
             "How the feature combines with existing bodies: new, join, cut or intersect. The others are aliases. Matching ignores case, spaces, '_' and '-'.",
         )
     }
@@ -471,7 +471,7 @@ impl JsonSchema for ExtrudeOperation {
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         let mut values = vec!["auto"];
-        values.extend(OPERATIONS);
+        values.extend_from_slice(OPERATIONS);
         enum_schema(
             &values,
             "How the extrusion combines with existing bodies: auto (cut into a body, otherwise join; new in an empty component), new, join, cut or intersect. The others are aliases. Matching ignores case, spaces, '_' and '-' (only case for auto).",
@@ -479,7 +479,7 @@ impl JsonSchema for ExtrudeOperation {
     }
 }
 
-const DIRECTIONS: [&str; 6] = ["positive", "negative", "symmetric", "one_side", "reverse", "flip"];
+const DIRECTIONS: &[&str] = &["positive", "negative", "symmetric", "one_side", "reverse", "flip"];
 
 /// Extrude's direction, as `extent_param` reads it (lowercased, not trimmed).
 #[derive(Clone, Debug, PartialEq)]
@@ -500,7 +500,7 @@ impl JsonSchema for DirectionParam {
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         enum_schema(
-            &DIRECTIONS,
+            DIRECTIONS,
             "Which way to extrude: positive (the default), negative, or symmetric (the distance is the total thickness, split evenly around the start plane). one_side is an alias of positive; reverse and flip of negative. Matching ignores case.",
         )
     }
