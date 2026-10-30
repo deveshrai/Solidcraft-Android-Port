@@ -430,8 +430,7 @@ pub fn app_bar(app: &mut SolveApp, ui: &mut egui::Ui) {
         let report_font = FontId::proportional(t.font_button);
         let label_width = ui.painter().layout_no_wrap(report_text.to_string(), report_font.clone(), t.app_bar_text).size().x;
         // The version links to its release notes; measured here so Report a bug leaves it room.
-        let version =
-            ui.painter().layout_no_wrap(format!("v{}", crate::update::current_version()), FontId::proportional(t.font_small), t.app_bar_text);
+        let version = ui.painter().layout_no_wrap(format!("v{}", shown_version()), FontId::proportional(t.font_small), t.app_bar_text);
         let (report, report_label) = report_rect(r, captions, tabs_start, label_width, version.size().x);
         // Assistant, Settings, Help and Report a bug form the right-hand cluster.
         if click(ui, help_x(report), "help", app.tr("ui.help"), true) {
@@ -2509,6 +2508,12 @@ pub fn shortcuts(app: &mut SolveApp, ctx: &egui::Context) {
     }
 }
 
+/// The version the title bar shows: the Android port's own, with its letter (0.27.1a), where its
+/// build sets `SOLIDCRAFT_PORT_VERSION`; upstream's everywhere else.
+fn shown_version() -> &'static str {
+    option_env!("SOLIDCRAFT_PORT_VERSION").filter(|v| !v.is_empty()).unwrap_or_else(crate::update::current_version)
+}
+
 #[cfg(test)]
 mod header_report_tests {
     use super::*;
@@ -3128,7 +3133,7 @@ mod header_report_tests {
             h.frames(3);
             let center = crate::scenario::handle_at("titlebar:report").expect("the report button is drawn");
             let t = Tokens::get();
-            let version = format!("v{}", crate::update::current_version());
+            let version = format!("v{}", shown_version());
             let version = h.ctx.fonts_mut(|f| f.layout_no_wrap(version, FontId::proportional(t.font_small), t.app_bar_text).size().x);
             // The button's right edge is fixed; its width is twice the distance to its centre.
             let bar = Rect::from_min_size(egui::Pos2::ZERO, vec2(1400.0, APP_BAR_HEIGHT));

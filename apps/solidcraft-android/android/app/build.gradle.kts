@@ -85,6 +85,8 @@ val cargoNdk by tasks.registering(Exec::class) {
     workingDir = repo
     // cargo-ndk runs `cargo` itself, so it needs cargo's folder on the PATH.
     environment("PATH", File(cargo).parent + File.pathSeparator + System.getenv("PATH"))
+    // The title bar shows the port's version, with its letter (0.27.1a).
+    environment("SOLIDCRAFT_PORT_VERSION", appVersionName)
     val args = mutableListOf(cargo, "ndk", "--platform", "26", "-o", file("src/main/jniLibs").path)
     abis.forEach { args += listOf("-t", it) }
     args += listOf("build", "-p", "solidcraft-android", "--lib")
