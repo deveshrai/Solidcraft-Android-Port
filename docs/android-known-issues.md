@@ -4,7 +4,7 @@ What is wrong or missing in the current port release, and what is planned for th
 entry says how to work around it today. Fixed entries move to [Fixed](#fixed) with the release that
 fixed them.
 
-Current: **port 0.25.1a** (upstream 0.25.1). Next: **0.25.1b**, or the next upstream release's **a**, if upstream releases
+Current: **port 0.27.1a** (upstream 0.27.1). Next: **0.27.1b**, or the next upstream release's **a**, if upstream releases
 first. See also [android-vs-upstream.md](android-vs-upstream.md) for what upstream has that the port
 doesn't, and the reverse.
 

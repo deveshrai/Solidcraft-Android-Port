@@ -95,3 +95,7 @@
 | docs/screenshots/android/tab-0251a-gear-dialog.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.25.1a): the Gear dialog over gears and a threaded bolt built over MCP | MIT OR Apache-2.0 |
 | docs/screenshots/android/tab-0251a-file-menu.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.25.1a): the File menu, Send to Slicer greyed out | MIT OR Apache-2.0 |
 | docs/screenshots/android/tab-0251a-orbit.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.25.1a): a one-finger orbit, before and after | MIT OR Apache-2.0 |
+| docs/screenshots/android/linear-stage-tab-0271a-4x.gif | SolidCraft contributors | screen recording of SolidCraft itself on Android (Galaxy Tab, 0.27.1a), 4x speed: a linear stage built over MCP | MIT OR Apache-2.0 |
+| docs/screenshots/android/linear-stage-tab-0271a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.27.1a): the linear stage built over MCP | MIT OR Apache-2.0 |
+| docs/screenshots/android/linear-stage-upgrade-emulator-0271a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (emulator, 0.27.1a): a design saved by 0.24.0b, opened | MIT OR Apache-2.0 |
+| docs/screenshots/android/version-title-tab-0271a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.27.1a): the title bar with the port's version | MIT OR Apache-2.0 |

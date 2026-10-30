@@ -1,0 +1,106 @@
+{
+ "features": [
+  {
+   "axis": [
+    0.0,
+    0.0,
+    1.0
+   ],
+   "base": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "body_names": [
+    "Lead screw"
+   ],
+   "height": "160",
+   "id": 1,
+   "name": "Cylinder1",
+   "operation": "new_body",
+   "param_names": [
+    "d1",
+    "d2"
+   ],
+   "radius": "(10 mm) / 2",
+   "suppressed": false,
+   "type": "cylinder"
+  },
+  {
+   "body": "Lead screw",
+   "distance": "1",
+   "edge_names": [
+    "F1:side#2|F1:top"
+   ],
+   "edge_refs": [
+    {
+     "dir": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "max": [
+      4.997689609412431,
+      4.97275479544735,
+      160.00000000000003
+     ],
+     "min": [
+      -4.997689609412434,
+      -4.97275479544735,
+      0.0
+     ]
+    }
+   ],
+   "edges": [
+    [
+     0.0,
+     5.0,
+     160.0
+    ]
+   ],
+   "id": 2,
+   "name": "Chamfer1",
+   "param_names": [
+    "d3"
+   ],
+   "suppressed": false,
+   "type": "chamfer"
+  },
+  {
+   "designation": "M10",
+   "end_offset": "1.5",
+   "face": [
+    5.0,
+    0.0,
+    80.0
+   ],
+   "face_names": [
+    "F1:side#1"
+   ],
+   "helical": true,
+   "id": 3,
+   "modeled": true,
+   "name": "Thread1",
+   "param_names": [
+    "d4",
+    "d5",
+    "d6"
+   ],
+   "start_angle": "90 deg",
+   "start_offset": "1.5",
+   "suppressed": false,
+   "type": "thread"
+  }
+ ],
+ "format": "solidcraft/45",
+ "format_pending": [
+  "helical-thread-handedness",
+  "helical-thread-start-angle",
+  "helical-threads"
+ ],
+ "name": "port-0271a-long-thread-start-angle",
+ "next_component_color_index": 0,
+ "next_id": 4,
+ "params": [],
+ "units": "mm"
+}

@@ -4,13 +4,13 @@
 
 **This is the Android port of SolidCraft.** It is upstream
 [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with every
-upstream release (now 0.25.1), plus an Android app and **features upstream doesn't have yet**. Current
-release: **0.25.1a** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
+upstream release (now 0.27.1), plus an Android app and **features upstream doesn't have yet**. Current
+release: **0.27.1a** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
 
 | Added in this port | What it gives you | Guide |
 |---|---|---|
 | **Android app** | Phones, tablets and foldables: one finger orbits, two pan, a pinch zooms; a mouse and keyboard work as on a desktop; files through Android's picker (device, SD card, Drive) | [Using it](docs/android-touch.md) |
-| **Helical B-rep threads** | Exact, smooth threads instead of faceted ones; any pitch on any diameter; clearance for printed parts that screw together | [Threads](docs/android-threads.md) |
+| **Helical B-rep threads** | Exact, smooth threads instead of faceted ones; any pitch on any diameter; long lead screws; clearance for printed parts that screw together; a start angle to phase mating threads | [Threads](docs/android-threads.md) |
 | **Involute gears** | Ten types (spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel, crossed helical), bore, keyway and hub, editable after | [Gears](docs/android-gears.md) |
 | **MCP server on the network** | One switch in Settings: Claude Code in Termux on the device, or on a computer on the same Wi-Fi, models in the app while you watch | [MCP server](docs/android-mcp.md) |
 
@@ -20,7 +20,15 @@ cassette housing in two halves with five M2 screws on real threads, checked to f
 
 ![A cassette housing built over the MCP server on a Galaxy Z Fold](docs/screenshots/android/mcp-cassette-fold.gif)
 
-**New in 0.24.0b:** gears are simple B-rep (110 faces for 18 teeth instead of 326), booleans on them are
+**New in 0.27.1a:** long threads (a 220 mm M10 lead screw used to hang; now 1.2 s on a Galaxy Tab), measuring
+threaded parts gives the right volume, checks between parts a hair apart answer in seconds instead of
+minutes, a thread's **Start angle** phases it against its mate, and the title bar shows the port's version. A
+linear stage built by an agent over MCP on a Galaxy Tab in 68 s, and why a modelled screw still meets
+its modelled nut: [android-thread-mating](docs/android-thread-mating.md).
+
+![A linear stage built over MCP on a Galaxy Tab, at 4x speed](docs/screenshots/android/linear-stage-tab-0271a-4x.gif)
+
+**In 0.24.0b:** gears are simple B-rep (110 faces for 18 teeth instead of 326), booleans on them are
 much faster, and the app stays responsive through an agent's long command. A worm gearbox built by Claude
 Code on a Galaxy Tab, and what changed: [android-speed](docs/android-speed.md).
 
@@ -29,6 +37,7 @@ Code on a Galaxy Tab, and what changed: [android-speed](docs/android-speed.md).
 How the port differs from upstream, feature by feature: [android-vs-upstream](docs/android-vs-upstream.md) ·
 what's new in each release: [android-whats-new](docs/android-whats-new.md) ·
 faster gears and agents (0.24.0b): [android-speed](docs/android-speed.md) ·
+a modelled screw in a modelled nut, and the 0.27.1a device test: [android-thread-mating](docs/android-thread-mating.md) ·
 the 0.25.1a port report (merge, checks, device test): [android-port-report-0.25.1a](docs/android-port-report-0.25.1a.md) ·
 known issues: [android-known-issues](docs/android-known-issues.md) ·
 how it works and how to build it: [android](docs/android.md) ·

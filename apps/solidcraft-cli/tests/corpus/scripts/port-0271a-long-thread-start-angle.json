@@ -1,0 +1,7 @@
+{
+ "commands": [
+  {"command": "solid.cylinder", "params": {"diameter": 10, "height": 160, "base": [0, 0, 0], "operation": "new", "body_name": "Lead screw"}},
+  {"command": "solid.chamfer", "params": {"edges": [[0, 5, 160]], "distance": 1, "body": "Lead screw"}},
+  {"command": "solid.thread", "params": {"face": [5, 0, 80], "designation": "M10", "helical": true, "start_offset": 1.5, "end_offset": 1.5, "start_angle": "90 deg"}}
+ ]
+}

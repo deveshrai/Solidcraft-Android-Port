@@ -176,6 +176,7 @@ These appear for any helical thread, ISO or custom:
 | **Clearance** | How far both flanks and the root move into the material (square to each surface) | 0 mm |
 | **Start offset** | Plain band left at the threaded length's start (the end nearest where you tapped the face) | Half a pitch |
 | **End offset** | Plain band left at the other end | Half a pitch |
+| **Start angle** | The groove turned about the axis, to phase it against a mating thread: θ moves the crests θ/360 of a pitch along ([android-thread-mating.md](android-thread-mating.md)) | 0° |
 
 Readouts, worked out as you type:
 
@@ -321,6 +322,7 @@ desktop control channel can do the same. New parameters (all optional):
 | `angle` | Thread angle (default 60 deg) |
 | `clearance` | Clearance (default 0) |
 | `start_offset`, `end_offset` | Lands at the start (nearest `face`) and end (default half a pitch; more than 0) |
+| `start_angle` | The groove turned about the face's axis (default 0 deg), to phase it against a mating thread |
 | `handedness: "left"` | Left-handed (upstream's parameter; any thread). The port's older `left_handed: true` still means the same |
 
 `depth`, `angle`, `clearance` and the offsets are refused without `helical` or `pitch`, so they
@@ -334,7 +336,7 @@ can't silently do nothing on a faceted thread.
 ```
 
 The design files store these as new optional fields of the Thread feature (`helical`, `pitch`,
-`depth`, `angle`, `clearance`, `start_offset`, `end_offset`), written only when used; the hand is
+`depth`, `angle`, `clearance`, `start_offset`, `end_offset`, `start_angle`), written only when used; the hand is
 upstream's `handedness`. A design saved by a port release before 0.24.0a with `left_handed: true`
 is rewritten as it opens (`format/pending/helical-thread-handedness.rs`).
 
@@ -384,7 +386,7 @@ renderer change was needed.
 |---|---|
 | `crates/kernel/src/thread_brep.rs` | New: `HelicalThread` (section, turns, basic depth), `helical_thread` |
 | `crates/kernel/src/lib.rs` | Exports |
-| `crates/doc/src/document.rs` | `FeatureKind::Thread` gains `helical`, `pitch`, `depth`, `angle`, `clearance`, `start_offset`, `end_offset` (all optional; old files unchanged); the hand is upstream's `handedness` |
+| `crates/doc/src/document.rs` | `FeatureKind::Thread` gains `helical`, `pitch`, `depth`, `angle`, `clearance`, `start_offset`, `end_offset`, `start_angle` (all optional; old files unchanged); the hand is upstream's `handedness` |
 | `crates/doc/src/format/pending/helical-threads.rs`, `helical-thread-handedness.rs` | The format changes: the helical fields, and older port designs' `left_handed` rewritten as `handedness` |
 | `crates/doc/src/eval.rs` | `helical_thread_on` (ISO or custom dimensions, offsets) and the helical evaluation; shared `thread_face` / `thread_span` |
 | `crates/engine/src/cmd/features.rs` | `solid.thread` parameters and checks |

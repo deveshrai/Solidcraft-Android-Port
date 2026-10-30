@@ -5,6 +5,7 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.27.1a](#0271a): upstream 0.26 and 0.27, long threads, a thread start angle, faster checks
 - [0.25.1a](#0251a): upstream 0.24.1, 0.25.0 and 0.25.1; a sturdier way to follow upstream
 - [0.24.0b](#0240b): faster gears, a steadier MCP server
 - [0.24.0a](#0240a): upstream 0.24.0, the MCP server, thread fixes
@@ -12,6 +13,43 @@ missing: [android-known-issues.md](android-known-issues.md).
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.27.1a
+
+**Upstream 0.26.0 to 0.27.1** merged (429 commits). Among much else:
+
+- **Sketching:** an equation-driven curve (x(t), y(t)); a dimension can measure a model edge; snap where
+  two guides meet; hold horizontal or vertical and line up with other points at once; press and drag
+  draws one line; Sketch Intersect with faces and bodies; 3D sketch Line, Spline and Point.
+- **Modelling and assemblies:** feature windows choose Join, New Body or Cut from what the material
+  touches; Align places components; cut and paste features between components; Insert Design picks
+  another open design; ISO 7380-1 button head cap screws in the parts library.
+- **Working:** settings profiles (save, switch, export, import); a right-click menu in text fields;
+  History playback on the Inspect ribbon; command search shows where a command lives in the ribbon;
+  Perspective field of view and wheel zoom speed in Preferences.
+
+**The port's own changes:**
+
+- **Long threads.** A helical thread of more than about 85 turns (an M10 longer than about 128 mm)
+  hung or failed. Threads now use 16 stations a turn (0.3 µm off the true helix on M10), and are checked
+  without a second full mesh: every M10 from 15 to 220 mm builds in 0.03–0.8 s on a Mac, and a 220 mm
+  lead screw in 1.2 s on a Galaxy Tab.
+- **Measuring threaded parts** gives the right volume (a long screw used to measure larger than the
+  bare rod) and takes seconds: Measure on the linear stage below went from 67 s to 2 s on a Mac.
+- **Checks between parts a hair apart** (a screw in a bore 0.2 mm wider) mesh the two parts finer
+  instead of intersecting them: clearance 551 s → 4 s, and the right distance (it said 0 mm).
+- **Start angle** on a helical thread (Thread › Helical B-rep, or `start_angle`): turns the groove to
+  phase it against a mating thread. A modelled screw through a modelled nut still meets it at the nut's
+  ends; why, and what's next: [android-thread-mating.md](android-thread-mating.md). Saved as a pending
+  design-format change (`helical-thread-start-angle`): the port now writes format 45.
+- **The title bar shows the port's version**, with its letter: *v0.27.1a*.
+- **Android:** upstream's new clipboard reads (theme paste, the text-field Paste) are left out on
+  Android, like on the web; upstream now vendors winit 0.30.13 too, and the port's input patch is applied
+  on top of it.
+
+Tested on the emulator and a Galaxy Tab: a linear stage (guide rods, bearing blocks, lead screw, nut,
+coupling, motor) built over MCP in 68 s on the tablet; a design saved by 0.24.0b opens with the same
+volumes ([the run](android-thread-mating.md#5-the-test-run)).
 
 ## 0.25.1a
 

@@ -137,11 +137,12 @@ fn body_names_saved_before_exact_history_keep_their_pieces() {
 /// ignored test below that checks its faces; a listed plane whose face attaches fails the main
 /// check until it is removed from here.
 type Planes = &'static [([f64; 3], f64)];
-const NO_ATTACHMENT_YET: [(&str, &str, Option<Planes>, u32); 2] = [
+const NO_ATTACHMENT_YET: [(&str, &str, Option<Planes>, u32); 3] = [
     ("issue-616-lid-ribs", "Lid", None, 628),
     // Android port (no upstream issue: 0): a helical thread's groove ends are both named as made
     // from the threaded face, so neither can be told apart from the other.
     ("port-0240b-gear-helical-thread", "Bolt", Some(&[([1.0, 0.0, 0.0], 30.0), ([-0.3826834323629895, 0.9238795325121567, 0.0], -11.480503)]), 0),
+    ("port-0271a-long-thread-start-angle", "Lead screw", Some(&[([0.0, -1.0, 0.0], 0.0), ([-0.9238795325102824, 0.3826834323675143, 0.0], 0.0)]), 0),
 ];
 
 /// The issue a face is listed under, and whether it is listed by its plane (not as every face).
