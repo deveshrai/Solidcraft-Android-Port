@@ -47,8 +47,8 @@ use solidcraft_geom::Vec3;
 
 pub use cmd::settings::{MAX_PROFILE_NAME, profile_name};
 pub use cmd::{
-    Addition, CommandInfo, CommandSpec, GEAR_KEY, GEAR_TYPES, addition, auto_operation, command_specs, dimension_roles, extrude_reach,
-    find_command, resolve_design_links, shown_scope, standard_view, stored_gear,
+    Addition, CommandInfo, CommandSpec, GEAR_KEY, GEAR_TYPES, addition, auto_operation, command_specs, dimension_roles, extrude_reach, find_command,
+    resolve_design_links, shown_scope, standard_view, stored_gear,
 };
 pub use solidcraft_doc as doc;
 pub use solidcraft_doc::Visibility;

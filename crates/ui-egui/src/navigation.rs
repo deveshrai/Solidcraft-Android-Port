@@ -542,9 +542,7 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
     // A lifted finger is no longer over anything; the view had it when it took the click.
     let lifted = ui.input(|i| i.pointer.hover_pos().is_none());
     let over = if lifted { resp.clicked() || resp.drag_stopped() } else { resp.contains_pointer() && ui.rect_contains_pointer(rect) };
-    let inside = ui.is_enabled()
-        && over
-        && hover.is_some_and(|p| rect.contains(p) && !axes.contains(p) && !readout.is_some_and(|r| r.contains(p)));
+    let inside = ui.is_enabled() && over && hover.is_some_and(|p| rect.contains(p) && !axes.contains(p) && !readout.is_some_and(|r| r.contains(p)));
     app.viewport.mouse = hover.filter(|_| inside);
     // Sketch snap suppression is set once in `viewport::show` from preferences.
     middle_double_click(app, ui, inside);
