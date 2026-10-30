@@ -31,6 +31,9 @@ const MAX_BUDGET_S: f64 = 86_400.0;
 /// How many chord tolerances apart (of both meshes together) two meshes must be to clear a pair
 /// without intersecting it: twice what the tolerances allow, for meshers that sag a little more.
 const MESH_MARGIN: f64 = 4.0;
+/// How many times finer than their display meshes two bodies are meshed again, in turn, when
+/// those are too close to clear the pair (SolidCraft, Android port).
+const FINER: [f64; 2] = [8.0, 64.0];
 /// Why a mesh body is listed under `unchecked` (here and in `inspect.clearance`).
 pub(super) const MESH_NOT_CHECKED: &str = "mesh body: not checked";
 /// Most pairs listed under `slowest`.
@@ -123,12 +126,39 @@ pub(super) fn interference(s: &mut Session, p: &Value) -> Result<Value> {
         }
         out
     };
+    // SolidCraft (Android port): meshes too close for their chords to tell apart (a screw in its
+    // nut, 0.1 mm off its flanks, against a margin of a millimetre) are made finer before the
+    // pair is intersected: a finer mesh takes a second, the boolean of two threads the budget.
+    // Each body is meshed once per step, however many pairs it is in.
+    let finer: Vec<[std::sync::OnceLock<Option<(Mesh, TriangleSet, f64)>>; 2]> = (0..bodies.len()).map(|_| Default::default()).collect();
+    let finer_at = |i: usize, step: usize| -> Option<&(Mesh, TriangleSet, f64)> {
+        finer
+            .get(i)?
+            .get(step)?
+            .get_or_init(|| {
+                let (b, chord, k) = (bodies.get(i)?, chords.get(i)?, FINER.get(step)?);
+                let tol = (chord / k).max(b.body.size() * 1e-6);
+                let m = b.body.tessellate(tol).ok()?;
+                let set = TriangleSet::new(&m);
+                Some((m, set, tol))
+            })
+            .as_ref()
+    };
     let need_exact = solidcraft_kernel::map_with_local_pools(&pairs, usize::MAX, |&(i, j)| {
         let (Some(Some(sa)), Some(Some(sb)), Some(ma), Some(mb)) = (sets.get(i), sets.get(j), meshes.get(i), meshes.get(j)) else {
             return Ok(true);
         };
         let margin = MESH_MARGIN * (chords.get(i).copied().unwrap_or(0.0) + chords.get(j).copied().unwrap_or(0.0));
-        Ok(!meshes_apart(ma, sa, mb, sb, margin))
+        if meshes_apart(ma, sa, mb, sb, margin) {
+            return Ok(false);
+        }
+        for step in 0..FINER.len() {
+            let (Some((ma, sa, ta)), Some((mb, sb, tb))) = (finer_at(i, step), finer_at(j, step)) else { break };
+            if meshes_apart(ma, sa, mb, sb, MESH_MARGIN * (ta + tb)) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     });
     let mut jobs = Vec::new();
     let mut cleared = 0usize;

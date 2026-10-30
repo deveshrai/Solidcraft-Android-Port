@@ -48,12 +48,45 @@
         "crates/engine/src/thread_tests.rs",
         "crates/ui-egui/src/dialogs_thread.rs",
         "crates/ui-egui/src/dialogs_dense.rs",
-        "crates/ui-egui/src/dialogs_all_tests.rs"
+        "crates/ui-egui/src/dialogs_all_tests.rs",
+        "crates/kernel/src/body.rs",
+        "crates/kernel/src/tess/seam.rs",
+        "crates/engine/src/cmd/clearance.rs",
+        "crates/engine/src/cmd/interference.rs",
+        "crates/kernel/src/tess/mod.rs"
       ],
       "tests": [
         "solidcraft-kernel --lib helical",
         "solidcraft-engine --lib thread",
-        "solidcraft-ui-egui --lib dialogs_thread"
+        "solidcraft-ui-egui --lib dialogs_thread",
+        "solidcraft-engine --lib clearance interference"
+      ],
+      "markers": [
+        {
+          "file": "crates/kernel/src/body.rs",
+          "pattern": "SolidCraft \\(Android port\\): a plan for measuring finer",
+          "count": 1
+        },
+        {
+          "file": "crates/kernel/src/tess/seam.rs",
+          "pattern": "each, which looks like a fifth of a radian\\. SolidCraft \\(Android port\\)",
+          "count": 1
+        },
+        {
+          "file": "crates/engine/src/cmd/clearance.rs",
+          "pattern": "SolidCraft \\(Android port\\): meshes too close",
+          "count": 1
+        },
+        {
+          "file": "crates/engine/src/cmd/interference.rs",
+          "pattern": "SolidCraft \\(Android port\\): meshes too close",
+          "count": 1
+        },
+        {
+          "file": "crates/kernel/src/tess/mod.rs",
+          "pattern": "SolidCraft \\(Android port\\): an edge cut short",
+          "count": 1
+        }
       ]
     },
     {

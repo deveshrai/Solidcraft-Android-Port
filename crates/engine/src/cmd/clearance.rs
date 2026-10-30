@@ -344,6 +344,16 @@ fn measure_pair(
     tolerance: f64,
 ) -> PairResult {
     let mut out = PairResult::default();
+    // SolidCraft (Android port): meshes too close for their chords to tell apart (a screw in a
+    // bore 0.2 mm wider, against a slack of a millimetre) are made finer before the pair is
+    // intersected, and measured on those when they part: a finer mesh takes a second, the
+    // boolean against a long thread minutes.
+    let finer = finer_meshes(ka, a, kb, b);
+    let shapes = finer.as_ref().map(|(ma, ta, mb, tb)| (DistanceShape::new(ka, ma, *ta), DistanceShape::new(kb, mb, *tb)));
+    let (a, b) = match &shapes {
+        Some((x, y)) => (x, y),
+        None => (a, b),
+    };
     let slack = 2.0 * (a.chord() + b.chord());
     let mesh = a.mesh_closest(b, gap + slack);
     let holds = |outer: &solidcraft_doc::ModelBody, inner: &solidcraft_doc::ModelBody| {
@@ -457,6 +467,35 @@ fn measure_pair(
         Err(e) => out.unchecked = Some(e.to_string()),
     }
     out
+}
+
+/// How many times finer than their display meshes two bodies are meshed again, in turn, when
+/// those are too close to tell apart (SolidCraft, Android port).
+const FINER: [f64; 2] = [8.0, 64.0];
+
+/// Meshes of `ka` and `kb` (and their chords) fine enough to show them apart, when their
+/// display meshes `a` and `b` come within their slack of each other; `None` when those are
+/// apart already or no finer mesh parts them.
+fn finer_meshes(
+    ka: &solidcraft_kernel::Body,
+    a: &DistanceShape,
+    kb: &solidcraft_kernel::Body,
+    b: &DistanceShape,
+) -> Option<(solidcraft_geom::Mesh, f64, solidcraft_geom::Mesh, f64)> {
+    if !(a.chord() > 0.0 && b.chord() > 0.0) || ka.is_mesh() || kb.is_mesh() {
+        return None;
+    }
+    let slack = 2.0 * (a.chord() + b.chord());
+    a.mesh_closest(b, slack)?;
+    for k in FINER {
+        let (ta, tb) = ((a.chord() / k).max(ka.size() * 1e-6), (b.chord() / k).max(kb.size() * 1e-6));
+        let (ma, mb) = (ka.tessellate(ta).ok()?, kb.tessellate(tb).ok()?);
+        let apart = DistanceShape::new(ka, &ma, ta).mesh_closest(&DistanceShape::new(kb, &mb, tb), 2.0 * (ta + tb)).is_none();
+        if apart {
+            return Some((ma, ta, mb, tb));
+        }
+    }
+    None
 }
 
 /// The box where two bodies may share volume: where their boxes meet, grown by a margin so that
