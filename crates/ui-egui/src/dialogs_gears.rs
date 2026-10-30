@@ -41,7 +41,7 @@ const TOOTH: [(&str, &str, &str); 5] = [
 const HUB: [(&str, &str, &str); 3] = [("bore", "Bore", "none"), ("hub_diameter", "Hub diameter", "none"), ("hub_length", "Hub length", "none")];
 
 /// The readouts `gear.info` gives, in the order shown: (key, label, unit).
-const READOUTS: [(&str, &str, &str); 26] = [
+const READOUTS: &[(&str, &str, &str)] = &[
     ("pitch_diameter", "Pitch diameter", "mm"),
     ("tip_diameter", "Tip diameter", "mm"),
     ("root_diameter", "Root diameter", "mm"),
@@ -327,7 +327,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gr) -> bool {
     section(ui, "gear_dims", "Dimensions", true, |ui| match &info {
         Ok(v) => {
             let t = crate::theme::Tokens::get();
-            for (key, label, unit) in READOUTS {
+            for &(key, label, unit) in READOUTS {
                 let Some(x) = v.get(key) else { continue };
                 let text = match (x.as_f64(), unit) {
                     (Some(n), "mm") => crate::prefs::show_mm(app, n, 1),

@@ -406,7 +406,7 @@ fn trim(x: f64) -> String {
 }
 
 /// DIN 6885-1 parallel keys: (shaft diameter over, up to, key width, depth in the hub).
-const KEYS: [(f64, f64, f64, f64); 16] = [
+const KEYS: &[(f64, f64, f64, f64)] = &[
     (6.0, 8.0, 2.0, 1.0),
     (8.0, 10.0, 3.0, 1.4),
     (10.0, 12.0, 4.0, 1.8),
