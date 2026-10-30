@@ -136,19 +136,8 @@ fi
 echo "vendor/winit $want is in use"
 
 # ---- checks ------------------------------------------------------------------------------------
-step "Formatting"
-cargo fmt --all -- --check || fail "cargo fmt: run 'cargo fmt --all' and commit"
-
-step "Android build (clippy, $NDK_TARGET)"
-cargo ndk -t arm64-v8a --platform 26 clippy -p solidcraft-android -- -D warnings || fail "the Android crate does not build or has warnings"
-
-step "Desktop build of the shared crates (clippy)"
-cargo clippy -p solidcraft-ui-egui -p solidcraft-android -p solidcraft --all-targets -- -D warnings || fail "clippy"
-
-step "Browser build of the UI crate (wasm32)"
-rustup target list --installed | grep -q wasm32-unknown-unknown || rustup target add wasm32-unknown-unknown
-cargo check -p solidcraft-ui-egui --target wasm32-unknown-unknown || fail "wasm build"
-
+# The quick checks first: a list, a skill or a registry problem shows in seconds, not after
+# the builds.
 step "Repository checks (layers, assets, lists, skills)"
 cargo xtask layers >/dev/null || fail "cargo xtask layers"
 cargo xtask assets || fail "cargo xtask assets"
@@ -163,6 +152,19 @@ $PORT markers || fail "a merge dropped a port fix (docs/android-sync.md, 'The po
 
 step "Port strings against upstream's"
 $PORT strings || fail "port strings collide with upstream's: scripts/android-port.py strings --fix"
+
+step "Formatting"
+cargo fmt --all -- --check || fail "cargo fmt: run 'cargo fmt --all' and commit"
+
+step "Android build (clippy, $NDK_TARGET)"
+cargo ndk -t arm64-v8a --platform 26 clippy -p solidcraft-android -- -D warnings || fail "the Android crate does not build or has warnings"
+
+step "Desktop build of the shared crates (clippy)"
+cargo clippy -p solidcraft-ui-egui -p solidcraft-android -p solidcraft --all-targets -- -D warnings || fail "clippy"
+
+step "Browser build of the UI crate (wasm32)"
+rustup target list --installed | grep -q wasm32-unknown-unknown || rustup target add wasm32-unknown-unknown
+cargo check -p solidcraft-ui-egui --target wasm32-unknown-unknown || fail "wasm build"
 
 step "Each port area's tests"
 # Gears, helical threads, design files (old port designs still open), the MCP server, agents off

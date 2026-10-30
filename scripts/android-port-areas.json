@@ -21,10 +21,18 @@
         "crates/ui-egui/src/viewport.rs",
         "crates/ui-egui/src/canvas.rs",
         "crates/ui-egui/src/toolbar.rs",
-        "crates/ui-egui/src/extrude_edit_tests.rs"
+        "crates/ui-egui/src/extrude_edit_tests.rs",
+        "vendor/winit/src/platform_impl/android/mod.rs"
       ],
       "tests": [
         "solidcraft-ui-egui --lib one_finger_drag_orbits two_fingers_pan_and_pinch a_tap_selects pinch_gesture a_tap_picks_a_profile a_finger_on_the_arrow_stem a_finger_scrolls_a_tall_drop_down"
+      ],
+      "markers": [
+        {
+          "file": "vendor/winit/src/platform_impl/android/mod.rs",
+          "pattern": "// SolidCraft: ",
+          "count": 6
+        }
       ]
     },
     {
