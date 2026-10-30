@@ -169,11 +169,12 @@ fn clipboard_text() -> Option<String> {
     {
         TEST_CLIPBOARD.with(|c| c.borrow().clone())
     }
-    #[cfg(all(not(test), not(target_arch = "wasm32")))]
+    #[cfg(all(not(test), not(any(target_arch = "wasm32", target_os = "android"))))]
     {
         arboard::Clipboard::new().and_then(|mut c| c.get_text()).ok().filter(|t| !t.is_empty())
     }
-    #[cfg(all(not(test), target_arch = "wasm32"))]
+    // No clipboard to read on the web or on Android (arboard has no Android backend).
+    #[cfg(all(not(test), any(target_arch = "wasm32", target_os = "android")))]
     {
         None
     }

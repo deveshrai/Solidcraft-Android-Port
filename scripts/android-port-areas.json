@@ -142,7 +142,8 @@
         "ATTRIBUTION.md",
         "docs/building.md",
         "README.md",
-        "AGENTS.md"
+        "AGENTS.md",
+        "crates/ui-egui/src/ui_kit/text_menu.rs"
       ],
       "tests": []
     }
