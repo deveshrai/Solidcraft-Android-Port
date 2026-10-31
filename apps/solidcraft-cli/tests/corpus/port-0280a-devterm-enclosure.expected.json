@@ -1,0 +1,1312 @@
+{
+  "bodies": [
+    {
+      "area_mm2": 123815.57305348237,
+      "bbox": {
+        "max": [
+          109.00000000000009,
+          172.00000000000003,
+          19.99999999999763
+        ],
+        "min": [
+          -109.00000000000009,
+          -3.641531520770486e-14,
+          -7.999999999999976
+        ]
+      },
+      "center_of_mass": [
+        -0.3124904715271407,
+        93.75515308619164,
+        0.8590668676207915
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 324,
+      "face_types": {
+        "cylinder": 29,
+        "plane": 109
+      },
+      "faces": 138,
+      "kernel": {
+        "edges": 439,
+        "faces": 171,
+        "shells": 1,
+        "vertices": 290
+      },
+      "mass_g": 138.4772956980032,
+      "material": "Default",
+      "name": "Back shell",
+      "vertices": 230,
+      "volume_mm3": 107346.74085116528
+    },
+    {
+      "area_mm2": 19443.66903404033,
+      "bbox": {
+        "max": [
+          109.0,
+          172.00000000000003,
+          23.000000000000004
+        ],
+        "min": [
+          -109.00000000000001,
+          -2.842170943040401e-14,
+          19.999999999999883
+        ]
+      },
+      "center_of_mass": [
+        -3.255512697599419e-14,
+        107.65342327262891,
+        21.500779660369943
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 64,
+      "face_types": {
+        "cylinder": 12,
+        "plane": 22
+      },
+      "faces": 34,
+      "kernel": {
+        "edges": 96,
+        "faces": 42,
+        "shells": 1,
+        "vertices": 64
+      },
+      "mass_g": 26.584478721799154,
+      "material": "Default",
+      "name": "Front frame",
+      "vertices": 48,
+      "volume_mm3": 20608.123040154383
+    },
+    {
+      "area_mm2": 224.79381487503852,
+      "bbox": {
+        "max": [
+          -98.10002934319482,
+          168.89994895410737,
+          22.000000000000004
+        ],
+        "min": [
+          -101.89997065680515,
+          165.10005104589285,
+          -7.699999999997183
+        ]
+      },
+      "center_of_mass": [
+        -100.0,
+        167.00000000000003,
+        5.926074845476868
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 40,
+      "face_types": {
+        "cylinder": 2,
+        "plane": 16
+      },
+      "faces": 18,
+      "kernel": {
+        "edges": 48,
+        "faces": 20,
+        "shells": 1,
+        "vertices": 32
+      },
+      "mass_g": 0.13173575428584713,
+      "material": "Default",
+      "name": "Screw 1",
+      "vertices": 28,
+      "volume_mm3": 102.12073975647064
+    },
+    {
+      "area_mm2": 224.7938148750841,
+      "bbox": {
+        "max": [
+          -33.100029343194876,
+          168.89994895410726,
+          22.0
+        ],
+        "min": [
+          -36.89997065680518,
+          165.10005104589277,
+          -7.700000000000005
+        ]
+      },
+      "center_of_mass": [
+        -35.000000000000014,
+        166.99999999999997,
+        5.926074845477439
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 40,
+      "face_types": {
+        "cylinder": 2,
+        "plane": 16
+      },
+      "faces": 18,
+      "kernel": {
+        "edges": 48,
+        "faces": 20,
+        "shells": 1,
+        "vertices": 32
+      },
+      "mass_g": 0.13173575428586876,
+      "material": "Default",
+      "name": "Screw 2",
+      "vertices": 28,
+      "volume_mm3": 102.1207397564874
+    },
+    {
+      "area_mm2": 224.79381487456493,
+      "bbox": {
+        "max": [
+          36.8999706568051,
+          168.89994895410723,
+          21.99999999999992
+        ],
+        "min": [
+          33.10002934318347,
+          165.10005104589274,
+          -7.6999999999998385
+        ]
+      },
+      "center_of_mass": [
+        34.999999999892886,
+        166.99999999999994,
+        5.926074845543867
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 40,
+      "face_types": {
+        "cylinder": 2,
+        "plane": 16
+      },
+      "faces": 18,
+      "kernel": {
+        "edges": 48,
+        "faces": 20,
+        "shells": 1,
+        "vertices": 32
+      },
+      "mass_g": 0.13173575428502224,
+      "material": "Default",
+      "name": "Screw 3",
+      "vertices": 28,
+      "volume_mm3": 102.1207397558312
+    },
+    {
+      "area_mm2": 224.7938148750689,
+      "bbox": {
+        "max": [
+          101.89997065680518,
+          168.89994895410726,
+          22.000000000000004
+        ],
+        "min": [
+          98.10002934319483,
+          165.10005104589283,
+          -7.699999999998592
+        ]
+      },
+      "center_of_mass": [
+        100.0,
+        167.00000000000003,
+        5.926074845475062
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 40,
+      "face_types": {
+        "cylinder": 2,
+        "plane": 16
+      },
+      "faces": 18,
+      "kernel": {
+        "edges": 48,
+        "faces": 20,
+        "shells": 1,
+        "vertices": 32
+      },
+      "mass_g": 0.13173575428586606,
+      "material": "Default",
+      "name": "Screw 4",
+      "vertices": 28,
+      "volume_mm3": 102.1207397564853
+    },
+    {
+      "area_mm2": 224.7938148750998,
+      "bbox": {
+        "max": [
+          -103.10002934319483,
+          129.8999489541072,
+          22.00000000000001
+        ],
+        "min": [
+          -106.89997065680512,
+          126.10005104589277,
+          -7.700000000000004
+        ]
+      },
+      "center_of_mass": [
+        -104.99999999999997,
+        128.0,
+        5.926074845474735
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 40,
+      "face_types": {
+        "cylinder": 2,
+        "plane": 16
+      },
+      "faces": 18,
+      "kernel": {
+        "edges": 48,
+        "faces": 20,
+        "shells": 1,
+        "vertices": 32
+      },
+      "mass_g": 0.13173575428590212,
+      "material": "Default",
+      "name": "Screw 5",
+      "vertices": 28,
+      "volume_mm3": 102.12073975651327
+    },
+    {
+      "area_mm2": 224.79381487509858,
+      "bbox": {
+        "max": [
+          106.89997065680514,
+          129.89994895410715,
+          22.000000000000004
+        ],
+        "min": [
+          103.10002934319486,
+          126.10005104589278,
+          -7.700000000000005
+        ]
+      },
+      "center_of_mass": [
+        105.00000000000001,
+        128.0,
+        5.92607484547327
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 40,
+      "face_types": {
+        "cylinder": 2,
+        "plane": 16
+      },
+      "faces": 18,
+      "kernel": {
+        "edges": 48,
+        "faces": 20,
+        "shells": 1,
+        "vertices": 32
+      },
+      "mass_g": 0.13173575428588333,
+      "material": "Default",
+      "name": "Screw 6",
+      "vertices": 28,
+      "volume_mm3": 102.12073975649871
+    },
+    {
+      "area_mm2": 174.53042179351985,
+      "bbox": {
+        "max": [
+          -103.1000293431948,
+          49.89994895410726,
+          22.000000000000007
+        ],
+        "min": [
+          -106.89997065680517,
+          46.10005104589279,
+          0.2999999999999997
+        ]
+      },
+      "center_of_mass": [
+        -105.0,
+        47.999999999999986,
+        9.985409069619338
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 40,
+      "face_types": {
+        "cylinder": 2,
+        "plane": 16
+      },
+      "faces": 18,
+      "kernel": {
+        "edges": 48,
+        "faces": 20,
+        "shells": 1,
+        "vertices": 32
+      },
+      "mass_g": 0.09931990423260578,
+      "material": "Default",
+      "name": "Screw 7",
+      "vertices": 28,
+      "volume_mm3": 76.99217382372541
+    },
+    {
+      "area_mm2": 174.5304217935211,
+      "bbox": {
+        "max": [
+          106.89997065680517,
+          49.89994895410724,
+          22.00000000000002
+        ],
+        "min": [
+          103.10002934319482,
+          46.100051045892776,
+          0.2999999999999996
+        ]
+      },
+      "center_of_mass": [
+        105.00000000000001,
+        47.99999999999999,
+        9.985409069619356
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 40,
+      "face_types": {
+        "cylinder": 2,
+        "plane": 16
+      },
+      "faces": 18,
+      "kernel": {
+        "edges": 48,
+        "faces": 20,
+        "shells": 1,
+        "vertices": 32
+      },
+      "mass_g": 0.09931990423260859,
+      "material": "Default",
+      "name": "Screw 8",
+      "vertices": 28,
+      "volume_mm3": 76.99217382372758
+    }
+  ],
+  "body_count": 10,
+  "params": [],
+  "sketches": [
+    {
+      "curves": 6,
+      "dof": 18,
+      "id": 6,
+      "name": "Posts (screen half)",
+      "profiles": 6,
+      "status": "solved",
+      "visible": false
+    },
+    {
+      "curves": 2,
+      "dof": 6,
+      "id": 8,
+      "name": "Posts (keyboard half)",
+      "profiles": 2,
+      "status": "solved",
+      "visible": false
+    },
+    {
+      "curves": 6,
+      "dof": 18,
+      "id": 10,
+      "name": "Counterbores (bump)",
+      "profiles": 6,
+      "status": "solved",
+      "visible": false
+    },
+    {
+      "curves": 2,
+      "dof": 6,
+      "id": 12,
+      "name": "Counterbores (keyboard)",
+      "profiles": 2,
+      "status": "solved",
+      "visible": false
+    },
+    {
+      "curves": 8,
+      "dof": 24,
+      "id": 14,
+      "name": "Clearance holes",
+      "profiles": 8,
+      "status": "solved",
+      "visible": false
+    },
+    {
+      "curves": 48,
+      "dof": 48,
+      "id": 16,
+      "name": "Vents",
+      "profiles": 12,
+      "status": "solved",
+      "visible": false
+    },
+    {
+      "curves": 8,
+      "dof": 24,
+      "id": 27,
+      "name": "Pilot holes",
+      "profiles": 8,
+      "status": "solved",
+      "visible": false
+    }
+  ],
+  "timeline": [
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 1,
+      "ms": 4.7552080000000005,
+      "name": "Box1",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 2,
+      "ms": 9.855041,
+      "name": "Box2",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 3,
+      "ms": 40.887791,
+      "name": "Fillet1",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "FilletFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 4,
+      "ms": 6.113417,
+      "name": "Box3",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 5,
+      "ms": 5.977542,
+      "name": "Box4",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 6,
+      "ms": 0.5486249999999999,
+      "name": "Posts (screen half)",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "Sketch",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 7,
+      "ms": 81.926041,
+      "name": "Extrude1",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "ExtrudeFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 8,
+      "ms": 0.03975,
+      "name": "Posts (keyboard half)",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "Sketch",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 9,
+      "ms": 161.11387499999998,
+      "name": "Extrude2",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "ExtrudeFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 10,
+      "ms": 0.066,
+      "name": "Counterbores (bump)",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "Sketch",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 11,
+      "ms": 96.242042,
+      "name": "Extrude3",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "ExtrudeFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 12,
+      "ms": 0.037792,
+      "name": "Counterbores (keyboard)",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "Sketch",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 13,
+      "ms": 63.623709,
+      "name": "Extrude4",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "ExtrudeFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 14,
+      "ms": 0.064,
+      "name": "Clearance holes",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "Sketch",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 15,
+      "ms": 131.859333,
+      "name": "Extrude5",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "ExtrudeFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 16,
+      "ms": 0.583541,
+      "name": "Vents",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "Sketch",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 17,
+      "ms": 247.25150000000002,
+      "name": "Extrude6",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "ExtrudeFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 18,
+      "ms": 70.985625,
+      "name": "Box5",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 19,
+      "ms": 73.877708,
+      "name": "Box6",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 20,
+      "ms": 91.550708,
+      "name": "Box7",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 21,
+      "ms": 274.486541,
+      "name": "Cylinder1",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 22,
+      "ms": 245.63375000000002,
+      "name": "Box8",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 23,
+      "ms": 0.23966600000000002,
+      "name": "Box9",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 24,
+      "ms": 19.086333,
+      "name": "Fillet2",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "FilletFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 25,
+      "ms": 3.14425,
+      "name": "Box10",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 26,
+      "ms": 2.7272089999999998,
+      "name": "Box11",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 27,
+      "ms": 0.085958,
+      "name": "Pilot holes",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "Sketch",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 28,
+      "ms": 58.381083000000004,
+      "name": "Extrude7",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "ExtrudeFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 29,
+      "ms": 0.655959,
+      "name": "Cylinder2",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 30,
+      "ms": 26.232249999999997,
+      "name": "Cylinder3",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 31,
+      "ms": 7.251833,
+      "name": "Box12",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 32,
+      "ms": 5.127084,
+      "name": "Box13",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 33,
+      "ms": 0.6390830000000001,
+      "name": "Cylinder4",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 34,
+      "ms": 25.98425,
+      "name": "Cylinder5",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 35,
+      "ms": 5.307292,
+      "name": "Box14",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 36,
+      "ms": 5.104709,
+      "name": "Box15",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 37,
+      "ms": 0.584708,
+      "name": "Cylinder6",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 38,
+      "ms": 26.344333000000002,
+      "name": "Cylinder7",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 39,
+      "ms": 5.420915999999999,
+      "name": "Box16",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 40,
+      "ms": 5.0264999999999995,
+      "name": "Box17",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 41,
+      "ms": 0.5825,
+      "name": "Cylinder8",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 42,
+      "ms": 26.180124999999997,
+      "name": "Cylinder9",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 43,
+      "ms": 5.542083,
+      "name": "Box18",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 44,
+      "ms": 5.089417,
+      "name": "Box19",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 45,
+      "ms": 0.612625,
+      "name": "Cylinder10",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 46,
+      "ms": 25.955458,
+      "name": "Cylinder11",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 47,
+      "ms": 5.372375000000001,
+      "name": "Box20",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 48,
+      "ms": 5.119083,
+      "name": "Box21",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 49,
+      "ms": 0.6571250000000001,
+      "name": "Cylinder12",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 50,
+      "ms": 26.04975,
+      "name": "Cylinder13",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 51,
+      "ms": 5.281125,
+      "name": "Box22",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 52,
+      "ms": 5.0955829999999995,
+      "name": "Box23",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 53,
+      "ms": 0.581125,
+      "name": "Cylinder14",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 54,
+      "ms": 36.609,
+      "name": "Cylinder15",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 55,
+      "ms": 5.173125,
+      "name": "Box24",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 56,
+      "ms": 4.9312499999999995,
+      "name": "Box25",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 57,
+      "ms": 0.712291,
+      "name": "Cylinder16",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 58,
+      "ms": 27.233334000000003,
+      "name": "Cylinder17",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 59,
+      "ms": 5.294084,
+      "name": "Box26",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 60,
+      "ms": 4.928291,
+      "name": "Box27",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "BoxFeature",
+      "warning": null
+    }
+  ],
+  "total": {
+    "area_mm2": 144957.0658203597,
+    "edges": 708,
+    "faces": 316,
+    "mass_g": 166.0508287539819,
+    "open_bodies_skipped": 0,
+    "vertices": 502,
+    "volume_mm3": 128721.57267750542
+  }
+}
