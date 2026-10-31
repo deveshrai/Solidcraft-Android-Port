@@ -110,3 +110,5 @@
 | docs/screenshots/android/devterm-exploded-orbit-tab-0280a.gif | SolidCraft contributors | screen recording of SolidCraft itself on Android (Galaxy Tab, 0.28.0a): an exploded handheld terminal, orbited | MIT OR Apache-2.0 |
 | docs/screenshots/android/devterm-exploded-tab-0280a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.28.0a): an exploded handheld terminal | MIT OR Apache-2.0 |
 | docs/screenshots/android/fixture-tab-0280a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.28.0a): a drafted fixture built over MCP | MIT OR Apache-2.0 |
+| docs/screenshots/android/fixture-bodies-side-0280a.jpg | SolidCraft contributors | image rendered by SolidCraft itself (solidcraft-cli snapshot, 0.28.0a): a fixture's side view, its arm dropping at 16 degrees | MIT OR Apache-2.0 |
+| docs/screenshots/android/fixture-bodies-tab-0280a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.28.0a): a fixture built as separate bodies over MCP, then combined | MIT OR Apache-2.0 |

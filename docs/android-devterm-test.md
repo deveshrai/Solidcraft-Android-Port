@@ -10,6 +10,7 @@ call was timed; the recipes are `tools/mcp-cassette-test/devterm.py` and `fixtur
 - [2. The fixture and the crosshair](#2-the-fixture-and-the-crosshair)
 - [3. Joins that fail first, or stall](#3-joins-that-fail-first-or-stall)
 - [4. Is the port to blame?](#4-is-the-port-to-blame)
+- [5. Built as separate bodies instead](#5-built-as-separate-bodies-instead)
 
 ## In short
 
@@ -19,6 +20,7 @@ call was timed; the recipes are `tools/mcp-cassette-test/devterm.py` and `fixtur
 | Fixture, 32 calls | **17 s**; one join took 11.9 s after its first attempt failed |
 | Crosshair | a finger picked the fixture's bore edge; a mouse can't turn the button on |
 | Joins into drafted (2°) faces | can fail on the first attempt and be saved by a retry (seconds), or stall for minutes: an upstream kernel limit, not the port's |
+| The fixture as separate bodies, then combined | **2.4 s + 1.9 s** on the tablet (0.95 s on a Mac), against 17 s; see [section 5](#5-built-as-separate-bodies-instead) |
 
 ## 1. The DevTerm
 
@@ -97,3 +99,37 @@ No. Measured three ways:
 
 So the fix belongs in upstream's kernel: a join with a drafted face should not need a retry, and a
 slow first attempt should give up sooner.
+
+## 5. Built as separate bodies instead
+
+The owner's test-1 design builds a part like this a different way: draw the **side view** and extrude
+it, cut it with the **plan view**, and make each boss and the rib **its own body**, extruded from a
+sketch, so nothing is ever joined onto a drafted or curved face while modelling.
+`tools/mcp-cassette-test/fixture_bodies.py` builds a2nr's fixture that way, in the proportions of
+their screenshot (boss diameter to spacing about 1 : 3), with the arm dropping at 16° from the big boss
+(106° to its wall) and running flat into the small one:
+
+- each boss: one sketch (outline and bore) and one extrude with a 2° taper;
+- each step of the arm: its side view (flat, down at 16°, flat) extruded wide, then intersected with
+  its plan (the taper, and the flare into the big boss); the side view and the plan share no face;
+- the rib: one side-view sketch, extruded 7 mm;
+- then one solid, **a piece at a time and in order**: the arm's pieces together first (flat faces,
+  milliseconds), then the arm into the small boss, then into the big one.
+
+| | Mac | Galaxy Tab |
+|---|---|---|
+| Joined as built (section 2) | 8.3 s | 17.3 s (the rib 11.9 s) |
+| Separate bodies | 0.18 s | 2.4 s (39 calls) |
+| Combined into one solid, in the order above | 0.77 s | 1.9 s |
+| Combined all at once (four tools into the big boss) | 36.7 s | (not run) |
+
+The order is most of it: the same pieces fused in one call took 36.7 s on a Mac with retries, a piece
+at a time 0.85 s, and the result is the same solid (43,888 mm³, a cleaner 39 faces against 43). Two
+steps still take one quick retry (hundredths of a second).
+
+![The fixture built as separate bodies and combined, on the tablet](screenshots/android/fixture-bodies-tab-0280a.jpg)
+
+![Its side view: the arm drops at 16° and runs flat into the small boss](screenshots/android/fixture-bodies-side-0280a.jpg)
+
+So, over MCP or by hand: **model in silhouettes and separate bodies, and join last, a piece at a time,
+flat pieces first.** The crosshair picked this fixture's bore edge on the first try.
