@@ -4,7 +4,7 @@ What is wrong or missing in the current port release, and what is planned for th
 entry says how to work around it today. Fixed entries move to [Fixed](#fixed) with the release that
 fixed them.
 
-Current: **port 0.27.1a** (upstream 0.27.1). Next: **0.27.1b**, or the next upstream release's **a**, if upstream releases
+Current: **port 0.28.0a** (upstream 0.28.0). Next: **0.28.0b**, or the next upstream release's **a**, if upstream releases
 first. See also [android-vs-upstream.md](android-vs-upstream.md) for what upstream has that the port
 doesn't, and the reverse.
 
@@ -33,6 +33,7 @@ doesn't, and the reverse.
 | **No autosave recovery.** If Android ends the app in the background, unsaved work is lost. | Save often (Ctrl+S on a design opened from a file writes back to it) | Upstream's recovery folder on Android, offered at the next start |
 | **No "Open with".** Opening a `.solidcraft`, STEP or STL from a file manager or a mail doesn't offer SolidCraft. | **File › Open** inside the app | Register the file types and take the shared file as an Open |
 | **A cylinder exactly on an existing bore, or a cut starting exactly on a gear's end face, is slow or fails.** A second Ø8 bore on the axis of an existing one fails ("no result"); upstream's kernel retries such contacts many times. (Joins that touch a gear's flat end face are quick since 0.24.0b.) | Start cuts outside the body, bore once after joining ([android-mcp.md](android-mcp.md#long-operations)) | Upstream's kernel: a cheaper path for coincident faces |
+| **A join into a drafted face can fail first, or stall.** A feature that joins into a boss extruded with a taper (a cone), while sitting flush on another face, can need the kernel's retry ("Boolean retry: tool displacement…", seconds) or run for minutes: a 4 mm step clipping a 2° boss took 95 s on a Mac, 0.2 s with the step moved clear. Upstream builds measure the same. Details: [android-devterm-test.md](android-devterm-test.md#3-joins-that-fail-first-or-stall). | Keep flush features clear of drafted faces; or draft after the joins (`solid.draft`) | Upstream's kernel: join into a cone without a retry; give up a slow first attempt sooner |
 | **Interference and clearance between two gears take a minute or more.** Worm against worm wheel: 77 s on a Mac; the exact intersection of their helical flanks is meshed finely. | Check the gear pair once, at the end | Measure an interference from meshes first |
 | **Checks between large bodies are slow.** Interference and clearance between the two halves of the [cassette test](android-mcp-live-test.md) take about 38 s and 35 s on a Galaxy Z Fold (about 1 s each before its tape-path blocks were added). | Check the pairs that matter (`bodies`, `against`) | Find what makes those pairs slow |
 | **A sketch can't attach to the end of a helical thread's groove.** The two small flat faces closing the groove's ends share one name, so a sketch or offset plane on them is refused ("its history can't tell it apart"). Every other face of a threaded body attaches. | Use a fixed plane there (`fixed: true`) | Name the groove's faces apart (found by the design corpus, `the_groove_ends_of_a_helical_thread_take_an_attached_sketch`) |

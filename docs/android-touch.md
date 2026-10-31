@@ -62,6 +62,12 @@ way. The button answers only a finger, and only a finger brings up the crosshair
 clicks, drags and box-selects as it always does, with the button on or off. While a sketch is
 being edited or a sketch tool is on, a finger draws and drags as before.
 
+| Aiming | Lifted: the face is selected |
+|---|---|
+| ![The crosshair above a finger, its face lit](screenshots/android/crosshair-aim-tab-0280a.jpg) | ![The face the crosshair was on, selected](screenshots/android/crosshair-picked-tab-0280a.jpg) |
+
+![Turning the crosshair on and picking a face, on a Galaxy Tab](screenshots/android/crosshair-tab-0280a.gif)
+
 Asked for by [a2nr](https://github.com/a2nr) in
 [port issue #2](https://github.com/deveshrai/Solidcraft-Android-Port/issues/2). Added in port 0.28.0a.
 

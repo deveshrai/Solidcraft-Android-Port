@@ -5,6 +5,7 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.28.0a](#0280a): upstream 0.28.0, a crosshair for picking by finger
 - [0.27.1a](#0271a): upstream 0.26 and 0.27, long threads, a thread start angle, faster checks
 - [0.25.1a](#0251a): upstream 0.24.1, 0.25.0 and 0.25.1; a sturdier way to follow upstream
 - [0.24.0b](#0240b): faster gears, a steadier MCP server
@@ -13,6 +14,31 @@ missing: [android-known-issues.md](android-known-issues.md).
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.28.0a
+
+**Upstream 0.28.0** merged (206 commits). Among much else: drag rows in History to reorder features;
+nested Browser groups, and groups and components reordered by dragging; personal Sheet Metal Rules;
+the Hole type list previews each hole; Parameters can apply several edits together and sort by name;
+whole bodies light up for body inputs; the 3D mouse may orbit an open sketch; Finnish, and more of
+German, Danish, Polish, Ukrainian and others; DXF export strict readers accept.
+
+**The port's own changes:**
+
+- **Pick with a crosshair** ([port issue #2](https://github.com/deveshrai/Solidcraft-Android-Port/issues/2),
+  asked for by [a2nr](https://github.com/a2nr)): a button at the end of the view bar. While it is on,
+  a finger on the model aims a crosshair above the fingertip instead of orbiting, and lifting it selects
+  what the crosshair is on: a thin edge, a small face. Only a finger presses the button and brings up the
+  crosshair; a mouse works as before. [How to use it](android-touch.md#picking-with-a-crosshair).
+
+  ![Picking a bore's top edge with the crosshair](screenshots/android/crosshair-fixture-edge-tab-0280a.gif)
+
+- **Tested on a Galaxy Tab** with a DevTerm-like handheld (11 parts, exploded and orbited) and a2nr's
+  drafted fixture, both over MCP: [android-devterm-test.md](android-devterm-test.md). Joins into drafted
+  faces can fail first and need a retry, or stall; that is upstream's kernel, measured the same on
+  upstream builds.
+
+  ![The exploded DevTerm, orbited](screenshots/android/devterm-exploded-orbit-tab-0280a.gif)
 
 ## 0.27.1a
 
