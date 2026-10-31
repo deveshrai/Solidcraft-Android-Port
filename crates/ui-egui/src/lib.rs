@@ -296,6 +296,7 @@ pub mod tool_modifiers;
 pub mod toolbar;
 pub mod toolbar_custom;
 pub mod tools;
+mod touch_pick;
 pub mod ui_kit;
 #[cfg(test)]
 mod ui_kit_guard_tests;

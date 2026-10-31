@@ -200,7 +200,8 @@ pub(crate) fn show(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
         return;
     }
     let Some(layout) = app.viewport.layout.as_ref().filter(|l| l.navigation.is_positive()) else { return };
-    let bar = measured(app, ui.ctx(), layout.content);
+    let content = layout.content;
+    let bar = measured(app, ui.ctx(), content);
     if !bar.rect.is_positive() {
         return;
     }
@@ -264,6 +265,10 @@ pub(crate) fn show(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
             if response.clicked() {
                 open = if open == "more" { String::new() } else { "more".to_owned() };
             }
+        }
+        // SolidCraft (Android port): the crosshair button, past the bar's end.
+        if crate::touch_pick::offered(app) {
+            crate::touch_pick::button(app, ui, crate::touch_pick::button_rect(bar.rect, content), app.preferences.navigation_bar.edge);
         }
     });
     context_menu(app, &background, None);

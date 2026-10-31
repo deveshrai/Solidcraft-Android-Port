@@ -122,7 +122,8 @@
     "mcp.copied": "Copied",
     "mcp.no_control": "The app's control channel could not start.",
     "mcp.port_in_use": "Port {port} is in use by another app: choose another under Advanced.",
-    "mcp.start_failed": "The server could not start on port {port}: {error}"
+    "mcp.start_failed": "The server could not start on port {port}: {error}",
+    "touch_pick.button": "Pick with a crosshair (finger only)"
   },
   "de": {
     "Addendum": "Kopfhöhe",
@@ -247,10 +248,12 @@
     "mcp.copied": "Kopiert",
     "mcp.no_control": "Der Steuerkanal der App konnte nicht starten.",
     "mcp.port_in_use": "Port {port} wird von einer anderen App verwendet: Wählen Sie unter „Erweitert“ einen anderen.",
-    "mcp.start_failed": "Der Server konnte auf Port {port} nicht starten: {error}"
+    "mcp.start_failed": "Der Server konnte auf Port {port} nicht starten: {error}",
+    "touch_pick.button": "Mit Fadenkreuz auswählen (nur mit dem Finger)"
   },
   "en-GB": {
-    "Center distance": "Centre distance"
+    "Center distance": "Centre distance",
+    "touch_pick.button": "Pick with a crosshair (finger only)"
   },
   "ja": {
     "Addendum": "歯末のたけ",
@@ -375,7 +378,8 @@
     "mcp.copied": "コピーしました",
     "mcp.no_control": "アプリの制御チャンネルを開始できませんでした。",
     "mcp.port_in_use": "ポート {port} はほかのアプリが使用中です。「詳細設定」で別のポートを選んでください。",
-    "mcp.start_failed": "ポート {port} でサーバーを開始できませんでした：{error}"
+    "mcp.start_failed": "ポート {port} でサーバーを開始できませんでした：{error}",
+    "touch_pick.button": "十字線で選択（指のみ）"
   },
   "ko": {
     "Addendum": "이끝 높이",
@@ -501,7 +505,8 @@
     "mcp.copied": "복사됨",
     "mcp.no_control": "앱의 제어 채널을 시작할 수 없습니다.",
     "mcp.port_in_use": "포트 {port}를 다른 앱이 사용 중입니다. 고급에서 다른 포트를 선택하세요.",
-    "mcp.start_failed": "포트 {port}에서 서버를 시작할 수 없습니다: {error}"
+    "mcp.start_failed": "포트 {port}에서 서버를 시작할 수 없습니다: {error}",
+    "touch_pick.button": "십자선으로 선택(손가락만)"
   },
   "zh": {
     "Addendum": "齿顶高系数",
@@ -626,6 +631,7 @@
     "mcp.copied": "已复制",
     "mcp.no_control": "无法启动应用的控制通道。",
     "mcp.port_in_use": "端口 {port} 已被其他应用占用：请在“高级”中选择其他端口。",
-    "mcp.start_failed": "无法在端口 {port} 上启动服务器：{error}"
+    "mcp.start_failed": "无法在端口 {port} 上启动服务器：{error}",
+    "touch_pick.button": "用十字线选择（仅限手指）"
   }
 }

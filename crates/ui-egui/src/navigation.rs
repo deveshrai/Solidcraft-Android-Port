@@ -742,6 +742,21 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
     } else if !primary_down && !primary_released {
         app.viewport.primary_nav = None;
     }
+    // SolidCraft (Android port): a finger held still on the model picks with a crosshair.
+    let orbit_press = primary_pressed
+        && inside
+        && touching
+        && !app.viewport.touch_gesture
+        && app.viewport.nav.is_none()
+        && app.viewport.primary_nav == Some(NavMode::Orbit);
+    let aim = crate::touch_pick::track(app, ui.ctx(), rect, orbit_press, primary_down, ui.input(|i| i.pointer.interact_pos()));
+    let (hover, inside) = match aim {
+        Some(p) => (Some(p), rect.contains(p)),
+        None => (hover, inside),
+    };
+    if aim.is_some() {
+        app.viewport.mouse = hover.filter(|_| inside);
+    }
     // Hold Space for a momentary pan: the hand tool of design apps. It overrides whatever the
     // left button would otherwise do - selecting, dragging geometry, the preset's binding or the
     // navigation bar's fixed mode - and lasts only while the key is held. Space still types in a

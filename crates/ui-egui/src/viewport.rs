@@ -158,6 +158,8 @@ pub struct ViewportState {
     /// A finger pressed on a dialog's drag arrow: the arrow takes the drag, the view neither
     /// orbits nor draws a selection box under it.
     pub(crate) touch_handle: bool,
+    /// SolidCraft (Android port): a finger held still on the model, to pick with a crosshair.
+    pub(crate) touch_pick: crate::touch_pick::Hold,
     /// Button-free gesture and its last owned pointer position, kept through pauses.
     pub(crate) modifier_nav: Option<(NavMode, Pos2)>,
     /// What a click would pick now (after the active command's filter).
@@ -4519,7 +4521,9 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         {
             dialog.restore_value_focus = true;
         }
-        if resp.clicked() && !held && !reference_pick && !joint_handle_pointer && !app.viewport.draw_drag_handled {
+        // SolidCraft (Android port): a finger lifted from its crosshair clicks there.
+        let aim_released = crate::touch_pick::released(app).is_some();
+        if (resp.clicked() || aim_released) && !held && !reference_pick && !joint_handle_pointer && !app.viewport.draw_drag_handled {
             if crate::browser_canvas::click(app, &proj, p) {
                 // Calibrate Canvas: the click sets Point A or B on the image (#9108).
             } else if app.tool.is_some() {
@@ -4631,7 +4635,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         }
         // A right-click, unless the same press opened the mouse gestures' ring. egui's click
         // already allows the pointer a few points of travel, as a mouse moves while it is clicked.
-        if resp.secondary_clicked() && !crate::mouse_gesture::took_press(app) {
+        if resp.secondary_clicked() && !crate::mouse_gesture::took_press(app) && !crate::touch_pick::holding(app) {
             if app.tool.is_some() {
                 crate::tools::finish(app);
             } else if app.dialog.is_none() {
@@ -4865,6 +4869,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     if app.tool.is_none()
         && !held
         && !app.viewport.touch_handle
+        && !crate::touch_pick::holding(app)
         && primary_nav.is_none()
         && mode.is_none()
         && app.viewport.point_drag.is_none()
@@ -4947,6 +4952,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     crate::design_properties::overlay(app, &painter, &proj);
     crate::sketch_dims::show(app, ui, &proj);
     crate::select_other::show(app, ui.ctx());
+    crate::touch_pick::paint(app, &painter);
     axis_view(app, ui, rect);
     crate::view_angles::show(app, ui, rect);
     crate::navigation_bar_view::show(app, ui, rect);
@@ -7736,7 +7742,6 @@ mod tests {
         let app = three_placed_parts(part);
         let st = app.session.world_state();
         assert_eq!(st.bodies.len(), 3);
-        eprintln!("DBG before {}", st.bodies.iter().filter(|b| b.cached_mesh().is_some()).count());
         let scene = build_scene(&app);
         assert_eq!(scene.instanced.len(), 1, "one shared mesh");
         assert_eq!(scene.instanced[0].count(), 3, "a placement per occurrence");
@@ -10359,6 +10364,108 @@ mod tests {
         tap(&mut h, at);
         h.frame_with(vec![]);
         assert_eq!(picked(&h), Some(1), "the first tap picks the profile under the finger");
+    }
+
+    /// SolidCraft (Android port), port issue #2: the view bar's crosshair button, pressed by a
+    /// finger, turns one finger on the model from orbiting to aiming a crosshair above it; lifting
+    /// the finger selects what the crosshair is on. A mouse can't press the button, and a mouse
+    /// with the button on still selects and box-selects as before.
+    #[test]
+    fn the_crosshair_button_lets_a_finger_pick() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        h.app.viewport.gpu = Some(GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+        h.call("engine.execute", json!({"command":"solid.box","params":{"length":60,"width":60,"height":20}}));
+        h.call("ui.camera", json!({"fit":true}));
+        // A tap as egui-winit sends it: the press in one frame, the release and PointerGone in
+        // the next.
+        let tap = |h: &mut crate::scenario::Harness, at: Pos2| {
+            let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase, pos: at, force: None };
+            let button =
+                |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            h.frame_with(vec![touch(egui::TouchPhase::Start), egui::Event::PointerMoved(at), button(true)]);
+            h.frame_with(vec![touch(egui::TouchPhase::End), button(false), egui::Event::PointerGone]);
+            h.frames(2);
+        };
+        // A tap on empty view: a touch screen, so the button is offered.
+        tap(&mut h, pos2(120.0, 300.0));
+        let button = crate::scenario::handle_at("nav:touch_pick").expect("the crosshair button is in the view bar");
+        // A mouse click on it does nothing.
+        let click = |h: &mut crate::scenario::Harness, pressed| {
+            h.app.synthetic.push(egui::Event::PointerButton {
+                pos: button,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        };
+        h.app.synthetic.push(egui::Event::PointerMoved(button));
+        click(&mut h, true);
+        h.frame();
+        click(&mut h, false);
+        h.frames(2);
+        assert!(!h.app.viewport.touch_pick.on, "a mouse can't press the button");
+        // A finger's tap turns it on.
+        tap(&mut h, button);
+        assert!(h.app.viewport.touch_pick.on, "a finger turns the crosshair on");
+        let target = projection(&h.app, h.app.viewport.rect.unwrap()).to_screen(Vec3::new(30.0, 30.0, 20.0)).unwrap();
+        // The finger starts off the box: only the crosshair, above it, reaches the box.
+        let off = pos2(target.x + 300.0, target.y + crate::touch_pick::RAISE);
+        let before = h.app.cam;
+        finger(&mut h, 0, egui::TouchPhase::Start, off);
+        h.frames(2);
+        assert!(h.app.viewport.touch_pick.aim.is_some(), "a finger on the model aims at once");
+        for step in 1..=6 {
+            finger(&mut h, 0, egui::TouchPhase::Move, pos2(off.x - 50.0 * step as f32, off.y));
+            h.frame();
+        }
+        assert_eq!(h.app.cam, before, "aiming never orbits");
+        assert!(h.app.viewport.boxsel.is_none(), "nor draws a selection box");
+        assert!(h.app.session.selection.is_empty(), "nothing is picked until the finger lifts");
+        finger(&mut h, 0, egui::TouchPhase::End, pos2(target.x, off.y));
+        h.frames(3);
+        assert!(
+            matches!(h.app.session.selection.as_slice(), [Sel::Face { .. }]),
+            "lifting selects the face under the crosshair, got {:?}",
+            h.app.session.selection
+        );
+        assert!(h.app.viewport.touch_pick.aim.is_none());
+        assert!(h.app.viewport.context_menu.is_none(), "a pick opens no menu");
+        // A mouse drag with the button on still box-selects: the crosshair is a finger's.
+        h.app.synthetic.push(egui::Event::PointerMoved(off));
+        h.app.synthetic.push(egui::Event::PointerButton {
+            pos: off,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.frame();
+        for step in 1..=6 {
+            h.app.synthetic.push(egui::Event::PointerMoved(off + vec2(-20.0 * step as f32, -10.0 * step as f32)));
+            h.frame();
+        }
+        assert!(h.app.viewport.touch_pick.aim.is_none(), "no crosshair for a mouse");
+        assert!(h.app.viewport.boxsel.is_some(), "a mouse drag still draws a selection box");
+        h.app.synthetic.push(egui::Event::PointerButton {
+            pos: off,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.frames(2);
+        // A finger's second tap turns it off, and a finger orbits again.
+        tap(&mut h, button);
+        assert!(!h.app.viewport.touch_pick.on);
+        let still = h.app.cam;
+        finger(&mut h, 0, egui::TouchPhase::Start, off);
+        h.frame();
+        for step in 1..=6 {
+            finger(&mut h, 0, egui::TouchPhase::Move, off + vec2(20.0 * step as f32, 0.0));
+            h.frame();
+        }
+        finger(&mut h, 0, egui::TouchPhase::End, off + vec2(120.0, 0.0));
+        h.frame();
+        assert_ne!(h.app.cam.yaw, still.yaw, "with the button off a finger orbits");
     }
 
     #[test]

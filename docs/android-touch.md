@@ -27,6 +27,7 @@ Galaxy Tab running 0.22.0 with the gears.
 |---------|------|
 | Tap | Select what is under the finger (a face, an edge, a body, a profile); press any button or menu |
 | One-finger drag on the model | Orbit the view (over bodies too; a tap still selects) |
+| Crosshair button (end of the view bar) | Turns crosshair picking on: one finger on the model then aims a crosshair above it, and lifting selects what it is on ([below](#picking-with-a-crosshair)) |
 | Two-finger drag | Pan the view with the fingers |
 | Pinch | Zoom about the point between the fingers |
 | Drag a dialog's arrow | Change its value (Extrude distance, Fillet radius…) |
@@ -41,6 +42,28 @@ a one-finger drag draws or drags geometry as the mouse does, not orbit; the view
 | One finger: orbit | Pinch: zoom | Two fingers: pan |
 |---|---|---|
 | ![One finger orbiting the view](screenshots/android/05-touch-orbit.jpg) | ![A pinch zooming in](screenshots/android/06-touch-pinch.jpg) | ![Two fingers panning](screenshots/android/07-touch-pan.jpg) |
+
+### Picking with a crosshair
+
+A fingertip covers whatever it is on, so a small edge, a vertex or a thin face is hard to tap.
+The **crosshair button**, at the right-hand end of the view bar (or the left-hand end when the
+bar has no room on its right), turns on picking with a crosshair:
+
+1. **Tap the button.** It lights up.
+2. **Put a finger on the model.** A crosshair appears 60 points above it at once, with a faint
+   line down to the finger. The view doesn't orbit.
+3. **Move the finger.** The crosshair follows, and whatever is under it lights up, as under a
+   mouse pointer.
+4. **Lift the finger.** What the crosshair is on is selected, or picked into the open dialog
+   (Fillet's edges, Extrude's profile). Over nothing, it clears the selection.
+
+Tap the button again to turn it off; one finger orbits again. Two fingers pan and pinch either
+way. The button answers only a finger, and only a finger brings up the crosshair: a mouse
+clicks, drags and box-selects as it always does, with the button on or off. While a sketch is
+being edited or a sketch tool is on, a finger draws and drags as before.
+
+Asked for by [a2nr](https://github.com/a2nr) in
+[port issue #2](https://github.com/deveshrai/Solidcraft-Android-Port/issues/2). Added in port 0.28.0a.
 
 ## Modelling by touch
 
@@ -114,7 +137,7 @@ bore, a DIN 6885 keyway and a hub. **OK** inserts it at the origin, axis up Z.
 |---|---|
 | ![The Gear dialog and its readouts](screenshots/android/gears-tab-02-dialog.jpg) | ![A helical gear's bore, hub and keyway previewed](screenshots/android/gears-tab-03-bore-hub-keyway.jpg) |
 
-To change a gear, double-tap it in the browser, or long-press it and choose **Edit Gear**; OK
+To change a gear, double-tap it in the browser, or long-press it there (or hold a finger on it in the view and lift) and choose **Edit Gear**; OK
 rebuilds it in place, in one undo step. The values are saved with the design.
 
 ![The ten gear types](screenshots/android/gears-tab-08-all-types.jpg)

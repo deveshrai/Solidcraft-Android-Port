@@ -15,9 +15,10 @@
   "areas": [
     {
       "name": "Touch input",
-      "why": "One finger orbits, two pan, a pinch zooms; a finger drags a dialog's arrows and scrolls a drop-down; the patched winit gives the mouse and keyboard",
+      "why": "One finger orbits, two pan, a pinch zooms; the view bar's crosshair button lets a finger pick; a finger drags a dialog's arrows and scrolls a drop-down; the patched winit gives the mouse and keyboard",
       "files": [
         "crates/ui-egui/src/navigation.rs",
+        "crates/ui-egui/src/navigation_bar_view.rs",
         "crates/ui-egui/src/viewport.rs",
         "crates/ui-egui/src/canvas.rs",
         "crates/ui-egui/src/toolbar.rs",
@@ -25,7 +26,7 @@
         "vendor/winit/src/platform_impl/android/mod.rs"
       ],
       "tests": [
-        "solidcraft-ui-egui --lib one_finger_drag_orbits two_fingers_pan_and_pinch a_tap_selects pinch_gesture a_tap_picks_a_profile a_finger_on_the_arrow_stem a_finger_scrolls_a_tall_drop_down"
+        "solidcraft-ui-egui --lib one_finger_drag_orbits two_fingers_pan_and_pinch a_tap_selects pinch_gesture a_tap_picks_a_profile a_finger_on_the_arrow_stem a_finger_scrolls_a_tall_drop_down the_crosshair_button_lets_a_finger_pick"
       ],
       "markers": [
         {
