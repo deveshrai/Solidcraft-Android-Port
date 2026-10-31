@@ -33,12 +33,12 @@ German, Danish, Polish, Ukrainian and others; DXF export strict readers accept.
 
   ![Picking a bore's top edge with the crosshair](screenshots/android/crosshair-fixture-edge-tab-0280a.gif)
 
-- **Tested on a Galaxy Tab** with a DevTerm-like handheld (11 parts, exploded and orbited) and a2nr's
+- **Tested on a Galaxy Tab** with a DevTerm-like handheld and its screwed enclosure, and a2nr's
   drafted fixture, both over MCP: [android-devterm-test.md](android-devterm-test.md). Joins into drafted
   faces can fail first and need a retry, or stall; that is upstream's kernel, measured the same on
   upstream builds.
 
-  ![The exploded DevTerm, orbited](screenshots/android/devterm-exploded-orbit-tab-0280a.gif)
+  ![A screw head and an edge picked with the crosshair, then Press Pull and Fillet](screenshots/android/devterm-enclosure-pick-ops-tab-0280a.gif)
 
 ## 0.27.1a
 

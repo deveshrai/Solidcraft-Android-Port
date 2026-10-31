@@ -1,12 +1,12 @@
 # A handheld terminal and a drafted fixture, built over MCP (0.28.0a)
 
-The 0.28.0a tests on a Galaxy Tab (SM-X840): a Clockwork DevTerm-like handheld modelled over MCP and
-exploded, the fixture from [port issue #2](https://github.com/deveshrai/Solidcraft-Android-Port/issues/2)
+The 0.28.0a tests on a Galaxy Tab (SM-X840): a Clockwork DevTerm-like handheld and its screwed enclosure modelled over MCP, the fixture from [port issue #2](https://github.com/deveshrai/Solidcraft-Android-Port/issues/2)
 with its edge picked by the new crosshair, and what they showed about joins that fail or stall. Every
 call was timed; the recipes are `tools/mcp-cassette-test/devterm.py` and `fixture.py`.
 
 - [In short](#in-short)
 - [1. The DevTerm](#1-the-devterm)
+- [1b. The enclosure, picked and edited by finger](#1b-the-enclosure-picked-and-edited-by-finger)
 - [2. The fixture and the crosshair](#2-the-fixture-and-the-crosshair)
 - [3. Joins that fail first, or stall](#3-joins-that-fail-first-or-stall)
 - [4. Is the port to blame?](#4-is-the-port-to-blame)
@@ -16,7 +16,8 @@ call was timed; the recipes are `tools/mcp-cassette-test/devterm.py` and `fixtur
 
 | | |
 |---|---|
-| DevTerm, 11 parts, 201 calls | **31 s** on the tablet (and 5 s for a 121-step orbit); nothing failed, no interferences |
+| DevTerm, 11 parts, 201 calls | **31 s** on the tablet; nothing failed, no interferences |
+| Its enclosure with 8 screws, 121 calls | **19.9 s**; then a screw head and an edge picked by crosshair, Press Pulled and Filleted |
 | Fixture, 32 calls | **17 s**; one join took 11.9 s after its first attempt failed |
 | Crosshair | a finger picked the fixture's bore edge; a mouse can't turn the button on |
 | Joins into drafted (2°) faces | can fail on the first attempt and be saved by a retry (seconds), or stall for minutes: an upstream kernel limit, not the port's |
@@ -25,19 +26,13 @@ call was timed; the recipes are `tools/mcp-cassette-test/devterm.py` and `fixtur
 ## 1. The DevTerm
 
 Sizes estimated from product photos, scaled from the 6.86" 1280×480 screen (about 0.305 mm a pixel):
-a body 218 × 172 mm, about 30 mm thick at the screen half. Eleven parts, each its own body and then
-its own component: back shell (vents, side ports, board standoffs), front frame, screen, keyboard
+a body 218 × 172 mm, about 30 mm thick at the screen half. Eleven parts, each its own body: back shell (vents, side ports, board standoffs), front frame, screen, keyboard
 (deck, six rows of keys, D-pad, ABXY, trackball), main board, two port plates, two knurled knobs,
 printer and battery cover. Each key row is one sketch and one extrude, not a join per key.
 
 ![The DevTerm on the tablet](screenshots/android/devterm-tab-0280a.jpg)
 
 ![The DevTerm from behind: printer, battery cover, vents](screenshots/android/devterm-rear-tab-0280a.jpg)
-
-The exploded view is upstream's `explode.create` (the design keeps its placements), orbited with
-`view.apply`:
-
-![The exploded DevTerm, orbited on the tablet](screenshots/android/devterm-exploded-orbit-tab-0280a.gif)
 
 | Galaxy Tab | |
 |---|---|
@@ -47,6 +42,27 @@ The exploded view is upstream's `explode.create` (the design keeps its placement
 | Screenshots | about 2 s each (the slowest calls in the run) |
 
 The build at 2× speed: ![The DevTerm built on the tablet](screenshots/android/devterm-tab-0280a-2x.gif)
+
+## 1b. The enclosure, picked and edited by finger
+
+The enclosure alone (back shell and front frame, no keyboard or screen), with the eight M2 pan-head
+screws that hold it together, estimated from the rear photo and the frame's borders: four along the
+top behind the screen, two down each side. Each runs from a 1.6 mm counterbore in the back, through a
+Ø2.2 clearance hole in a Ø5 post, into a Ø1.6 pilot hole in the frame (the 2 mm³ each screw shows in
+interference is its thread biting there). `tools/mcp-cassette-test/devterm_enclosure.py`: 121 calls,
+**19.9 s** on the tablet, nothing failed, the slowest modelling step 0.55 s.
+
+| Front | Back: the eight screws |
+|---|---|
+| ![The enclosure](screenshots/android/devterm-enclosure-tab-0280a.jpg) | ![The enclosure from behind](screenshots/android/devterm-enclosure-rear-tab-0280a.jpg) |
+
+Then by finger, with the crosshair button on: a screw head's face picked and **Press Pull**ed 1 mm, and
+the screen window's edge on the frame's front face picked and **Fillet**ed (2 mm). At 2× speed:
+
+![Picking a screw head and an edge with the crosshair, then Press Pull and Fillet](screenshots/android/devterm-enclosure-pick-ops-tab-0280a.gif)
+
+On a head this small (Ø3.8) the cross recess's corners are within pick reach of most of it, so a pick
+there can land on a vertex: zoom in until the head fills a good part of the view, as with a mouse.
 
 ## 2. The fixture and the crosshair
 
@@ -126,10 +142,6 @@ their screenshot (boss diameter to spacing about 1 : 3), with the arm dropping a
 The order is most of it: the same pieces fused in one call took 36.7 s on a Mac with retries, a piece
 at a time 0.85 s, and the result is the same solid (43,888 mm³, a cleaner 39 faces against 43). Two
 steps still take one quick retry (hundredths of a second).
-
-![The fixture built as separate bodies and combined, on the tablet](screenshots/android/fixture-bodies-tab-0280a.jpg)
-
-![Its side view: the arm drops at 16° and runs flat into the small boss](screenshots/android/fixture-bodies-side-0280a.jpg)
 
 So, over MCP or by hand: **model in silhouettes and separate bodies, and join last, a piece at a time,
 flat pieces first.** The crosshair picked this fixture's bore edge on the first try.
