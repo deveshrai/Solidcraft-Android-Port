@@ -700,6 +700,43 @@ fn a_measure_reads_a_copy_off_the_window_thread_preference_or_not() {
     assert_eq!(h.app.session.log.len(), log, "a reading leaves no echo: {:?}", h.app.session.log);
 }
 
+/// A reading on a copy keeps the request's own `param_check` (#9184), as one run here does: its
+/// reply says the level, and a word that is no level is refused.
+#[test]
+fn a_reading_on_a_copy_keeps_the_requests_param_check() {
+    let (mut h, tx) = agent_harness();
+    let measure = ask(&tx, "engine.execute", json!({"command": "inspect.measure", "params": {}, "param_check": "strict"}));
+    h.frames(1);
+    assert_eq!(h.app.control_answering.len(), 1, "read a copy");
+    let r = reply_to(&mut h, &measure);
+    assert_eq!((&r["ok"], &r["param_check"]), (&json!(true), &json!("strict")), "{r}");
+    let loud = ask(&tx, "engine.execute", json!({"command": "inspect.measure", "params": {}, "param_check": "loud"}));
+    let r = reply_to(&mut h, &loud);
+    assert!(r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("`param_check` must be off, warn or strict")), "{r}");
+    // A design change computed ahead off the window thread runs here at the request's level.
+    let features = h.app.session.doc.features.len();
+    let misspelt = |level: &str| {
+        let mut call = second_hole();
+        call["params"]["operaton"] = json!("cut");
+        call["param_check"] = json!(level);
+        call
+    };
+    let strict = ask(&tx, "engine.execute", misspelt("strict"));
+    h.frames(1);
+    assert!(h.app.agent_computing().is_some(), "computed ahead off the window thread");
+    let r = reply_to(&mut h, &strict);
+    assert_eq!((&r["ok"], &r["param_check"]), (&json!(false), &json!("strict")), "{r}");
+    assert_eq!(h.app.session.doc.features.len(), features, "refused unrun");
+    let warn = ask(&tx, "engine.execute", misspelt("warn"));
+    let r = reply_to(&mut h, &warn);
+    assert_eq!(
+        (&r["param_check"], &r["result"]["param_warnings"]),
+        (&json!("warn"), &json!(["unknown key `operaton`; did you mean `operation`?"])),
+        "{r}"
+    );
+    assert_eq!(h.app.session.param_check, solidcraft_engine::schema::ParamCheck::Off, "the app's own level again");
+}
+
 /// A clearance or interference check of every pair of bodies reads a copy off the window thread
 /// too: on an assembly of 150 bodies it computed for minutes with the window not responding. The
 /// answers are the ones running it here gives.

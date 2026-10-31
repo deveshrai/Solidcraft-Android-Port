@@ -15,7 +15,8 @@
 //!
 //! Copied bodies paste into another design (tab) too, as imported bodies without their history,
 //! and copied components as independent copies with their history (Paste and Paste New alike),
-//! where they were in the world (`component.paste_from_design`); cut ones paste there as copies,
+//! where they were in the world (`component.paste_from_design`); completed sketches paste as
+//! independent features with their parameters (`timeline.paste`); cut ones paste there as copies,
 //! the originals staying. The last copy or cut in any design is what pastes: a design's own
 //! clipboard empties when another design copied after it.
 //!
@@ -154,7 +155,19 @@ pub fn pasting_components(app: &SolveApp) -> bool {
 /// Whether copied features (sketches, …) are what Paste pastes now (a Sketches folder's menu
 /// offers them).
 pub fn pasting_features(app: &SolveApp) -> bool {
-    app.session.active_sketch.is_none() && app.linked_design_clipboard.is_none() && !app.session.clipboard.is_empty()
+    app.session.active_sketch.is_none()
+        && app.linked_design_clipboard.is_none()
+        && (!app.session.clipboard.is_empty() || foreign(app).is_some_and(|c| !c.features.is_empty()))
+}
+
+/// The same engine paste serves the keyboard and the Sketches folder/group menus.
+fn paste_features(app: &mut SolveApp, component: u64, path: Vec<u64>) -> Result<Value, String> {
+    let copy = foreign(app).filter(|c| !c.features.is_empty()).cloned();
+    let from_design = copy.is_some();
+    if let Some(copy) = copy {
+        app.session.foreign_copy = Some(copy);
+    }
+    app.run("timeline.paste", json!({ "component": component, "component_path": path, "from_design": from_design }))
 }
 
 /// Whether copied or cut bodies are what Paste pastes now (a Bodies folder's menu offers them).
@@ -171,7 +184,7 @@ pub fn pasting_bodies(app: &SolveApp) -> bool {
 pub fn paste_into_group(app: &mut SolveApp, at: Option<Pos2>, into: Option<(u64, Vec<u64>)>, group: Option<u64>, folder: &str) -> bool {
     let (Some(group), Some((component, path))) = (group, into.clone()) else { return paste_into(app, at, false, into) };
     if folder == "sketches" && pasting_features(app) {
-        let Ok(out) = app.run("timeline.paste", json!({ "component": component, "component_path": path })) else { return false };
+        let Ok(out) = paste_features(app, component, path) else { return false };
         let items: Vec<String> = out
             .get("pasted")
             .and_then(Value::as_array)
@@ -314,6 +327,7 @@ pub fn copy(app: &mut SolveApp) -> bool {
     }
     let Ok(out) = app.run("timeline.copy", json!({ "features": features })) else { return copy_failed(app, None) };
     replace_clipboard(app);
+    app.foreign_copy = app.session.foreign_copy.clone();
     let names: Vec<&str> = out.get("copied").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
     app.set_status(format!("Copied {}", names.join(", ")), false);
     leave_text(app, format!("SolidCraft features: {}", names.join(", ")));
@@ -587,6 +601,9 @@ fn paste_placement(app: &SolveApp, at: Option<Pos2>) -> (Vec<u64>, [f64; 3]) {
 /// as imported bodies, or its components as independent copies, where they were in the world;
 /// they are selected.
 fn paste_from_design(app: &mut SolveApp, copy: std::sync::Arc<solidcraft_engine::ForeignCopy>, (component, path): (u64, Vec<u64>)) -> bool {
+    if !copy.features.is_empty() {
+        return paste_features(app, component, path).is_ok();
+    }
     let design = copy.design.clone();
     app.session.foreign_copy = Some(copy);
     let Ok(out) = app.run("component.paste_from_design", json!({ "component": component, "component_path": path })) else { return false };

@@ -412,3 +412,44 @@ fn a_sketch_opened_inside_a_component_gives_the_active_component_back() {
     app.finish_sketch();
     assert_eq!(app.session.active_component, washer, "the component activated meanwhile stays active");
 }
+
+/// "Turn to face a sketch when it opens": off, creating or editing a sketch leaves the view as it
+/// is, and Look At still faces the sketch when asked.
+mod open_view_preference {
+    use crate::scenario::Harness;
+    use serde_json::json;
+
+    #[test]
+    fn turning_is_the_default() {
+        assert!(crate::prefs::Prefs::default().sketch_open_look_at);
+    }
+
+    #[test]
+    fn off_a_new_sketch_keeps_the_view_and_look_at_still_turns() {
+        let mut h = Harness::new();
+        h.call("ui.prefs", json!({"sketch_open_look_at": false}));
+        assert!(!h.app.preferences.sketch_open_look_at, "set through the control channel");
+        h.call("ui.view", json!({"view": "iso"}));
+        h.settle();
+        let iso = h.app.cam;
+        h.step(&json!({"start": "sketch.create"})).unwrap();
+        h.step(&json!({"click": {"plane": "XY"}})).unwrap();
+        h.settle();
+        assert!(h.app.session.active_sketch.is_some());
+        assert_eq!(h.app.cam, iso, "the view stays where it was");
+        crate::dialogs::look_at_sketch_again(&mut h.app);
+        h.settle();
+        crate::scenario::check(&mut h, &json!({"sketching": true, "camera": {"yaw_deg": 0, "pitch_deg": 90}})).unwrap();
+    }
+
+    #[test]
+    fn off_editing_a_sketch_keeps_the_view() {
+        let mut app = crate::test_support::sample_app();
+        app.preferences.sketch_open_look_at = false;
+        let id = super::first_sketch(&app);
+        let before = app.cam;
+        app.edit_sketch(id);
+        assert!(app.session.active_sketch.is_some());
+        assert_eq!(app.settled_cam(), before);
+    }
+}

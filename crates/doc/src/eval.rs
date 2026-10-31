@@ -900,6 +900,11 @@ fn split_piece_of(name: &str) -> Option<&str> {
     (!n.starts_with('0') && n.parse::<u32>().is_ok()).then_some(base)
 }
 
+/// The warning of a sketch whose profile search was cut short (#6896).
+fn profiles_cut_short_note() -> String {
+    format!("some profiles may be missing: a group of touching curves is cut into more than {} pieces", solidcraft_sketch::MAX_PROFILE_EDGES)
+}
+
 /// Add `note` to a feature's warning.
 fn append_warning(warning: &mut Option<String>, note: String) {
     *warning = Some(match warning.take() {
@@ -2261,7 +2266,14 @@ impl Model {
             feature_component.entry(f.id).or_insert(f.component);
         }
         let watched = crate::progress::begin(doc.features.len());
+        // The features that failed so far in this pass, by id: their names and errors (#9075).
+        let mut failed: std::collections::HashMap<u64, (String, String)> = std::collections::HashMap::new();
         for (i, f) in doc.features.iter().enumerate() {
+            if let Some(r) = out.last()
+                && let Some(e) = &r.error
+            {
+                failed.insert(r.id, (r.name.clone(), e.clone()));
+            }
             self.placement_local = self.placement_local && placement_reuse::local_geometry(f, &feature_component);
             let rolled_back = i >= marker;
             // Retain at most one active result per rolled-back feature, even across several
@@ -2320,6 +2332,33 @@ impl Model {
             // been made before a rename freed a name or a feature was suppressed.
             if state.reserved_body_names != reserved {
                 Arc::make_mut(&mut state).reserved_body_names.clone_from(&reserved);
+            }
+            // A sketch the feature is built from failed earlier in this pass: the feature fails naming
+            // that sketch, with its error, as one using a failed parameter does (#9075), not as a
+            // sketch that must come earlier in the timeline. Never cached: the cache key holds
+            // neither the sketch's name nor its error (a rename, another failing value).
+            let failed_sketch = if failed.is_empty() {
+                None
+            } else {
+                f.kind.input_sketches().into_iter().find_map(|id| failed.get(&id)).map(|(name, e)| format!("sketch `{name}` failed: {e}"))
+            };
+            if let Some(e) = failed_sketch {
+                recomputed += 1;
+                reuse = false;
+                out.push(FeatureResult {
+                    id: f.id,
+                    name: f.name.clone(),
+                    error: Some(e),
+                    warning: None,
+                    boolean_diagnostics: Default::default(),
+                    ms: 0.0,
+                    skipped: false,
+                    stale: false,
+                    fingerprint: fp,
+                    unkept: false,
+                    state: state.clone(),
+                });
+                continue;
             }
             // The same feature on the same inputs: its earlier result.
             let key =
@@ -7331,7 +7370,13 @@ fn eval_feature(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st:
                 *warning = Some(warns.join("; "));
             }
             sk.validate_periodic_splines()?;
-            let profiles = find_profiles(&sk);
+            // A group of touching curves too large to search whole says so, rather than
+            // leaving profiles out silently (#6896).
+            let search = solidcraft_sketch::find_profiles_checked(&sk);
+            if search.incomplete {
+                append_warning(warning, profiles_cut_short_note());
+            }
+            let profiles = search.profiles;
             let ends = solidcraft_sketch::loose_ends(&sk);
             st.sketches.retain(|s| s.feature != f.id);
             st.sketches.push(Arc::new(SolvedSketch { feature: f.id, name: f.name.clone(), plane, sketch: sk, report, profiles, ends }));

@@ -207,6 +207,47 @@ fn ctrl_c_ctrl_v_outside_a_sketch_copies_and_pastes_timeline_features() {
 }
 
 #[test]
+fn completed_sketch_copies_and_pastes_into_a_new_design() {
+    let (mut h, _) = rectangle();
+    h.app.run("sketch.finish", json!({})).unwrap();
+    let id = h.app.session.doc.features[0].id;
+    select(&mut h.app, json!({"type": "feature", "id": id}));
+    clipboard_event(&mut h, egui::Event::Copy, None);
+    crate::documents::new_tab(&mut h.app);
+    clipboard_event(&mut h, egui::Event::Paste("SolidCraft features".into()), None);
+    assert_eq!(h.app.session.doc.features.len(), 1, "{:?}", h.app.status);
+    let copied = &h.app.session.doc.features[0];
+    let sketch = h.app.session.doc.sketch(copied.id).unwrap();
+    assert_eq!(sketch.curves.len(), 4);
+    assert!(h.app.session.model.result(copied.id).unwrap().error.is_none());
+}
+
+#[test]
+fn copied_sketch_survives_source_close_and_pastes_from_a_sketch_group_menu() {
+    use crate::context_menu::{Target, items, run_item};
+    let (mut h, _) = rectangle();
+    h.app.run("sketch.finish", json!({})).unwrap();
+    select(&mut h.app, json!({"type":"feature","id":1}));
+    assert!(super::copy(&mut h.app));
+    crate::documents::new_tab(&mut h.app);
+    crate::documents::close(&mut h.app, 0, true);
+    assert!(super::can_paste(&h.app) && super::pasting_features(&h.app));
+    assert!(!super::pasting_bodies(&h.app) && !super::pasting_components(&h.app));
+    let group = h.app.run("browser.group", json!({"folder":"sketches","name":"Copied"})).unwrap()["group"].as_u64().unwrap();
+    let item = items(&h.app, &Target::Group { id: group, scope: "c0".into() }).into_iter().find(|i| i.id == "ui.paste").unwrap();
+    assert!(item.enabled);
+    run_item(&mut h.app, &item, egui::Pos2::ZERO);
+    let id = h.app.session.doc.find_feature("Sketch1").unwrap().id;
+    assert_eq!(h.app.session.doc.sketch(id).unwrap().curves.len(), 4);
+    assert!(h.app.session.doc.browser_groups.iter().any(|g| g.id == group && g.has_item(&id.to_string())));
+    // A later copy in this design replaces the cross-design snapshot everywhere.
+    select(&mut h.app, json!({"type":"feature","id":id}));
+    assert!(super::copy(&mut h.app));
+    assert!(super::paste(&mut h.app, None));
+    assert!(h.app.session.doc.find_feature("Sketch1 (2)").is_some());
+}
+
+#[test]
 fn ctrl_x_cuts_the_sketch_selection_and_ctrl_v_brings_it_back() {
     let (mut h, rect) = rectangle();
     let before = curves(&h);
@@ -754,9 +795,7 @@ fn pasting_on_a_group_puts_the_copy_in_it() {
         assert!(item.enabled);
         run_item(app, &item, egui::Pos2::ZERO);
     };
-    let holds = |app: &crate::SolveApp, group: u64, key: &str| {
-        app.session.doc.browser_groups.iter().any(|g| g.id == group && g.items.iter().any(|k| k == key))
-    };
+    let holds = |app: &crate::SolveApp, group: u64, key: &str| app.session.doc.browser_groups.iter().any(|g| g.id == group && g.has_item(key));
     select(&mut app, json!({"type": "body", "name": "Cube"}));
     assert!(super::copy(&mut app));
     paste_on(&mut app, bodies);

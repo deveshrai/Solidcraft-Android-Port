@@ -3,7 +3,7 @@
 use crate::ui_kit;
 use egui::Key;
 
-use crate::params_dialog::{exact_token, suggestions_for, unit_token, word_before};
+use crate::params_dialog::{every_parameter, exact_token, suggestions_for, unit_token, word_before};
 use crate::theme::Tokens;
 
 #[derive(Clone)]
@@ -31,6 +31,10 @@ struct Popup {
     /// every frame: the names it depends on are gathered only once a box has the focus, and
     /// the text before the word can change under it (`20 mm` replaced by `pi mm`).
     keyed: bool,
+    /// The box was empty when last drawn: Down arrow there opens the list.
+    empty: bool,
+    /// Down arrow in the empty box opened it: every named parameter, however many (#9246).
+    every: bool,
 }
 
 fn popup_id() -> egui::Id {
@@ -52,6 +56,22 @@ pub(crate) fn begin_frame(ctx: &egui::Context) {
         popup.dismissed = false;
         (popup.armed, popup.keyed) = (true, true);
         ctx.data_mut(|d| d.insert_temp(popup_id(), popup.clone()));
+    }
+    // Down arrow in an empty box opens every named parameter (#9246): one need not remember
+    // a letter of the name. Once the list is open, Down moves through it as below.
+    if popup.empty
+        && (popup.count == 0 || popup.dismissed)
+        && ctx.memory(|m| m.has_focus(popup.editor))
+        && popup.frame.saturating_add(1) >= ctx.cumulative_frame_nr()
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowDown))
+    {
+        ctx.input_mut(|i| {
+            i.raw.events.retain(|e| !matches!(e, egui::Event::Key { key: Key::ArrowDown, modifiers, .. } if modifiers.is_none()));
+        });
+        (popup.explicit, popup.every, popup.dismissed) = (true, true, false);
+        (popup.armed, popup.keyed, popup.selected) = (true, true, 0);
+        ctx.data_mut(|d| d.insert_temp(popup_id(), popup.clone()));
+        return;
     }
     let escape_blurred = ctx.input(|i| i.key_pressed(Key::Escape)) && ctx.memory(|m| m.focused().is_none() && m.had_focus_last_frame(popup.editor));
     let focused = ctx.memory(|m| m.has_focus(popup.editor)) || escape_blurred;
@@ -169,7 +189,10 @@ pub(crate) fn complete(ui: &mut egui::Ui, resp: &egui::Response, text: &mut Stri
         rows: Vec::new(),
         armed,
         keyed: false,
+        empty: false,
+        every: false,
     });
+    popup.empty = text.is_empty();
     popup.armed = popup.keyed || armed;
     // Never over a control being dragged: the drag dismisses them.
     if ctx.dragged_id().is_some_and(|id| id != resp.id) {
@@ -178,7 +201,9 @@ pub(crate) fn complete(ui: &mut egui::Ui, resp: &egui::Response, text: &mut Stri
     // A unit right after a number (`2 in`, `10 mm`, the form every dialog starts its sizes in)
     // is a unit, not the start of a name: no popup there, so nothing sits over the OK button.
     let number_before = before.is_some_and(|c| c.is_ascii_digit() || c == '.' || c == ')');
-    let list = if !popup.explicit && number_before && unit_token(&ctx, &popup.word) {
+    let list = if popup.every {
+        every_parameter(&ctx)
+    } else if !popup.explicit && number_before && unit_token(&ctx, &popup.word) {
         Vec::new()
     } else {
         suggestions_for(&ctx, &popup.word, popup.explicit)
@@ -324,6 +349,12 @@ mod tests {
             );
             // Nothing paints these frames: drop their texture updates on purpose.
             output.textures_delta.clear();
+        }
+
+        fn frames(&mut self, n: usize) {
+            for _ in 0..n {
+                self.frame(Vec::new());
+            }
         }
 
         fn key(&mut self, key: Key) {
@@ -646,6 +677,54 @@ mod tests {
             e.key(Key::Tab);
             assert!(e.accepted);
             assert!(!e.text.is_empty());
+        }
+    }
+
+    /// #9246: Down arrow in an empty box lists every named parameter, past the eight rows a
+    /// typed word shows; the list scrolls to the chosen row and Enter inserts it. In a box that
+    /// already holds text, Down stays the editor's.
+    #[test]
+    fn down_arrow_in_an_empty_box_lists_every_parameter_and_scrolls() {
+        let mut e = Editor::new("");
+        for i in 1..=15 {
+            e.app.run("parameters.add", json!({"name":format!("p{i:02}"),"expression":"1 mm"})).unwrap();
+        }
+        e.frame(Vec::new());
+        assert_eq!(e.popup(), None, "an empty box shows nothing until asked");
+        e.key(Key::ArrowDown);
+        e.frame(Vec::new());
+        assert!(!e.leaked.contains(&Key::ArrowDown));
+        assert_eq!(e.popup(), Some((20, true)), "every parameter, armed on the first");
+        assert_eq!(e.selected(), 0);
+        assert!(e.text.is_empty());
+
+        e.key(Key::ArrowUp);
+        e.frames(2);
+        assert_eq!(e.selected(), 19);
+        let rows = e.ctx.data(|d| d.get_temp::<Popup>(popup_id())).unwrap().rows;
+        assert!(rows.last().is_some_and(|r| r.area() > 0.0), "the chosen last row is scrolled into view");
+        assert!(rows.first().is_some_and(|r| r.area() <= 0.0), "the first row has scrolled out: {:?}", rows.first());
+        let last = params_dialog::every_parameter(&e.ctx).last().map(|s| s.text.clone()).unwrap();
+        e.key(Key::Enter);
+        assert!(e.accepted);
+        assert_eq!(e.text, last);
+
+        let mut typed = Editor::new("width + ");
+        typed.key(Key::ArrowDown);
+        assert!(typed.leaked.contains(&Key::ArrowDown), "a box with text keeps Down for itself");
+        assert_eq!(typed.popup(), None);
+
+        // Preferences caps the list, so a large design does not list thousands; a hand-edited
+        // cap below the accepted range still lists a few.
+        for (cap, listed) in [(12, 12), (0, 5)] {
+            let mut capped = Editor::new("");
+            for i in 1..=15 {
+                capped.app.run("parameters.add", json!({"name":format!("p{i:02}"),"expression":"1 mm"})).unwrap();
+            }
+            capped.app.preferences.parameter_list_rows = cap;
+            capped.key(Key::ArrowDown);
+            capped.frame(Vec::new());
+            assert_eq!(capped.popup(), Some((listed, true)), "cap {cap}");
         }
     }
 

@@ -443,6 +443,37 @@ pub enum Button {
     SmallSelected,
 }
 
+/// Selected palette shared by SmallSelected and opt-in persistent native buttons.
+fn selected_button_palette(t: &Tokens) -> (egui::Color32, egui::Color32) {
+    (t.selected_bg, t.selected_ink)
+}
+
+/// Persistent counterpart of SmallSelected at a caller's native rectangle. This opt-in recipe
+/// leaves existing SmallSelected controls unchanged. Tokens: selected_bg/ink, form_primary,
+/// accent, radius_sm, space_8. The underline is two logical pixels; focus uses native visuals.
+pub(crate) fn persistent_button_shape(ui: &Ui, response: &Response, rect: egui::Rect) -> egui::Shape {
+    let t = Tokens::get();
+    let (fill, _) = selected_button_palette(&t);
+    let mut shapes = vec![
+        egui::Shape::rect_filled(rect, t.radius_sm, fill),
+        egui::Shape::rect_stroke(rect, t.radius_sm, egui::Stroke::new(1.0, t.form_primary), egui::StrokeKind::Inside),
+    ];
+    let inset = t.space_8.min(rect.width() / 4.0);
+    let y = rect.bottom() - t.space_4;
+    shapes
+        .push(egui::Shape::line_segment([egui::pos2(rect.left() + inset, y), egui::pos2(rect.right() - inset, y)], egui::Stroke::new(2.0, t.accent)));
+    if response.has_focus() {
+        shapes.push(native_button_focus(ui, response, rect));
+    }
+    egui::Shape::Vec(shapes)
+}
+
+/// The same standard focused-button outline used by native egui buttons, without resizing.
+pub(crate) fn native_button_focus(ui: &Ui, response: &Response, rect: egui::Rect) -> egui::Shape {
+    let visuals = ui.style().interact(response);
+    egui::Shape::rect_stroke(rect, Tokens::get().radius_sm, visuals.bg_stroke, egui::StrokeKind::Inside)
+}
+
 fn button_widget(label: egui::WidgetText, options: Button) -> egui::Button<'static> {
     let t = Tokens::get();
     if t.borders.bevel.is_some() && !matches!(options, Button::Ghost) {
@@ -457,7 +488,8 @@ fn button_widget(label: egui::WidgetText, options: Button) -> egui::Button<'stat
         }
         Button::Ghost => egui::Button::new(label).frame(false),
         Button::SmallSelected => {
-            egui::Button::new(label.color(t.selected_ink)).small().fill(t.selected_bg).stroke(egui::Stroke::new(1.0, t.form_primary))
+            let (fill, ink) = selected_button_palette(&t);
+            egui::Button::new(label.color(ink)).small().fill(fill).stroke(egui::Stroke::new(1.0, t.form_primary))
         }
         _ => egui::Button::new(label),
     }

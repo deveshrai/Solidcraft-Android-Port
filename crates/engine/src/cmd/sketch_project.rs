@@ -16,7 +16,7 @@ use crate::{EngineError, Result, Session};
 
 macro_rules! refs_doc {
     () => {
-        "refs: [{edge: [x,y,z], body?} | {face: [x,y,z], body?} (its edge loops) | {body: name} (silhouette) | {vertex: [x,y,z], body?} | {sketch, curve} | {sketch, point} | \"origin\" | {axis: X|Y|Z} | {plane: XY|XZ|YZ|name}]"
+        "refs: [{edge: [x,y,z], body?} | {face: [x,y,z], body?} (its edge loops) | {body: name} (silhouette) | {vertex: [x,y,z], body?} | {sketch, curve} | {sketch, point} | \"origin\" | {axis: X|Y|Z|name} | {plane: XY|XZ|YZ|name}]"
     };
 }
 
@@ -110,7 +110,7 @@ fn source(s: &Session, v: &Value, cmd: &str) -> Result<LinkSource> {
         return Ok(LinkSource::Body { body: b.to_string() });
     }
     if let Some(a) = str_(v, "axis") {
-        return Ok(LinkSource::Axis { name: a.to_ascii_uppercase() });
+        return axis_source(s, a, cmd);
     }
     if let Some(p) = str_(v, "plane") {
         return Ok(LinkSource::Plane { name: p.to_string() });
@@ -119,6 +119,17 @@ fn source(s: &Session, v: &Value, cmd: &str) -> Result<LinkSource> {
         return Ok(LinkSource::Origin);
     }
     Err(bad(cmd, format!("cannot project {v}")))
+}
+
+/// An origin axis (`X`, `Y` or `Z`, in any case), or a construction axis by its name (#9324).
+fn axis_source(s: &Session, name: &str, cmd: &str) -> Result<LinkSource> {
+    if ["X", "Y", "Z"].iter().any(|axis| name.eq_ignore_ascii_case(axis)) {
+        return Ok(LinkSource::Axis { name: name.to_ascii_uppercase() });
+    }
+    match s.doc.find_feature(name) {
+        Some(f) if matches!(f.kind, FeatureKind::ConstructionAxis { .. }) => Ok(LinkSource::Axis { name: f.name.clone() }),
+        _ => Err(bad(cmd, format!("unknown axis `{name}`: X, Y, Z or the name of a construction axis"))),
+    }
 }
 
 /// The plane of a sketch feature, resolved against `st`: the model before the sketch as its

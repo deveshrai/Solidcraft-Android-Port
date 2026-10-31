@@ -639,6 +639,35 @@ fn motion_study_plays_and_exports() {
     assert_eq!(run(&mut s, "motion.list", json!({}))["studies"].as_array().map(Vec::len), Some(0));
 }
 
+/// Regression (#9741): `motion.study` takes degrees for angle keys, so `motion.list` must give
+/// the keys back in those same units — feeding a listed study straight back to `motion.study`
+/// must not turn a 90° key into 1.57°.
+#[test]
+fn motion_list_round_trips_key_units_through_motion_study() {
+    let hinge_deg = |s: &mut Session| {
+        run(s, "joint.list", json!({}))["joints"]
+            .as_array()
+            .and_then(|a| a.iter().find(|j| j["name"] == "Hinge").cloned())
+            .and_then(|j| j["values"][0]["value"].as_f64())
+            .unwrap_or(f64::NAN)
+    };
+    let mut s = hinged_plates(0.0);
+    run(&mut s, "motion.study", json!({"name": "Turn", "steps": 10, "keys": [{"joint": "Hinge", "points": [[0, 0], [10, 90]]}]}));
+    run(&mut s, "motion.play", json!({"study": "Turn", "step": 10}));
+    assert!((hinge_deg(&mut s) - 90.0).abs() < 1e-6, "playing step 10 gave {}°", hinge_deg(&mut s));
+    let listed = run(&mut s, "motion.list", json!({}));
+    let key = &listed["studies"][0]["keys"][0];
+    assert_eq!(key["joint_name"], "Hinge");
+    assert_eq!(key["unit"], "deg");
+    assert!((key["points"][1][1].as_f64().unwrap_or(f64::NAN) - 90.0).abs() < 1e-6, "{listed}");
+    // The listed keys go back to `motion.study` unchanged and the study still plays 90°.
+    let keys = listed["studies"][0]["keys"].clone();
+    run(&mut s, "motion.study", json!({"study": "Turn", "keys": keys}));
+    run(&mut s, "motion.play", json!({"study": "Turn", "step": 0}));
+    run(&mut s, "motion.play", json!({"study": "Turn", "step": 10}));
+    assert!((hinge_deg(&mut s) - 90.0).abs() < 1e-6, "the round-tripped study played {}°", hinge_deg(&mut s));
+}
+
 #[test]
 fn exploded_views_show_without_changing_the_design() {
     let mut s = rail();

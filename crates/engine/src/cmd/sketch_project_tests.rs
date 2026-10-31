@@ -216,6 +216,53 @@ fn project_edges_bodies_sketches_and_origin() {
     assert!(s.execute("sketch.project", &json!({"refs": [{"plane": "XY"}]})).is_err(), "parallel plane projects to nothing");
 }
 
+/// A construction axis projects as an origin axis does, as its line in the sketch plane, and stays
+/// linked to it: the projection follows when the axis moves and when it is renamed. The report's
+/// steps (#9324): the axis made after the sketch, then moved before it.
+#[test]
+fn a_construction_axis_projects_and_stays_linked() {
+    let mut s = Session::default();
+    let sketch = run(&mut s, "sketch.create", json!({"plane": "XY"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.finish", json!({}));
+    let axis = |x: f64| json!({"a": {"point": [x, 0, 0]}, "b": {"point": [x, 30, 0]}, "name": "Axis1"});
+    run(&mut s, "construct.axis.two_points", axis(10.0));
+    run(&mut s, "timeline.reorder", json!({"feature": "Axis1", "position": 0}));
+    run(&mut s, "sketch.edit", json!({"sketch": sketch}));
+    let r = run(&mut s, "sketch.project", json!({"refs": [{"axis": "Axis1"}]}));
+    let line = r["links"][0]["curves"][0].clone();
+    // Where the projected line runs: its two ends' x, and its length along y.
+    let at = |s: &mut Session| {
+        run(s, "sketch.edit", json!({"sketch": sketch}));
+        let si = inspect(s);
+        let c = si["curves"].as_array().unwrap().iter().find(|c| c["id"] == line).cloned().unwrap();
+        run(s, "sketch.finish", json!({}));
+        let n = |v: &Value| v.as_f64().unwrap();
+        (n(&c["start_at"][0]), n(&c["end_at"][0]), (n(&c["end_at"][1]) - n(&c["start_at"][1])).abs())
+    };
+    run(&mut s, "sketch.finish", json!({}));
+    let (x0, x1, length) = at(&mut s);
+    assert!((x0 - 10.0).abs() < 1e-9 && (x1 - 10.0).abs() < 1e-9 && length > 30.0, "{x0} {x1} {length}");
+    run(&mut s, "timeline.redefine", json!({"feature": "Axis1", "command": "construct.axis.two_points", "params": axis(25.0)}));
+    let (x0, x1, _) = at(&mut s);
+    assert!((x0 - 25.0).abs() < 1e-9 && (x1 - 25.0).abs() < 1e-9, "the projection follows the axis: {x0} {x1}");
+    run(&mut s, "timeline.rename", json!({"feature": "Axis1", "name": "Hinge axis"}));
+    let state = s.model.state();
+    let link = &state.sketch(sketch).unwrap().sketch.links[0];
+    assert_eq!(link.source, solidcraft_sketch::LinkSource::Axis { name: "Hinge axis".into() });
+    assert!(!link.lost, "renamed, the axis is still found");
+    // A design with the axis after the sketch opens with the link lost, saying why.
+    run(&mut s, "timeline.reorder", json!({"feature": "Hinge axis", "position": 1}));
+    let opened = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+    assert!(opened.model.state().sketch(sketch).unwrap().sketch.links[0].lost);
+    let warnings = opened.model.result(sketch).and_then(|r| r.warning.clone()).unwrap_or_default();
+    assert!(warnings.contains("it must come earlier in the timeline"), "{warnings}");
+    run(&mut s, "timeline.reorder", json!({"feature": "Hinge axis", "position": 0}));
+    // An axis that is no origin axis and no construction axis is refused, by its name.
+    run(&mut s, "sketch.edit", json!({"sketch": sketch}));
+    let error = s.execute("sketch.project", &json!({"refs": [{"axis": "Axis9"}]})).unwrap_err().to_string();
+    assert!(error.contains("unknown axis `Axis9`"), "{error}");
+}
+
 #[test]
 fn project_whole_body_can_create_unlinked_geometry() {
     let mut s = Session::default();
@@ -257,6 +304,21 @@ fn break_link_makes_normal_geometry() {
     // Now free: 4 lines with 4 shared corners, 8 degrees of freedom.
     assert_eq!(si["dof"], 8, "{si}");
     assert!(s.execute("sketch.break_link", &json!({"link": "j99"})).is_err());
+}
+
+/// Trim refuses projected edges until Break Link; the message names that command (#8979).
+#[test]
+fn trim_refuses_projected_edges_until_break_link() {
+    let mut s = Session::default();
+    box_part(&mut s);
+    let r = run(&mut s, "sketch.create", json!({"plane": {"face": [20, 15, 20]}}));
+    let link = r["projected"].as_str().unwrap().to_string();
+    let curve = linked_curves(&inspect(&mut s))[0]["id"].as_str().unwrap().to_string();
+    let err = s.execute("sketch.trim", &json!({"curve": curve, "at": [20, 15]})).unwrap_err().to_string();
+    assert!(err.contains("Break Link"), "{err}");
+    assert!(err.contains("projected"), "{err}");
+    run(&mut s, "sketch.break_link", json!({"link": link}));
+    run(&mut s, "sketch.trim", json!({"curve": curve, "at": [20, 15]}));
 }
 
 /// The sketch's curves as evaluated (after its links were refreshed): (id, construction).
@@ -1082,4 +1144,57 @@ fn a_rebuilt_projection_keeps_user_constraints_without_a_warning() {
         assert_eq!(k.constraints.len(), usize::from(dimensioned));
         assert!(warning.is_none(), "{warning:?}");
     }
+}
+
+/// #9001: an angle (an L profile, wall thickness `d1`, legs `d2`) with a sketch on its face and
+/// a hole dimensioned to the inner wall's projected edge. Making the wall thicker moves the
+/// inner corner by more than a tenth of the face; the projection follows it (it was kept as it
+/// was, "boundary identity is ambiguous"), and the hole with it, as it already did for `d2`.
+#[test]
+fn a_thicker_angle_moves_the_projected_face_of_the_sketch_on_it() {
+    let mut s = Session::default();
+    run(&mut s, "parameters.change", json!({"name": "d1", "expression": "20 mm"}));
+    run(&mut s, "parameters.change", json!({"name": "d2", "expression": "80 mm"}));
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    let l = ids(&run(&mut s, "sketch.line", json!({"points": [[0, 0], [80, 0], [80, 20], [20, 20], [20, 80], [0, 80]], "closed": true}))["curves"]);
+    for (i, line) in l.iter().enumerate() {
+        let mode = if i % 2 == 0 { "horizontal" } else { "vertical" };
+        run(&mut s, "sketch.constraint.horizontal_vertical", json!({"line": line, "mode": mode}));
+    }
+    run(&mut s, "sketch.constraint.coincident", json!({"a": format!("{}.start", l[0]), "b": "origin"}));
+    for (k, value) in [(0, "d2"), (1, "d1"), (4, "d1"), (5, "d2")] {
+        run(&mut s, "sketch.dimension", json!({"entities": [l[k]], "value": value}));
+    }
+    assert_eq!(inspect(&mut s)["dof"], 0);
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.extrude", json!({"distance": 30}));
+    let sketch = run(&mut s, "sketch.create", json!({"plane": {"face": [10, 10, 30]}}))["sketch"].as_u64().unwrap();
+    let si = inspect(&mut s);
+    // The inner wall's edge, from (20, 20) to (20, 80) on the face.
+    let wall = linked_curves(&si)
+        .into_iter()
+        .find(|c| {
+            ["start_at", "end_at"].iter().all(|e| (c[e][0].as_f64().unwrap().abs() - 20.).abs() < 1e-6 && c[e][1].as_f64().unwrap().abs() > 19.)
+        })
+        .unwrap_or_else(|| panic!("{si}"));
+    let hole = ids(&run(&mut s, "sketch.circle.center", json!({"center": [10, 50], "radius": 3}))["curves"])[0].clone();
+    run(&mut s, "sketch.dimension", json!({"entities": [format!("{hole}.center"), wall["id"]], "value": 10}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "parameters.change", json!({"name": "d1", "expression": "30 mm"}));
+    let check = |s: &Session| {
+        let warning = s.model.result(sketch).and_then(|r| r.warning.clone());
+        assert!(warning.is_none(), "{warning:?}");
+        let st = s.model.state();
+        let ss = st.sketch(sketch).unwrap();
+        assert!(ss.sketch.links.iter().all(|l| !l.lost));
+        let world = |p: solidcraft_geom::Vec2| ss.plane.to_world(p);
+        let at = |x: f64, y: f64| ss.sketch.points.iter().any(|p| world(p.pos).dist(solidcraft_geom::Vec3::new(x, y, 30.)) < 1e-6);
+        // The inner corner is at (30, 30) now, and the hole 10 from the wall that moved.
+        assert!(at(30., 30.) && !at(20., 20.));
+        let center = ss.sketch.points.iter().find(|p| p.id == format!("{hole}.center")).unwrap();
+        assert!((world(center.pos).x - 20.).abs() < 1e-6, "{:?}", world(center.pos));
+        assert_eq!(ss.sketch.constraints.len(), 1);
+    };
+    check(&s);
+    check(&Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap()));
 }

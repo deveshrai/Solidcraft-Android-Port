@@ -444,12 +444,22 @@ impl SolveApp {
     /// is taken care of; `Some`: it runs here (no threads).
     fn answer_on_a_copy(&mut self, req: ControlRequest, id: &'static str, params: Value) -> Option<ControlRequest> {
         let Ok(scope) = crate::control::request_scope(self, &req.params) else { return Some(req) };
+        // The request's own level (#9184) checks it on the copy, and the reply says so, as
+        // `control::handle` does; a word that is no level is refused there.
+        let Ok(level) = crate::control::request_param_check(&req.method, &req.params) else { return Some(req) };
         let mut copy = self.session.scratch();
+        if let Some(level) = level {
+            copy.param_check = level;
+        }
         let rx = spawn(scope, move || {
-            Some(match copy.execute(id, &params) {
+            let mut reply = match copy.execute(id, &params) {
                 Ok(v) => json!({"ok": true, "result": v}),
                 Err(e) => json!({"ok": false, "error": e.to_string()}),
-            })
+            };
+            if let Some(level) = level {
+                reply["param_check"] = json!(level.name());
+            }
+            Some(reply)
         });
         let Some(rx) = rx else { return Some(req) };
         let job = ControlJob { label: label(self, id), req, work: Work::Answer, done: rx, started: crate::now_ms(), steps: None };

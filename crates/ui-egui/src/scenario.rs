@@ -355,6 +355,34 @@ impl Harness {
         })
     }
 
+    /// Accessibility bounds include scrolled-out page content. Reveal that content with
+    /// wheel input before using its coordinates; window actions and navigation stay put.
+    fn reveal_widget(&mut self, text: &str, near: Option<&str>) -> Result<[f64; 2], String> {
+        let find = |h: &Self| match near {
+            Some(label) => h.widget_near(text, label),
+            None => h.widget(text),
+        };
+        for _ in 0..32 {
+            let point = find(self).ok_or_else(|| format!("no widget `{text}` on screen"))?;
+            let at = egui::pos2(point[0] as f32, point[1] as f32);
+            let page = self.app.prefs_window.open.then(|| rect_of("prefs:page_body")).flatten();
+            let chrome = ["prefs:ok", "prefs:apply", "prefs:cancel", "prefs:search"].iter().any(|key| handle_at(key) == Some(at));
+            let Some(page) = page.filter(|page| !chrome && page.x_range().contains(at.x)) else { return Ok(point) };
+            if page.contains(at) {
+                return Ok(point);
+            }
+            self.call("ui.scroll", json!({"x":page.center().x,"y":page.center().y,"delta":if at.y < page.top() {100} else {-100}}));
+            // Follow the wheel's actual smoothing, rather than clicking its moving content.
+            for _ in 0..120 {
+                if self.ctx.input(|input| !input.is_scrolling()) {
+                    break;
+                }
+                self.frame();
+            }
+        }
+        Err(format!("widget `{text}` could not be revealed in its page"))
+    }
+
     /// Centres of the visible widgets whose label or value is `text`, last drawn first.
     fn widgets(&self, text: &str) -> Vec<[f64; 2]> {
         let Some(tree) = self.output.accesskit_update.as_ref() else { return Vec::new() };
@@ -457,12 +485,10 @@ impl Harness {
                 self.call("ui.click", p)
             } else if let Some(text) = s.get("widget").and_then(Value::as_str) {
                 // A dialog field, choice or button, found by its text.
-                let found = match s.get("near").and_then(Value::as_str) {
-                    Some(near) => self.widget_near(text, near),
-                    None => self.widget(text),
-                };
-                let [x, y] = found.ok_or_else(|| format!("no widget `{text}` on screen"))?;
+                let near = s.get("near").and_then(Value::as_str);
+                let [x, y] = self.reveal_widget(text, near)?;
                 self.call("ui.move", json!({"x": x, "y": y}));
+                let [x, y] = self.reveal_widget(text, near)?;
                 self.call("ui.click", json!({"x": x, "y": y}))
             } else if let Some(at) = s.get("hold") {
                 // Press and hold still (Select Other): `frames` with the button down (default 40,

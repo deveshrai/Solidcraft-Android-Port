@@ -30,6 +30,7 @@ const MAX_HISTORY: usize = 240;
 const MAX_HISTORY_IMAGES: usize = 2;
 /// What an older view becomes in the history.
 const DROPPED_VIEW_NOTE: &str = "[an earlier picture of the view, removed to keep the request small]";
+const DROPPED_THINKING_NOTE: &str = "[earlier reasoning, removed with older history]";
 /// How long one tool call may take (it may wait for the user's Allow, declined after four
 /// minutes). It does not depend on the endpoint's request timeout: a tool call is SolidCraft's own
 /// work and the user's answer, never a wait for the model, so a longer request timeout does not
@@ -503,7 +504,7 @@ fn go_reply_from_parts(text: Vec<(bool, String)>, calls: Vec<Call>, kept_calls: 
     if !kept_calls.is_empty() {
         assistant["tool_calls"] = Value::Array(kept_calls);
     }
-    Reply { text, calls, assistant }
+    Reply { text, calls, assistant, stop: "" }
 }
 
 /// Shared text + capped tool-call accumulator for the three Go reply parsers.
@@ -876,8 +877,11 @@ impl Worker {
 
     fn turn(&mut self, parts: Vec<PromptPart>) {
         self.history.push(user_message(self.cfg.protocol, &parts));
-        drop_old_views(&mut self.history, MAX_HISTORY_IMAGES);
-        self.trim_history();
+        let dropped = drop_old_views(&mut self.history, MAX_HISTORY_IMAGES);
+        let trimmed = self.trim_history();
+        if (dropped || trimmed) && self.cfg.protocol == Protocol::Anthropic {
+            drop_thinking(&mut self.history);
+        }
         // No cap on requests: Stop sets `cancel`, checked at the top of every round.
         loop {
             // The history as of here is complete (every tool call answered): a cancelled request
@@ -910,7 +914,7 @@ impl Worker {
             }
             self.history.push(reply.assistant);
             if reply.calls.is_empty() {
-                self.emit(Event::TurnEnded { reason: String::new() });
+                self.emit(Event::TurnEnded { reason: reply.stop.into() });
                 return;
             }
             // Anthropic takes every result of a round in one user message; OpenAI takes one
@@ -964,14 +968,16 @@ impl Worker {
     }
 
     /// Keep the conversation bounded and starting at a user message, so neither protocol sees a
-    /// reply or a tool result without the message it answers.
-    fn trim_history(&mut self) {
+    /// reply or a tool result without the message it answers. True when a message was removed.
+    fn trim_history(&mut self) -> bool {
+        let before = self.history.len();
         while self.history.len() > MAX_HISTORY {
             self.history.remove(0);
         }
         while self.history.first().is_some_and(|m| !starts_a_turn(m)) {
             self.history.remove(0);
         }
+        self.history.len() != before
     }
 
     fn request(&self) -> Result<Reply, String> {
@@ -1326,6 +1332,19 @@ struct Reply {
     /// The assistant message to keep in the history, in the endpoint's own shape. Tool calls are
     /// capped to the ones the loop answers, so every call kept here gets a result.
     assistant: Value,
+    /// Why the answer stopped, as the turn-end reason the chat knows: empty for a normal end,
+    /// `max_tokens` for an answer cut off at its length limit, `refusal` when the model declined.
+    stop: &'static str,
+}
+
+/// The turn-end reason for an Anthropic `stop_reason` or an OpenAI `finish_reason`. Anything
+/// else, including a value a server made up, is a normal end.
+fn stop_reason(reason: Option<&str>) -> &'static str {
+    match reason {
+        Some("max_tokens" | "length") => "max_tokens",
+        Some("refusal" | "content_filter") => "refusal",
+        _ => "",
+    }
 }
 
 /// The answer in the endpoint's shape.
@@ -1357,8 +1376,16 @@ fn sanitize_reasoning_details(details: Option<&Value>) -> Option<Value> {
 fn openai_reply(body: &Value) -> Reply {
     let message = body.pointer("/choices/0/message").cloned().unwrap_or(Value::Null);
     let text = message.get("content").and_then(Value::as_str).filter(|t| !t.is_empty()).map(|t| vec![(false, t.to_string())]).unwrap_or_default();
-    // No more than the loop answers: every call kept here must get a `tool` message.
-    let raw: Vec<Value> = message.get("tool_calls").and_then(Value::as_array).map(|a| a.iter().take(32).cloned().collect()).unwrap_or_default();
+    let refused = message.get("refusal").and_then(Value::as_str).is_some_and(|r| !r.trim().is_empty());
+    let stop = if refused { "refusal" } else { stop_reason(body.pointer("/choices/0/finish_reason").and_then(Value::as_str)) };
+    // No more than the loop answers: every call kept here must get a `tool` message. A call cut
+    // off at the length limit is incomplete, so none is run or kept.
+    let raw: Vec<Value> = message
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .filter(|_| stop != "max_tokens")
+        .map(|a| a.iter().take(32).cloned().collect())
+        .unwrap_or_default();
     let calls = raw
         .iter()
         .enumerate()
@@ -1384,11 +1411,12 @@ fn openai_reply(body: &Value) -> Reply {
     if !raw.is_empty() {
         assistant["tool_calls"] = Value::Array(raw);
     }
-    Reply { text, calls, assistant }
+    Reply { text, calls, assistant, stop }
 }
 
 fn anthropic_reply(body: &Value) -> Reply {
     let content = body.get("content").cloned().unwrap_or(Value::Null);
+    let stop = stop_reason(body.get("stop_reason").and_then(Value::as_str));
     let mut text = Vec::new();
     let mut calls = Vec::new();
     let assistant = match &content {
@@ -1411,6 +1439,8 @@ fn anthropic_reply(body: &Value) -> Reply {
                         }
                         kept.push(block.clone());
                     }
+                    // A call cut off at the length limit has incomplete input: not run, not kept.
+                    Some("tool_use") if stop == "max_tokens" => {}
                     Some("tool_use") if calls.len() < 32 => {
                         calls.push(Call {
                             id: block.get("id").and_then(Value::as_str).map_or_else(|| format!("toolu-{i}"), str::to_string),
@@ -1438,14 +1468,16 @@ fn anthropic_reply(body: &Value) -> Reply {
         }
         _ => json!({"role": "assistant", "content": content.clone()}),
     };
-    Reply { text, calls, assistant }
+    Reply { text, calls, assistant, stop }
 }
 
 /// Keeps the newest `keep` pictures of the view in the history and swaps every older one for a
 /// short note, so the model still knows a view was shown. Text is never touched. Pictures come
-/// as OpenAI `image_url` parts or Anthropic `image` blocks, depending on the endpoint.
-fn drop_old_views(history: &mut [Value], keep: usize) {
+/// as OpenAI `image_url` parts or Anthropic `image` blocks, depending on the endpoint. True when
+/// a picture was swapped.
+fn drop_old_views(history: &mut [Value], keep: usize) -> bool {
     let mut seen = 0;
+    let mut dropped = false;
     for msg in history.iter_mut().rev() {
         let Some(content) = msg.get_mut("content").and_then(Value::as_array_mut) else { continue };
         for part in content.iter_mut().rev() {
@@ -1455,7 +1487,24 @@ fn drop_old_views(history: &mut [Value], keep: usize) {
             seen += 1;
             if seen > keep {
                 *part = json!({"type": "text", "text": DROPPED_VIEW_NOTE});
+                dropped = true;
             }
+        }
+    }
+    dropped
+}
+
+/// Takes Anthropic thinking blocks out of every earlier reply. Each one is signed against all
+/// the conversation before it, so once a dropped view or trimmed message changes that, the API
+/// refuses the whole request (#9417); leaving earlier thinking out is allowed. A reply that was
+/// only thinking keeps a note, as the API takes no assistant message without content.
+fn drop_thinking(history: &mut [Value]) {
+    for msg in history.iter_mut().filter(|m| m["role"] == "assistant") {
+        let Some(content) = msg.get_mut("content").and_then(Value::as_array_mut) else { continue };
+        let before = content.len();
+        content.retain(|b| !matches!(b.get("type").and_then(Value::as_str), Some("thinking" | "redacted_thinking")));
+        if content.is_empty() && before > 0 {
+            content.push(json!({"type": "text", "text": DROPPED_THINKING_NOTE}));
         }
     }
 }
@@ -1731,12 +1780,12 @@ mod tests {
     #[test]
     fn only_the_newest_views_stay_in_the_history_and_older_ones_become_a_note() {
         let mut h = vec![json!({"role": "system", "content": "note"}), view(1), json!({"role": "assistant", "content": "ok"}), view(2)];
-        drop_old_views(&mut h, 2);
+        assert!(!drop_old_views(&mut h, 2));
         assert_eq!(pictures(&h).len(), 2, "two views fit, nothing is dropped");
 
         h.push(json!({"role": "user", "content": "plain text"}));
         h.push(view(3));
-        drop_old_views(&mut h, 2);
+        assert!(drop_old_views(&mut h, 2));
         assert_eq!(pictures(&h), vec!["data:image/png;base64,V2", "data:image/png;base64,V3"]);
         // The oldest view is a note now; the words sent with it, and every other message, stay.
         assert_eq!(h[1]["content"][0]["text"], "look 1");
@@ -2649,6 +2698,59 @@ mod tests {
         assert_eq!(capped.assistant["content"].as_array().unwrap().len(), 32);
     }
 
+    /// Why an answer stopped reaches the turn's end: cut off at the length limit, or declined,
+    /// in either protocol (#9495). A call cut off mid-way is neither run nor kept in the history.
+    #[test]
+    fn answers_say_why_they_stopped() {
+        let thinking = json!({"type": "thinking", "thinking": "", "signature": "s"});
+        let call = json!({"type": "tool_use", "id": "t1", "name": "measure", "input": {}});
+        for (reason, stop) in [("end_turn", ""), ("tool_use", ""), ("max_tokens", "max_tokens"), ("refusal", "refusal"), ("made_up", "")] {
+            assert_eq!(anthropic_reply(&json!({"content": [thinking], "stop_reason": reason})).stop, stop, "{reason}");
+        }
+        assert_eq!(anthropic_reply(&json!({"content": [thinking]})).stop, "");
+        let cut = anthropic_reply(&json!({"content": [thinking, call], "stop_reason": "max_tokens"}));
+        assert!(cut.calls.is_empty());
+        assert_eq!(cut.assistant["content"], json!([thinking]));
+
+        let openai = |finish: &str, message: Value| openai_reply(&json!({"choices": [{"message": message, "finish_reason": finish}]}));
+        let calls = json!([{"id": "c1", "type": "function", "function": {"name": "measure", "arguments": "{\"a\""}}]);
+        assert_eq!(openai("stop", json!({"content": "Hi"})).stop, "");
+        assert_eq!(openai("content_filter", json!({"content": null})).stop, "refusal");
+        assert_eq!(openai("stop", json!({"content": null, "refusal": "I can't help with that."})).stop, "refusal");
+        let cut = openai("length", json!({"content": null, "tool_calls": calls}));
+        assert_eq!(cut.stop, "max_tokens");
+        assert!(cut.calls.is_empty());
+        assert!(cut.assistant.get("tool_calls").is_none());
+    }
+
+    /// The loop ends the turn with the reason: an answer that is only thinking, cut off at the
+    /// length limit, ends as `max_tokens`, not as a normal end with nothing said.
+    #[test]
+    fn a_cut_off_answer_ends_the_turn_as_max_tokens() {
+        let http: HttpFn = Arc::new(move |r: &HttpRequest| {
+            if r.method == "GET" {
+                return Ok((200, b"{\"data\":[]}".to_vec()));
+            }
+            let body = json!({"content": [{"type": "thinking", "thinking": "", "signature": "s"}], "stop_reason": "max_tokens"});
+            Ok((200, body.to_string().into_bytes()))
+        });
+        let cfg = ApiConfig {
+            name: "Test".into(),
+            protocol: Protocol::Anthropic,
+            base_url: "http://localhost:1".into(),
+            model: "m".into(),
+            key: Some("sk-secret".into()),
+            http,
+            request_timeout_s: 300,
+        };
+        let ctx = StartContext { cwd: std::env::temp_dir(), bridge: None, tools: None, wake: Box::new(|| {}) };
+        let mut b = ApiBackend::start(cfg, ctx).unwrap();
+        b.prompt(&[PromptPart::Text("look closer".into())]);
+        let events = wait_for_turn(&mut b);
+        b.shutdown(true);
+        assert!(matches!(events.last(), Some(Event::TurnEnded { reason }) if reason == "max_tokens"), "{events:?}");
+    }
+
     #[test]
     fn anthropic_urls_take_the_base_with_or_without_v1() {
         assert_eq!(endpoint("https://api.anthropic.com", "messages"), "https://api.anthropic.com/v1/messages");
@@ -2706,6 +2808,66 @@ mod tests {
         assert_eq!(sent[1]["messages"].as_array().unwrap().last().unwrap()["content"][0]["type"], "tool_result");
         assert_eq!(sent[1]["messages"].as_array().unwrap().last().unwrap()["content"][0]["tool_use_id"], "t1");
         b.shutdown(true);
+    }
+
+    /// Thinking blocks are signed against the conversation before them: once an older view is
+    /// dropped, the earlier ones go too, or Claude refuses the request (#9417). Until then, and
+    /// for replies after the drop, they are sent back as they came.
+    #[test]
+    fn a_dropped_view_takes_earlier_thinking_with_it() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let log = seen.clone();
+        let http: HttpFn = Arc::new(move |r: &HttpRequest| {
+            if r.method == "GET" {
+                return Ok((200, b"{\"data\":[]}".to_vec()));
+            }
+            let n = {
+                let mut l = log.lock().unwrap();
+                l.push(serde_json::from_slice(r.body.as_deref().unwrap_or(b"null")).unwrap());
+                l.len()
+            };
+            let content = if n == 2 {
+                json!([{"type": "redacted_thinking", "data": "r2"}])
+            } else {
+                json!([{"type": "thinking", "thinking": "", "signature": format!("s{n}")}, {"type": "text", "text": format!("Seen {n}.")}])
+            };
+            Ok((200, json!({"content": content, "stop_reason": "end_turn"}).to_string().into_bytes()))
+        });
+        let cfg = ApiConfig {
+            name: "Test".into(),
+            protocol: Protocol::Anthropic,
+            base_url: "http://localhost:1".into(),
+            model: "m".into(),
+            key: Some("sk-secret".into()),
+            http,
+            request_timeout_s: 300,
+        };
+        let ctx = StartContext { cwd: std::env::temp_dir(), bridge: None, tools: None, wake: Box::new(|| {}) };
+        let mut b = ApiBackend::start(cfg, ctx).unwrap();
+        for n in 1..=3 {
+            b.prompt(&[PromptPart::Text(format!("look {n}")), PromptPart::Image { mime: "image/png".into(), base64: format!("V{n}") }]);
+            wait_for_turn(&mut b);
+        }
+        b.prompt(&[PromptPart::Text("and now?".into())]);
+        wait_for_turn(&mut b);
+        b.shutdown(true);
+        let sent = seen.lock().unwrap();
+        assert_eq!(sent.len(), 4);
+        let replies = |i: usize| -> Vec<Value> {
+            sent[i]["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "assistant").map(|m| m["content"].clone()).collect()
+        };
+        // Two views fit: the reply goes back untouched, signature and all.
+        assert_eq!(replies(1)[0][0]["signature"], "s1");
+        // The third view drops the first: no earlier thinking is left, a thinking-only reply
+        // keeps a note, and the words stay.
+        let third = replies(2);
+        assert_eq!(sent[2]["messages"][0]["content"][1]["text"], DROPPED_VIEW_NOTE);
+        assert_eq!(third[0], json!([{"type": "text", "text": "Seen 1."}]));
+        assert_eq!(third[1], json!([{"type": "text", "text": DROPPED_THINKING_NOTE}]));
+        // Nothing is dropped for the next message, so the reply after the drop keeps its thinking.
+        let fourth = replies(3);
+        assert_eq!(fourth[..2], third[..]);
+        assert_eq!(fourth[2][0]["signature"], "s3");
     }
 
     #[test]

@@ -34,15 +34,20 @@ pub(crate) fn control(app: &mut crate::SolveApp, params: &Value) -> Result<Value
         "attention" => vec![attention()],
         "row" => vec![zebra(), section()],
         "kinds" => vec![zebra(), result(), attention()],
+        "many" => vec![zebra(), section(), result(), attention()],
         "key" => vec![item("draft", StatusKind::Mode, "ui.draft", "Z · 1°".into(), true)],
-        _ => return Err("preset must be off, mode, result, attention, row, kinds or key".into()),
+        _ => return Err("preset must be off, mode, result, attention, row, kinds, many or key".into()),
     };
-    app.viewport_status_fixture = Fixture { items, presentation: StatusPresentation::default() };
+    app.viewport_status_fixture.items = items;
     Ok(json!({"preset": preset, "count": app.viewport_status_fixture.items.len()}))
 }
 
 pub(crate) fn show(app: &mut crate::SolveApp, ctx: &egui::Context, viewport: egui::Rect) {
-    if app.viewport_status_fixture.items.is_empty() {
+    let fixture = &mut app.viewport_status_fixture;
+    let folded = app.preferences.viewport_status_summary && fixture.items.len() >= 3;
+    fixture.presentation.reconcile_summary(ctx, if folded { fixture.items.iter().map(|item| item.id.clone()).collect() } else { Vec::new() });
+    if fixture.items.is_empty() {
+        fixture.presentation.open_key = None;
         return;
     }
     let content = crate::shell::content_rect(app, viewport);
@@ -60,7 +65,7 @@ pub(crate) fn show(app: &mut crate::SolveApp, ctx: &egui::Context, viewport: egu
         return;
     }
     let fixture = &mut app.viewport_status_fixture;
-    let actions = crate::ui_kit::viewport_status_row(ctx, free, &fixture.items, &mut fixture.presentation, |ui, _| {
+    let key_contents = |ui: &mut egui::Ui, _: &str| {
         let t = crate::theme::Tokens::get();
         ui.label(crate::i18n::tr("cmd.inspect_draft"));
         ui.label(egui::RichText::new(format!("{} (0.00, 0.00, 1.00)", crate::i18n::tr("ui.pull_direction"))).monospace().color(t.text_dim));
@@ -78,10 +83,20 @@ pub(crate) fn show(app: &mut crate::SolveApp, ctx: &egui::Context, viewport: egu
                 ui.label(label);
             });
         }
-    });
+    };
+    // Deliberately use the oldest specimen as newest to exercise chronology/slot divergence.
+    // This is explicit specimen metadata, never an engine activation claim.
+    let newest = fixture.items.first().map(|item| item.id.as_str()).unwrap_or_default();
+    let actions = if folded {
+        crate::ui_kit::viewport_status_summary(ctx, free, &fixture.items, newest, &mut fixture.presentation, key_contents)
+    } else {
+        crate::ui_kit::viewport_status_row(ctx, free, &fixture.items, &mut fixture.presentation, key_contents)
+    };
     for action in actions {
-        if let StatusAction::Clear(id) = action {
-            fixture.items.retain(|item| item.id != id);
+        match action {
+            StatusAction::Clear(id) => fixture.items.retain(|item| item.id != id),
+            StatusAction::ClearAll => fixture.items.clear(),
+            StatusAction::Edit(_) => {}
         }
     }
 }

@@ -55,9 +55,11 @@ mod tests;
 
 // The contracts, by command file.
 pub mod component;
+pub mod construct;
 pub mod edit;
 pub mod features;
 pub mod inspect;
+pub mod print_face;
 pub mod render;
 pub mod render_lights;
 pub mod render_ui;
@@ -67,7 +69,7 @@ pub mod sketch_create;
 pub mod sketch_equation;
 pub mod view_navigation;
 
-pub use check::{Contract, Issue, ParamCheck, TypedContract, input_schema_for, output_schema_for, run_checked, run_checked_as};
+pub use check::{Contract, Issue, ParamCheck, TypedContract, input_schema_for, issues, output_schema_for, run_checked, run_checked_as};
 pub use types::*;
 
 /// A command's `run` that checks the call against the contract command `$id` publishes

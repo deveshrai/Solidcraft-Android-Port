@@ -647,3 +647,65 @@ fn shared_evaluation_refreshes_live_sketches_and_keeps_unknown_features_conserva
     assert!(model.results.iter().all(|r| r.error.is_none()));
     assert!(model.evaluate_shared(&doc), "an unclassified feature must keep the ordinary evaluation path");
 }
+
+/// A saved model writes each set of sketch keys once, as the keys it sets and drops relative to
+/// the set written before it (every state repeating its whole set made a 5,484-feature design's
+/// model too large for its file, which then kept only some states and evaluated the rest on
+/// opening). Every state reads back the keys it was evaluated with, also in a model thinned to
+/// fewer states; a set that names no set before it is refused.
+#[test]
+fn saved_states_read_back_their_sketch_keys() {
+    let mut doc = Document::new("Sketch keys");
+    for i in 0..4 {
+        doc.add_feature(line_sketch(PlaneRef::Origin { name: "XY".into() }, Vec2::new(f64::from(i) + 1.0, 1.0)), None).unwrap();
+        for j in 0..3 {
+            let corner = point_expr(Vec3::new(f64::from(i) * 20.0, f64::from(j) * 20.0, 0.0));
+            let kind = FeatureKind::Box { corner, length: "5".into(), width: "5".into(), height: "5".into(), operation: Operation::NewBody };
+            doc.add_feature(kind, None).unwrap();
+        }
+    }
+    let mut model = Model::new();
+    model.evaluate(&doc);
+    let keys = |m: &Model| m.results.iter().map(|r| r.state.sketch_keys.clone()).collect::<Vec<_>>();
+    assert_eq!(model.state().sketch_keys.len(), 4);
+    let saved = model.saved(&doc).unwrap();
+    assert_eq!(saved.records["sketch_key_sets"].as_array().unwrap().len(), 4, "one set per sketch");
+    assert_eq!(saved.records["states"].as_array().unwrap().len(), doc.features.len());
+    assert_eq!(keys(&Model::adopt(&doc, &saved).unwrap()), keys(&model));
+    // The final state alone (every body costs more than the budget): the sets are all kept.
+    let pieces: Vec<Vec<(usize, usize)>> = (0..saved.bodies.len()).map(|i| vec![(i, 1 << 20)]).collect();
+    let (thinned, _, _) = saved.thinned(&pieces, 0).unwrap();
+    assert_eq!(thinned.records["states"].as_array().unwrap().len(), 1);
+    assert_eq!(thinned.final_state().unwrap().sketch_keys, model.state().sketch_keys);
+    assert_eq!(keys(&Model::adopt(&doc, &thinned).unwrap()), keys(&model));
+    // Sets and drops read as written; a base that is not an earlier set is refused.
+    let with_sets = |sets: serde_json::Value| SavedModel {
+        records: {
+            let mut r = saved.records.clone();
+            r["sketch_key_sets"] = sets;
+            r
+        },
+        bodies: saved.bodies.clone(),
+    };
+    let first = *model.state().sketch_keys.keys().next().unwrap();
+    let dropped = with_sets(serde_json::json!([
+        {"set": [[first, "0000000000000001"], [7, "0000000000000002"]], "drop": []},
+        {"base": 0, "set": [], "drop": []},
+        {"base": 1, "set": [[8, "0000000000000003"]], "drop": [first]},
+        {"base": 0, "set": [[7, "00000000000000ff"]], "drop": []},
+    ]));
+    let want: BTreeMap<u64, u64> = [(7, 0xff), (first, 1)].into();
+    assert_eq!(dropped.final_state().unwrap().sketch_keys, want);
+    let dropped = with_sets(serde_json::json!([
+        {"set": [[first, "0000000000000001"], [7, "0000000000000002"]], "drop": []},
+        {"base": 0, "set": [], "drop": []},
+        {"base": 0, "set": [], "drop": []},
+        {"base": 1, "set": [[8, "0000000000000003"]], "drop": [first]},
+    ]));
+    assert_eq!(dropped.final_state().unwrap().sketch_keys, [(7, 2), (8, 3)].into());
+    for base in [3, 4] {
+        let sets =
+            serde_json::json!([{"set": [], "drop": []}, {"set": [], "drop": []}, {"set": [], "drop": []}, {"base": base, "set": [], "drop": []}]);
+        assert!(with_sets(sets).final_state().is_err(), "base {base}");
+    }
+}

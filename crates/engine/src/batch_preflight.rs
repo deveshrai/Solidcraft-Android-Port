@@ -19,7 +19,7 @@
 use serde_json::{Value, json};
 
 use crate::schema::ParamCheck;
-use crate::{CommandSpec, EngineError, find_command};
+use crate::{EngineError, find_command};
 
 /// The first step a batch would refuse at its turn.
 #[derive(Clone, Debug, PartialEq)]
@@ -57,11 +57,11 @@ pub fn check(steps: &[Value], level: ParamCheck, host: &[&str]) -> Option<Refusa
         if host.contains(&id) {
             continue;
         }
-        let Some(spec) = find_command(id) else {
+        if find_command(id).is_none() {
             return Some(Refusal { index, command: Some(id.to_string()), error: EngineError::UnknownCommand(id.to_string()).to_string() });
-        };
+        }
         if level == ParamCheck::Strict
-            && let Some(refusal) = contract_refusal(index, id, spec, step)
+            && let Some(refusal) = contract_refusal(index, id, step)
         {
             return Some(refusal);
         }
@@ -76,13 +76,13 @@ pub fn check(steps: &[Value], level: ParamCheck, host: &[&str]) -> Option<Refusa
 pub fn contracts(steps: &[Value]) -> Option<Refusal> {
     steps.iter().enumerate().find_map(|(index, step)| {
         let id = step.get("command").or_else(|| step.get("id")).and_then(Value::as_str)?;
-        contract_refusal(index, id, find_command(id)?, step)
+        contract_refusal(index, id, step)
     })
 }
 
-/// Step `index`'s refusal when its parameters break `spec`'s typed contract.
-fn contract_refusal(index: usize, id: &str, spec: &CommandSpec, step: &Value) -> Option<Refusal> {
-    let first = spec.contract?.check(step.get("params").unwrap_or(&Value::Null)).into_iter().next()?;
+/// Step `index`'s refusal when its parameters break the typed contract of its command `id`.
+fn contract_refusal(index: usize, id: &str, step: &Value) -> Option<Refusal> {
+    let first = crate::schema::issues(id, step.get("params").unwrap_or(&Value::Null)).into_iter().next()?;
     Some(Refusal { index, command: Some(id.to_string()), error: crate::params::bad(id, first.message).to_string() })
 }
 

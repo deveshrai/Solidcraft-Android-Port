@@ -4432,6 +4432,35 @@ fn render_workspace_pick_stage_tools_filter_sample_clicks_with_shots_shown_and_h
 }
 
 #[test]
+fn modelling_select_panel_shows_and_clears_renders_component_pick() {
+    use egui::accesskit::{Role, Toggled};
+    const BODY: &str = "Select bodies (a face picks its body)";
+    const COMPONENT: &str = "Select components (a face picks its component)";
+    let (mut h, _) = render_pick_sample();
+    h.step(&json!({"click":{"handle":"render:pick:component"}})).unwrap();
+    enter(&mut h.app, false).unwrap();
+    h.settle();
+    h.step(&json!({"click":{"handle":"tab:VIEW"}})).unwrap();
+    h.step(&json!({"click":{"handle":"panel:VIEW:SELECT"}})).unwrap();
+
+    let check = |h: &Harness, body: bool, component: bool| {
+        assert_eq!((h.app.ui.pick_bodies, h.app.ui.pick_components), (body, component));
+        let tree = h.output.accesskit_update.as_ref().unwrap();
+        for (label, on) in [(BODY, body), (COMPONENT, component)] {
+            let node = tree.nodes.iter().find(|(_, n)| n.role() == Role::CheckBox && n.label() == Some(label));
+            assert_eq!(node.and_then(|(_, n)| n.toggled()), Some(if on { Toggled::True } else { Toggled::False }), "{label}");
+        }
+    };
+    check(&h, false, true);
+    h.step(&json!({"widget":"Faces"})).unwrap();
+    for (label, body, component) in [(COMPONENT, false, false), (BODY, true, false), (COMPONENT, false, true), (BODY, true, false)] {
+        h.step(&json!({"widget":label})).unwrap();
+        check(&h, body, component);
+        assert!(h.app.ui.pick_off.iter().any(|kind| kind == "faces"), "changing pick mode must preserve the panel's Faces filter");
+    }
+}
+
+#[test]
 fn render_workspace_click_modifiers_clear_and_browser_share_selection() {
     use solidcraft_engine::Sel;
     let mut h = Harness::new();
@@ -6406,4 +6435,86 @@ fn the_field_of_view_rescales_only_the_design_view() {
     h.frames(2);
     assert!(h.app.ui.perspective);
     assert!((size(h.app.cam, 1.2) / size(design, 0.6) - 1.0).abs() < 1e-9, "the design view keeps its size: {:?}", h.app.cam);
+}
+
+/// Fit Product keeps the whole product inside the image, whatever its aspect: a picture
+/// taller than wide moves the camera back so the sides hold it too.
+#[test]
+fn fit_aspect_keeps_the_product_inside_a_tall_image() {
+    use solidcraft_engine::geom::{Aabb3, Vec3};
+    let bounds = Aabb3 { min: Vec3::new(-30.0, -30.0, -30.0), max: Vec3::new(30.0, 30.0, 30.0) };
+    let radius = bounds.diagonal();
+    for fov in [0.0, std::f64::consts::FRAC_PI_4] {
+        let mut landscape = Camera { fov, ..Default::default() };
+        assert!(landscape.fit_aspect(&bounds, 2.0));
+        let mut plain = Camera { fov, ..Default::default() };
+        plain.fit(&bounds);
+        assert_eq!(landscape, plain, "a wide picture keeps the standard fit");
+        for aspect in [0.5, 0.25] {
+            let mut cam = Camera { fov, ..Default::default() };
+            assert!(cam.fit_aspect(&bounds, aspect));
+            for p in corners(&bounds) {
+                let q = cam.view_proj(aspect, radius).apply(p);
+                let (x, y) = (q[0] / q[3], q[1] / q[3]);
+                assert!(x.abs() <= 1.0 && y.abs() <= 1.0, "fov {fov}, aspect {aspect}: corner {p:?} projects to ({x}, {y}), outside the picture");
+            }
+        }
+        // Nothing to fit leaves the camera alone.
+        let mut cam = Camera { fov, distance: 123.0, ..Default::default() };
+        assert!(!cam.fit_aspect(&Aabb3::EMPTY, 0.5));
+        assert_eq!(cam.distance, 123.0);
+    }
+}
+
+fn corners(b: &solidcraft_engine::geom::Aabb3) -> Vec<solidcraft_engine::geom::Vec3> {
+    let mut out = Vec::new();
+    for x in [b.min.x, b.max.x] {
+        for y in [b.min.y, b.max.y] {
+            for z in [b.min.z, b.max.z] {
+                out.push(solidcraft_engine::geom::Vec3::new(x, y, z));
+            }
+        }
+    }
+    out
+}
+
+/// Entering Render fits the product to the setup in effect, not to the draft that setup
+/// replaces: in a cold workspace whose saved Studio setup is portrait (1024 × 4096) the fit
+/// waits for the setup to load, so with Frame open the product sits inside the final 1:4
+/// picture, in orthographic and in perspective, and leaving Render gives the Design camera
+/// back.
+#[test]
+fn entering_render_fits_a_saved_portrait_setup_inside_its_final_frame() {
+    for fov in [0.0, 0.8] {
+        let mut h = Harness::new();
+        h.app.run("solid.box", json!({"length":60,"width":20,"height":20})).unwrap();
+        let name = h.app.render_workspace.view.name.clone();
+        h.app.run("render.settings.set", json!({"name":name,"set":{"width":1024,"height":4096}})).unwrap();
+        h.app.ui.perspective = fov > 0.0;
+        h.app.cam.fov = fov;
+        h.frames(2);
+        let design = (h.app.cam, h.app.ui.perspective);
+        let draft = &h.app.render_workspace.view.draft;
+        assert_ne!((draft.width, draft.height), (1024, 4096), "the cold draft is still the default");
+        h.app.render_workspace.view.stage = Stage::Frame;
+        enter(&mut h.app, true).unwrap();
+        h.frames(3);
+        assert!(shot::overlay_visible(&h.app));
+        let draft = &h.app.render_workspace.view.draft;
+        assert_eq!((draft.width, draft.height), (1024, 4096), "the saved setup is in effect");
+        let frame = shot::preview_rect(&h.app, h.app.viewport.rect.unwrap()).unwrap();
+        assert!((frame.width() / frame.height() - 0.25).abs() < 1e-3, "{frame:?}");
+        let scene = solidcraft_engine::product_scene::extract(&h.app.session).unwrap();
+        let cam = h.app.cam;
+        let radius = scene.bounds.diagonal().max(10.0) + scene.bounds.center().dist(cam.target);
+        for p in corners(&scene.bounds) {
+            let (x, y, _) = cam.to_screen(p, f64::from(frame.width()), f64::from(frame.height()), radius).unwrap();
+            assert!(
+                (0.0..=f64::from(frame.width())).contains(&x) && (0.0..=f64::from(frame.height())).contains(&y),
+                "fov {fov}: corner {p:?} at ({x}, {y}) outside the {frame:?} picture"
+            );
+        }
+        enter(&mut h.app, false).unwrap();
+        assert_eq!((h.app.cam, h.app.ui.perspective), design, "fov {fov}: leaving Render restores the Design camera");
+    }
 }

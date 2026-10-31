@@ -94,6 +94,22 @@ pub(super) fn interface(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                             app.preferences.ribbon_labels = selected == 0;
                         }
                     });
+                    ui_kit::row(ui, "", |ui| {
+                        let check = setting::persistent_ribbon_pressed(app, ui).on_hover_text(app.tr("prefs.persistent_ribbon_pressed_help"));
+                        crate::scenario::publish_target("prefs:persistent_ribbon_pressed", check.rect);
+                    });
+                    ui_kit::row(ui, "", |ui| {
+                        let check = setting::viewport_analysis_status(app, ui).on_hover_text(app.tr("prefs.viewport_analysis_status_help"));
+                        crate::scenario::publish_target("prefs:viewport_analysis_status", check.rect);
+                    });
+                    ui_kit::row(ui, "", |ui| {
+                        let check = setting::viewport_section_status(app, ui).on_hover_text(app.tr("prefs.viewport_section_status_help"));
+                        crate::scenario::publish_target("prefs:viewport_section_status", check.rect);
+                    });
+                    ui_kit::row(ui, "", |ui| {
+                        let check = setting::viewport_status_summary(app, ui).on_hover_text(app.tr("prefs.viewport_status_summary_help"));
+                        crate::scenario::publish_target("prefs:viewport_status_summary", check.rect);
+                    });
                     // The SKETCH tab outside a sketch too (#7904).
                     ui_kit::row(ui, "", |ui| {
                         let check = setting::sketch_tab_always(app, ui).on_hover_text(app.tr("prefs.sketch_tab_always_note"));
@@ -137,6 +153,14 @@ pub(super) fn interface(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                             crate::scenario::publish_handle(&format!("prefs:toast_place:{key}"), at);
                         }
                     }
+                    // The ribbon's panel drop-downs: a list, or a grid of large icons (#4739).
+                    ui_kit::row(ui, app.tr("prefs.menus"), |ui| {
+                        let mut selected = usize::from(app.preferences.ribbon_icon_grid);
+                        if ui_kit::segmented(ui, &mut selected, &[app.tr("prefs.menu_list"), app.tr("prefs.menu_grid")], Default::default()) {
+                            app.preferences.ribbon_icon_grid = selected == 1;
+                        }
+                    });
+                    setting::ribbon_menus_skip_pinned(app, ui);
                     ui_kit::row(ui, app.tr("prefs.history"), |ui| {
                         let mut selected = if app.preferences.history_in_browser {
                             3
@@ -253,10 +277,20 @@ pub(super) fn interface(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                             app.preferences.browser_bodies_folders = *mode;
                         }
                     });
+                    // The eye beside the fold arrow, where it was before #8718.
+                    ui_kit::row(ui, "", |ui| {
+                        let check = setting::browser_eye_left(app, ui).on_hover_text(app.tr("prefs.browser_eye_left_note"));
+                        crate::scenario::publish_target("prefs:browser_eye_left", check.rect);
+                    });
                     // What is being edited, the sketch's state and the units, along the bottom (#7243).
                     ui_kit::row(ui, "", |ui| {
                         let check = setting::status_bar(app, ui).on_hover_text(app.tr("prefs.status_bar_note"));
                         crate::scenario::publish_target("prefs:status_bar", check.rect);
+                    });
+                    // The selection's measurement in the view's corner (#7000).
+                    ui_kit::row(ui, "", |ui| {
+                        let check = setting::quick_measure(app, ui).on_hover_text(app.tr("prefs.quick_measure_note"));
+                        crate::scenario::publish_target("prefs:quick_measure", check.rect);
                     });
                     ui_kit::text(ui, app.tr("prefs.layout_note"), ui_kit::Text::Hint("layout"));
                     ui_kit::text(ui, app.tr("prefs.history_sketches_note"), ui_kit::Text::Hint("history_sketches"));

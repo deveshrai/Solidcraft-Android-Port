@@ -222,9 +222,21 @@ pub(crate) fn choice_row(ui: &mut Ui, label: &str, id: &str, selected: &mut usiz
 pub(super) fn sized_row<R>(ui: &mut Ui, text: &str, height: f32, control: impl FnOnce(&mut Ui) -> R) -> R {
     let mut passthrough = false;
     if crate::prefs_search::querying(ui) {
-        crate::prefs_search::set_control(ui, text);
+        // A row with no label has no words to match; its controls supply them (#9265).
+        let unlabelled = text.is_empty();
+        if unlabelled {
+            crate::prefs_search::set_unlabelled_control(ui);
+        } else {
+            crate::prefs_search::set_control(ui, text);
+        }
         if !crate::prefs_search::visible(ui, &[text]) {
+            if unlabelled {
+                crate::prefs_search::push_unlabelled(ui);
+            }
             let result = crate::prefs_search::run_hidden(ui, text, control);
+            if unlabelled {
+                crate::prefs_search::pop_unlabelled(ui);
+            }
             crate::prefs_search::recheck(ui, &[text]);
             return result;
         }

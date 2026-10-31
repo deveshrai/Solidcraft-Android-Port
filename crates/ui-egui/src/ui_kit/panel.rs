@@ -652,7 +652,7 @@ impl<'a> Panel<'a> {
                 viewport.left() + width,
                 (viewport.right() - if gap > 0.0 { Tokens::get().space_8 } else { 0.0 }).max(viewport.left() + width),
             ),
-            crate::frame::Side::Left => self.anchor.x.clamp(viewport.left(), viewport.right() - width),
+            crate::frame::Side::Left => crate::shell::within(self.anchor.x, viewport.left(), viewport.right() - width),
         };
         let t = Tokens::get();
         let chrome = t.form_header_height + t.form_footer_height + t.form_gap_y * 2.0 + self.frame.total_margin().sum().y + gap;
@@ -1036,10 +1036,13 @@ impl<'a> Window<'a> {
                 if self.body_padding {
                     let height =
                         (dimension(ui.ctx().content_rect().height()) - t.form_header_height - t.form_footer_height - t.space_24 * 2.0).max(0.0);
+                    // Offer the body all the room the screen leaves, not just the height the card
+                    // had last frame: a card first laid out on a tiny page (a browser canvas not
+                    // sized yet) would otherwise keep a body of no height, its buttons hidden (#9472).
                     egui::ScrollArea::vertical()
                         .id_salt("window_body")
                         .max_height(height)
-                        .min_scrolled_height(0.0)
+                        .min_scrolled_height(height)
                         .auto_shrink([false, true])
                         .show(ui, body);
                 } else {
@@ -1117,7 +1120,8 @@ impl<'a> Window<'a> {
     /// The same bounded card frame, either movable or an input-blocking modal.
     pub(super) fn surface(&self, ctx: &egui::Context, modal: bool, add: impl FnOnce(&mut Ui) -> (bool, super::Action)) -> (bool, super::Action) {
         let frame = if self.page_chrome {
-            super::navigation_popup_frame().inner_margin(0).fill(Tokens::get().dialog_body.gamma_multiply(0.97))
+            // A system window covers what is behind it, like every other window (#9078).
+            super::navigation_popup_frame().inner_margin(0).fill(Tokens::get().dialog_body)
         } else {
             Panel::card_frame(ctx)
         };

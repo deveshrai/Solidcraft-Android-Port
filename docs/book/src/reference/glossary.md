@@ -324,6 +324,32 @@ The first instance is the original.
 - **Elsewhere:** instance, element, occurrence.
 - **For translators:** not an occurrence of a component.
 
+### personal sheet metal rule
+
+A sheet metal rule kept in the user's preferences instead of a design, ready to add to any design.
+
+Picking one in Sheet Metal Rules fills the rule manager, and its OK copies the rule into the
+design, which then keeps a copy of its own. It is an app setting, not part of a design.
+
+- **In SolidCraft:** Sheet Metal Rules › Personal rules (`sheet.manage_rules`); the
+  `personal_sheet_rules` key of the stored preferences.
+- **Don't use:** preset, template, library rule.
+- **Elsewhere:** rule library, sheet metal style library.
+- **For translators:** "personal" as in the user's own, not private or confidential.
+
+### print face
+
+The flat face of a body that lies on the print bed when the body is sent to a slicer.
+
+A body has one print face at most. The export turns a copy of the body so this face points down
+at Z = 0, with the centre of mass over the origin; the design itself does not move.
+
+- **In SolidCraft:** `body.print_face`; the `print_faces` of a design; the `print_faces` and
+  `warnings` of a `file.send_to_slicer` reply.
+- **Don't use:** bottom face, base face (both say where a face is now, not where it is printed).
+- **Elsewhere:** place on face, lay flat, bed face.
+- **For translators:** the face the part stands on while it prints, not the printer's bed.
+
 ### reference edge
 
 A straight edge of a flat face that a Single hole's centre or a cylinder's base centre keeps a
@@ -497,6 +523,6 @@ reports a different name (`EdgeFlangeFeature`), so a script can't match one agai
 
 ## Open questions for the maintainer
 
-- **British or American spelling** for labels and docs. Today both are in use (colour and color,
-  centre and center, favourite and favorite); ids and keys use American spelling. #2501 proposes
-  an English (UK) language option, so either base spelling can be read in the other.
+- **British or American spelling** in the docs. The labels are settled: `en.json` is American
+  English, and English (UK) (`en-GB.json`, #2501) holds the British spelling. The docs still use
+  both (colour and color, centre and center); ids and keys use American spelling.

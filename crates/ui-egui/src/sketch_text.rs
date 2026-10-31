@@ -28,6 +28,9 @@ const ANGLE: usize = 3;
 const ANGLE_END: usize = 4;
 const LINE_SPACING: usize = 5;
 
+/// Starts the words' expression in the Text field (`='W' + number(Width)`, #9281).
+const FORMULA: char = '=';
+
 /// No input is active: a click on the canvas picks no path until the Path chip is clicked.
 const NO_INPUT: usize = usize::MAX;
 
@@ -36,8 +39,11 @@ const NO_INPUT: usize = usize::MAX;
 pub struct Tx {
     sketch: u64,
     pub(crate) link: String,
+    /// The words as typed, or `=` and the expression they follow.
     pub(crate) text: String,
     initial_text: String,
+    /// The saved words follow an expression: an untouched Text field keeps it.
+    initial_formula: bool,
     /// The font as typed: an installed font's family name or a font file's path; empty is the built-in font.
     pub(crate) font: String,
     initial_font: String,
@@ -70,8 +76,8 @@ pub struct Tx {
     shown: Option<Source>,
 }
 
-/// A text source as the dialog sees it: text, font (empty: built-in), its values, its style and
-/// the expressions behind its values.
+/// A text source as the dialog sees it: text (`=` and its expression when the words follow one),
+/// font (empty: built-in), its values, its style and the expressions behind its values.
 type Source = (String, String, [f64; FIELDS], TextStyle, [Option<String>; FIELDS]);
 
 /// What the Text tool puts down, ready to be typed over.
@@ -222,8 +228,15 @@ fn source(app: &SolveApp, sketch: u64, link: &str) -> Option<Source> {
     let source = sk.link(link).filter(|source| source.kind == LinkKind::Text)?;
     let LinkSource::Text { text, at, height, angle, font, style, exprs } = &source.source else { return None };
     let values = [at.x, at.y, *height, *angle, style.letter_spacing, style.line_spacing];
+    let text = exprs.text.as_ref().map_or_else(|| text.clone(), |e| format!("{FORMULA}{e}"));
     let exprs = [exprs.x.clone(), exprs.y.clone(), exprs.height.clone(), exprs.angle.clone(), None, None];
-    Some((text.clone(), font.clone().unwrap_or_default(), values, style.clone(), exprs))
+    Some((text, font.clone().unwrap_or_default(), values, style.clone(), exprs))
+}
+
+/// Whether the saved words of `link` follow an expression.
+fn formula_saved(app: &SolveApp, sketch: u64, link: &str) -> bool {
+    let source = app.session.doc.sketch(sketch).ok().and_then(|sk| sk.link(link).map(|l| l.source.clone()));
+    matches!(source, Some(LinkSource::Text { exprs, .. }) if exprs.text.is_some())
 }
 
 /// The fields as shown: a value, or the expression behind it.
@@ -281,6 +294,7 @@ fn kind_for(app: &SolveApp, entity: &str) -> Option<Kind> {
     let (scale, unit) = crate::prefs::unit_scale(&app.session.doc.units);
     let values = fields(&original, &exprs, unit, scale);
     let mut tx = Tx {
+        initial_formula: formula_saved(app, sketch, &link),
         sketch,
         link,
         initial_text: text.clone(),
@@ -468,6 +482,7 @@ pub(crate) fn refresh(app: &SolveApp, k: &mut Tx) -> bool {
             k.text = text.clone();
         }
         k.initial_text = text;
+        k.initial_formula = formula_saved(app, k.sketch, &k.link);
     }
     if font != k.initial_font {
         if k.font == k.initial_font {
@@ -486,7 +501,7 @@ pub(crate) fn rows(ui: &mut egui::Ui, k: &mut Tx, inputs: &mut [SelInput], activ
     if ui.memory(|m| m.has_focus(id)) {
         enter |= ui.input_mut(|i| !i.modifiers.shift && i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
     }
-    let response = ui_kit::multiline_text_field(ui, "Text", id, &mut k.text);
+    let response = ui_kit::multiline_text_field(ui, "Text", id, &mut k.text).on_hover_text(crate::i18n::tr("sketch_text.formula"));
     crate::scenario::publish_handle("dialog:Text", response.rect.center());
     if k.focus {
         response.request_focus();
@@ -678,11 +693,18 @@ fn edit_params(app: &SolveApp, k: &Tx) -> Result<Value, String> {
         TextAlign::Right => "right",
     };
     let mut params = json!({
-        "link": k.link, "text": k.text, "at": [sent_x, sent_y], "height": sent_height,
+        "link": k.link, "at": [sent_x, sent_y], "height": sent_height,
         "bold": k.style.bold, "italic": k.style.italic, "align": align,
         "letter_spacing": letter_spacing, "line_spacing": line_spacing,
         "path": k.style.path.clone().unwrap_or_default(), "reverse": k.style.reverse,
     });
+    // `=` starts the words' expression; an untouched text keeps what it was, so a typed text that
+    // happens to start with `=` stays typed.
+    let untouched = k.text == k.initial_text;
+    match k.text.trim_start().strip_prefix(FORMULA).filter(|_| !untouched || k.initial_formula) {
+        Some(e) => params["text_expression"] = json!(e.trim()),
+        None => params["text"] = json!(k.text),
+    }
     // Omitting an unchanged angle keeps its exact saved radians (or its expression).
     if k.values.get(ANGLE) != k.initial.get(ANGLE) {
         params["angle"] = sent_angle;
@@ -1157,6 +1179,60 @@ mod tests {
         h.frames(2);
         ok(&mut h);
         assert!(editing(&h.app), "the dialog stays open on a field that cannot be used");
+    }
+
+    fn words_of(h: &Harness, link: &str) -> String {
+        let sid = h.app.session.active_sketch.unwrap();
+        let LinkSource::Text { text, .. } = h.app.session.doc.sketch(sid).unwrap().link(link).unwrap().source.clone() else { panic!("text source") };
+        text
+    }
+
+    /// #9281: a Text starting with `=` is the words' expression: OK keeps it; reopened, the field
+    /// shows it with its `=` and an untouched OK keeps it; typed words replace it; a typed text
+    /// that happens to start with `=` stays typed; the rebuilt design's words follow the parameter.
+    #[test]
+    fn a_text_starting_with_equals_builds_its_words_from_parameters() {
+        let (mut h, link, _) = setup();
+        let formula = |h: &mut Harness| {
+            h.app.start("sketch.edit_text");
+            h.frames(3);
+            replace(h, "dialog:Text", "='W' + number(Width)");
+            ok(h);
+            assert!(!editing(&h.app), "{:?}", h.app.dialog.as_ref().and_then(|d| d.error.clone()));
+            assert_eq!(exprs_of(h, &link).text.as_deref(), Some("'W' + number(Width)"));
+        };
+        let reopen = |h: &mut Harness| {
+            select_text(h, &link);
+            h.app.start("sketch.edit_text");
+            h.frames(3);
+        };
+        h.app.run("parameters.add", json!({"name":"Width","expression":"85 mm"})).unwrap();
+        formula(&mut h);
+        assert_eq!(words_of(&h, &link), "W85");
+
+        reopen(&mut h);
+        assert_eq!(tx(&h.app).text, "='W' + number(Width)");
+        ok(&mut h);
+        assert_eq!(exprs_of(&h, &link).text.as_deref(), Some("'W' + number(Width)"));
+
+        reopen(&mut h);
+        replace(&mut h, "dialog:Text", "Plain");
+        ok(&mut h);
+        assert_eq!((exprs_of(&h, &link).text, words_of(&h, &link).as_str()), (None, "Plain"));
+
+        h.app.run("sketch.edit_text", json!({"link": link, "text": "=5"})).unwrap();
+        reopen(&mut h);
+        ok(&mut h);
+        assert_eq!((exprs_of(&h, &link).text, words_of(&h, &link).as_str()), (None, "=5"));
+
+        select_text(&mut h, &link);
+        formula(&mut h);
+        let sid = h.app.session.active_sketch.unwrap();
+        h.app.run("sketch.finish", json!({})).unwrap();
+        h.app.run("parameters.change", json!({"name":"Width","expression":"90 mm"})).unwrap();
+        let state = h.app.session.model.state();
+        let LinkSource::Text { text, .. } = &state.sketch(sid).unwrap().sketch.link(&link).unwrap().source else { panic!("text source") };
+        assert_eq!(text, "W90");
     }
 
     #[test]

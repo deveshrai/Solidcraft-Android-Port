@@ -895,6 +895,7 @@ impl Sketch {
         }
         // A resized face can enumerate the same boundary in another order. Match the
         // shared-point graph in normalized sketch space before discarding its identity.
+        let mut same_order_agrees = false;
         if let Some(cur) = &cur
             && points.len() == lay.pts.len()
             && cur.len() == lay.curves.len()
@@ -1035,11 +1036,34 @@ impl Sketch {
                 }
                 return Ok(false);
             }
+            // A face resized by more than the match above allows (#9001: an angle's wall made
+            // thicker moves the inner corner by more than a tenth of the face) is still the same
+            // boundary when two witnesses agree: the new boundary was read in the same order
+            // with the same curves, and each point read in that order is, among the points on
+            // the same loop with lines the same way, clearly the nearest to where it was.
+            same_order_agrees = same
+                && loop_roles.as_ref().is_some_and(|roles| {
+                    (0..points.len()).all(|k| {
+                        let (Some(&fresh_i), Some(p)) = (order.get(k), a.get(k)) else { return false };
+                        let mut candidates: Vec<(usize, f64)> = b
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, _)| {
+                                old_roles.get(k) == fresh_roles.get(*i)
+                                    && roles.old.get(k) == roles.fresh.get(*i)
+                                    && roles.old_lines.get(k).zip(roles.fresh_lines.get(*i)).is_some_and(|(x, y)| loops::same_lines(x, y))
+                            })
+                            .map(|(i, q)| (i, p.dist(*q)))
+                            .collect();
+                        candidates.sort_by(|x, y| x.1.total_cmp(&y.1));
+                        matches!(candidates.first(), Some((i, d)) if *i == fresh_i && candidates.get(1).is_none_or(|(_, second)| *d < *second * 0.75))
+                    })
+                });
         }
         // Equal topology alone does not identify a face boundary: an outer rim and a
         // hole can have identical point graphs. Never move saved curve ids between them
         // when the geometric match is ambiguous; the document reports a lost link.
-        if same && self.link(id).is_some_and(|l| matches!(l.source, LinkSource::Face { .. })) {
+        if same && !same_order_agrees && self.link(id).is_some_and(|l| matches!(l.source, LinkSource::Face { .. })) {
             self.set_link_lost(id, true);
             return Err(SketchError::Invalid("projected face boundary identity is ambiguous; last geometry retained".into()));
         }

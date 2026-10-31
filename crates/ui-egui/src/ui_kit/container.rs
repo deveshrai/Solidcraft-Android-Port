@@ -146,6 +146,18 @@ impl Container {
         });
     }
 
+    /// [`Self::tooltip`] holding what `add` draws (a picture, say), beside `response` rather than
+    /// at the pointer, so it does not cover the row's neighbours.
+    pub(crate) fn tooltip_ui(response: &egui::Response, add: impl FnOnce(&mut egui::Ui)) {
+        let ctx = &response.ctx;
+        let mut tip = egui::Tooltip::for_enabled(response);
+        tip.popup = tip.popup.align(egui::RectAlign::RIGHT_START).frame(Self::new(ctx, Surface::Toast).tooltip_frame(ctx));
+        tip.show(|ui| {
+            add(ui);
+            crate::scenario::publish_rect("kit:tooltip", ui.min_rect());
+        });
+    }
+
     /// Declare contacts from shell geometry; styling remains entirely in the container.
     pub fn joined(mut self, edges: DockEdges) -> Self {
         self.joined = Some(edges);
@@ -298,9 +310,9 @@ impl Container {
     }
 
     pub fn area(self, id: Id) -> egui::Area {
-        // Persistent workspace cards stay below tool/system windows even when clicked.
-        // Other areas keep egui's normal window layer; popups choose their own order.
-        let order = if self.surface == Surface::Panel { egui::Order::Background } else { egui::Order::Middle };
+        // Workspace cards and viewport status stay below tool/system windows even when
+        // clicked. Other areas keep the normal window layer; popups choose their order.
+        let order = if matches!(self.surface, Surface::Panel | Surface::ViewportStatus) { egui::Order::Background } else { egui::Order::Middle };
         egui::Area::new(id).enabled(self.input_enabled()).order(order)
     }
 

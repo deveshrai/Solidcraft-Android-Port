@@ -7,6 +7,10 @@ use solidcraft_engine::render::Camera;
 pub(crate) struct Layout {
     pub viewport: Rect,
     pub drawable: Rect,
+    /// The view without the panels (Browser, Assistant, workspace panels), but still counting
+    /// the floating controls as drawn over it: where a fit puts the middle of the model. The
+    /// compass and the navigation bar take room out of `drawable` without moving this.
+    pub middle: Rect,
     pub content: Rect,
     pub axis_view: Rect,
     pub navigation: Rect,
@@ -161,13 +165,18 @@ impl Layout {
                 Rect::NOTHING
             };
         }
+        let within = if fit_in_content { content } else { viewport };
+        // Only the panels decide where the middle of the view is; the controls below are drawn
+        // over the view and would otherwise push the model into a corner of it.
+        let middle = free_rect(within, &obstacles);
+        let middle = if middle.is_positive() && middle.is_finite() { middle } else { within };
         for control in [axis_view, navigation, confirm] {
             if control.is_positive() {
                 obstacles.push(control);
             }
         }
-        let drawable = free_rect(if fit_in_content { content } else { viewport }, &obstacles).shrink(16.0 / scale);
-        Self { viewport, drawable, content, axis_view, navigation, confirm }
+        let drawable = free_rect(within, &obstacles).shrink(16.0 / scale);
+        Self { viewport, drawable, middle, content, axis_view, navigation, confirm }
     }
 }
 
@@ -211,8 +220,25 @@ pub(crate) fn fit_bounds(mut cam: Camera, bounds: &Aabb3, layout: &Layout, fov: 
         depth = depth.max(d.dot(b).abs());
     }
     let h = f64::from(layout.viewport.height());
-    let hh = (hx * h / f64::from(layout.drawable.width())).max(hy * h / f64::from(layout.drawable.height())).max(0.5);
-    let offset = layout.drawable.center() - layout.viewport.center();
+    let drawable = layout.drawable;
+    let hh = (hx * h / f64::from(drawable.width())).max(hy * h / f64::from(drawable.height())).max(0.5);
+    // Home and Fit put the model in the middle of the view. `drawable` decides its size and keeps
+    // it clear of every control; the room it leaves over in either direction moves the model
+    // towards `middle`, the middle of the view, instead of the middle of the gap between the
+    // compass and the navigation bar, which left it low and to one side of an otherwise empty view.
+    let size = vec2((hx * h / hh) as f32, (hy * h / hh) as f32).min(drawable.size());
+    let toward = |want: f32, lo: f32, hi: f32| if lo <= hi { want.clamp(lo, hi) } else { (lo + hi) * 0.5 };
+    let at = pos2(
+        toward(layout.middle.center().x, drawable.left() + size.x * 0.5, drawable.right() - size.x * 0.5),
+        toward(layout.middle.center().y, drawable.top() + size.y * 0.5, drawable.bottom() - size.y * 0.5),
+    );
+    let half = vec2((at.x - drawable.left()).min(drawable.right() - at.x), (at.y - drawable.top()).min(drawable.bottom() - at.y));
+    let room = Rect::from_center_size(at, half * 2.0);
+    if !room.is_positive() || !room.is_finite() {
+        return None;
+    }
+    let hh = (hx * h / f64::from(room.width())).max(hy * h / f64::from(room.height())).max(0.5);
+    let offset = room.center() - layout.viewport.center();
     let tangent = if perspective { (fov * 0.5).tan() } else { 0.4 };
     cam.distance = hh / tangent + if perspective { depth } else { 0.0 };
     // Offset the target so the model projects into the free rectangle in the original viewport.
@@ -226,7 +252,7 @@ pub(crate) fn fit_bounds(mut cam: Camera, bounds: &Aabb3, layout: &Layout, fov: 
                 x.is_finite()
                     && y.is_finite()
                     && (0.0..=1.0).contains(&z)
-                    && layout.drawable.contains(pos2(layout.viewport.left() + x as f32, layout.viewport.top() + y as f32))
+                    && room.contains(pos2(layout.viewport.left() + x as f32, layout.viewport.top() + y as f32))
             })
         });
         if fits {

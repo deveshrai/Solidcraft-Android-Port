@@ -587,9 +587,9 @@ fn folder_and_group_menus_make_rename_and_drop_groups() {
     act(&mut app, &t, "Show/Hide");
     assert!(app.session.visibility.hidden_bodies.is_empty());
     assert!(app.session.folder_hidden(&format!("c0/g{}", g.id)));
-    assert!(g.items.iter().all(|b| !app.session.body_visible(b)));
+    assert!(g.item_keys().all(|b| !app.session.body_visible(b)));
     act(&mut app, &t, "Show/Hide");
-    assert!(g.items.iter().all(|b| app.session.body_visible(b)));
+    assert!(g.item_keys().all(|b| app.session.body_visible(b)));
     act(&mut app, &t, "Ungroup");
     assert!(app.session.doc.browser_groups.is_empty());
     act(&mut app, &folder, "New Group");
@@ -1466,6 +1466,8 @@ fn every_context_target_has_identified_icon_rows_including_submenus() {
         Target::Group { id: group_id, scope: "c0".into() },
         Target::Origin,
         Target::Units,
+        Target::VisualStyle,
+        Target::ViewTool,
         Target::ToolbarCommand { id: "solid.extrude".into() },
         Target::Toolbar,
         Target::HistoryControls,

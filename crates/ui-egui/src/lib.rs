@@ -195,6 +195,7 @@ pub mod op_auto;
 pub mod open_elsewhere;
 pub(crate) mod open_meshing;
 pub mod params_dialog;
+pub mod personal_sheet_rules;
 pub(crate) mod pick_index;
 pub(crate) mod place_gizmo;
 pub(crate) mod plugins;
@@ -208,6 +209,10 @@ pub mod preview;
 mod primitive_placement;
 #[cfg(test)]
 mod primitive_units_tests;
+mod print_face_ui;
+pub(crate) mod quick_measure;
+#[cfg(test)]
+mod quick_measure_tests;
 pub mod recovery_ui;
 pub mod ref_images;
 mod render_ui;
@@ -239,6 +244,7 @@ mod sketch3d_frame_ui_tests;
 pub(crate) mod sketch_attachment_ui;
 #[cfg(test)]
 mod sketch_attachment_ui_tests;
+mod sketch_construction;
 pub mod sketch_dims;
 pub(crate) mod sketch_display;
 #[cfg(test)]
@@ -257,6 +263,7 @@ mod sketch_modify_ui_tests;
 mod sketch_moving_click_tests;
 pub mod sketch_palette;
 mod sketch_pattern_tree;
+pub mod sketch_report;
 #[cfg(test)]
 mod sketch_side_ui_tests;
 mod sketch_state;
@@ -299,6 +306,7 @@ mod view_confirm;
 pub mod view_pick;
 pub mod viewport;
 mod viewport_layout;
+mod viewport_status;
 mod viewport_status_fixture;
 pub mod workspace;
 
@@ -361,6 +369,18 @@ pub struct UiState {
     pub tool_cursor: bool,
 }
 
+impl UiState {
+    fn pick_mode(&self) -> &'static str {
+        if self.pick_components {
+            "component"
+        } else if self.pick_bodies {
+            "body"
+        } else {
+            "face"
+        }
+    }
+}
+
 impl Default for UiState {
     fn default() -> Self {
         UiState {
@@ -406,6 +426,11 @@ pub struct Services {
     pub graphics_path: Option<String>,
     /// Linux: the window system this run uses, `wayland` or `x11` (Preferences shows it, #3083).
     pub window_system: Option<&'static str>,
+    /// The desktop's dark (`Some(true)`) or light preference as the host reads it, for Theme:
+    /// System where the window toolkit does not report it (Linux desktops, #7944). Called every
+    /// frame, so it only reads a value kept up to date elsewhere. None, or `None` from it: the
+    /// window toolkit's theme.
+    pub desktop_dark: Option<Box<dyn Fn() -> Option<bool>>>,
     /// Adapter names and descriptive labels from the desktop renderer's chosen backends.
     pub graphics_adapters: Vec<(String, String)>,
     /// HTTPS GET for the update check (`update`); None: never check (browser, tests).
@@ -452,7 +477,16 @@ pub struct PreSketchComponent {
     pub opened_in: u64,
 }
 
+/// Which late UI handler has first refusal of this frame's Escape. Reserving input
+/// is distinct from having performed cancellation (`esc_handled`).
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum EscapeOwner {
+    Dialog,
+    Overlay,
+}
+
 pub struct SolveApp {
+    pub(crate) viewport_status: ui_kit::StatusPresentation,
     pub(crate) viewport_status_fixture: viewport_status_fixture::Fixture,
     /// Compact browser embed: retain model panels and joint controls without application chrome.
     pub embedded: bool,
@@ -489,6 +523,8 @@ pub struct SolveApp {
     pub params: Option<params_dialog::ParamsDialog>,
     /// The Design Properties window, when open.
     pub design_properties: Option<design_properties::DesignProperties>,
+    /// The Sketch report window (`sketch.inspect` from the ribbon), when open.
+    pub sketch_report: Option<sketch_report::SketchReport>,
     /// The Bill of Materials window, when open.
     pub bom: Option<bom_panel::BomPanel>,
     material_card_review: Option<material_card_review::ReviewWindow>,
@@ -574,6 +610,7 @@ pub struct SolveApp {
     pub foreign_copy: Option<std::sync::Arc<solidcraft_engine::ForeignCopy>>,
     /// Esc was already acted on this frame (by the shortcuts), so later handlers skip it.
     pub esc_handled: bool,
+    pub(crate) escape_owner: Option<EscapeOwner>,
     /// When Esc was last pressed (input time): a second press soon after finishes the sketch.
     pub last_escape: Option<f64>,
     pub status: Option<(String, f64, bool)>,
@@ -592,6 +629,10 @@ pub struct SolveApp {
     pub network_prompt: Option<network_prompt::NetworkPrompt>,
     /// Designs left by crashed apps, offered for recovery.
     pub recoverable: Vec<solidcraft_engine::recovery::Entry>,
+    /// Discard all was clicked in the recovery window: its confirmation is showing (#9299).
+    pub recovery_discard_all: bool,
+    /// The selection's measurement in the view's corner (#7000).
+    pub(crate) quick_measure: quick_measure::QuickMeasure,
     /// The bodies of a just-opened Y-up file, offered to be stood up (`stand_up`).
     pub stand_up: Option<Vec<String>>,
     /// The placement of the component that file came in as: the offer turns it.
@@ -662,6 +703,8 @@ pub struct SolveApp {
     styled: bool,
     fitted: bool,
     pending_fit: Option<(Camera, solidcraft_engine::geom::Aabb3, bool)>,
+    /// Frames a pending fit has waited for a layout that can frame it (`resolve_fit`).
+    fit_waits: u32,
     /// The sheet metal flat pattern's own pan and zoom.
     pub flat_view: dialogs_sheet::FlatView,
     /// The start page.
@@ -709,6 +752,7 @@ impl SolveApp {
         #[cfg(not(target_arch = "wasm32"))]
         solidcraft_engine::slicer_files::clean_old();
         let mut app = SolveApp {
+            viewport_status: Default::default(),
             viewport_status_fixture: Default::default(),
             session,
             ui: UiState::default(),
@@ -730,6 +774,7 @@ impl SolveApp {
             dialog: None,
             params: None,
             design_properties: None,
+            sketch_report: None,
             bom: None,
             material_card_review: None,
             menu: context_menu::MenuState::default(),
@@ -772,6 +817,7 @@ impl SolveApp {
             own_clipboard_stamp: 0,
             foreign_copy: None,
             esc_handled: false,
+            escape_owner: None,
             last_escape: None,
             status: None,
             status_undo: false,
@@ -782,6 +828,8 @@ impl SolveApp {
             disk_prompt: false,
             network_prompt: None,
             recoverable: Vec::new(),
+            recovery_discard_all: false,
+            quick_measure: Default::default(),
             stand_up: None,
             stand_up_occurrence: None,
             stand_up_reason: false,
@@ -819,6 +867,7 @@ impl SolveApp {
             styled: false,
             fitted: false,
             pending_fit: None,
+            fit_waits: 0,
             flat_view: Default::default(),
             embedded: false,
             home: home::HomeState::default(),
@@ -1415,18 +1464,35 @@ impl SolveApp {
         });
     }
 
+    /// A command that needs one choice from a short list: its menu under the button that started it
+    /// (a second click closes it), or in the middle of the viewport when started without one
+    /// (command search, a shortcut, `ui.start`).
+    fn open_choice_menu(&mut self, opener: Option<egui::Rect>, target: context_menu::Target) {
+        if let Some(rect) = opener {
+            context_menu::toggle_for(self, rect, rect.left_bottom(), target);
+        } else {
+            let at = self.viewport.rect.map(|rect| rect.center()).unwrap_or(egui::pos2(300.0, 200.0));
+            context_menu::open_for(self, at, target);
+        }
+    }
+
     /// Start an interactive command with its menu anchored below the invoking button.
     pub(crate) fn start_at(&mut self, id: &str, opener: Option<egui::Rect>) {
-        self.start_with_variant_memory(id, true, opener);
+        self.start_with_variant_memory(id, true, opener, false);
     }
 
     /// A dedicated toolbar button starts its exact tool without replacing the sketch family's
     /// main button. Choosing a variant from a menu still uses `start` and remembers that choice.
     pub(crate) fn start_pinned(&mut self, id: &str, opener: Option<egui::Rect>) {
-        self.start_with_variant_memory(id, false, opener);
+        self.start_with_variant_memory(id, false, opener, false);
     }
 
-    fn start_with_variant_memory(&mut self, id: &str, remember_variant: bool, opener: Option<egui::Rect>) {
+    /// Existing Section editor uses the normal command-start lifecycle, with explicit edit intent.
+    pub(crate) fn start_section_edit(&mut self) {
+        self.start_with_variant_memory("inspect.section", true, None, true);
+    }
+
+    fn start_with_variant_memory(&mut self, id: &str, remember_variant: bool, opener: Option<egui::Rect>, section_edit: bool) {
         self.tree.clear_folder_pick();
         if id == "timeline.play" {
             if let Err(why) = self.run(id, json!({})) {
@@ -1459,6 +1525,11 @@ impl SolveApp {
                 self.animate_view(id.trim_start_matches("view."));
                 self.home.open = false;
             }
+            return;
+        }
+        // Print Face (Ctrl+B) acts on the selected face at once: it has no dialog.
+        if id == "body.print_face" {
+            print_face_ui::toggle(self);
             return;
         }
         if id == "view.normal_to" {
@@ -1544,6 +1615,17 @@ impl SolveApp {
         if id == "view.layout" {
             let mode = if self.ui.layout == shell::LayoutMode::Floating { "compact" } else { "floating" };
             let _ = self.run(id, json!({"mode":mode}));
+            return;
+        }
+        // A display choice opens its choices, as the navigation bar's menus do: run with no
+        // parameters it could only fail (#8868).
+        let choice = match id {
+            "view.visual_style" => Some(context_menu::Target::VisualStyle),
+            "view.tool" => Some(context_menu::Target::ViewTool),
+            _ => None,
+        };
+        if let Some(target) = choice {
+            self.open_choice_menu(opener, target);
             return;
         }
         if id == "view.render_focus" {
@@ -1660,7 +1742,7 @@ impl SolveApp {
             });
             return;
         }
-        if !sketch_tools::start_hook(self, id) {
+        if !section_edit && !sketch_tools::start_hook(self, id) {
             return;
         }
         if remember_variant && solidcraft_engine::find_command(id).is_some_and(|c| c.info(&self.session).enabled) {
@@ -1681,6 +1763,10 @@ impl SolveApp {
         }
         if matches!(id, "document.metadata" | "document.metadata.set") {
             design_properties::open(self);
+            return;
+        }
+        if id == "sketch.inspect" {
+            sketch_report::open(self);
             return;
         }
         if id == "assembly.bom" {
@@ -1968,11 +2054,16 @@ impl SolveApp {
         let _ = self.run("component.activate", p);
     }
 
-    /// Turn the view to face the sketch just opened, and remember the view from `before` it and
-    /// the one facing it for when the sketch ends (#7038).
-    pub(crate) fn look_at_opened_sketch(&mut self, before: Camera) {
-        dialogs::look_at_sketch(self);
+    /// Turn the view to face the sketch just opened, unless the "Turn to face a sketch when it
+    /// opens" preference is off, and remember the view from `before` it and the one facing it for
+    /// when the sketch ends (#7038). Returns whether the view turned.
+    pub(crate) fn look_at_opened_sketch(&mut self, before: Camera) -> bool {
+        let turn = self.preferences.sketch_open_look_at;
+        if turn {
+            dialogs::look_at_sketch(self);
+        }
         self.pre_sketch_cam = self.session.active_sketch.map(|sketch| PreSketchView { sketch, before, facing: self.settled_cam() });
+        turn
     }
 
     /// Where the camera is going: the end of the running camera animation, else where it is.
@@ -2037,6 +2128,12 @@ impl SolveApp {
         // Rolling forward past the features after the sketch recomputes them (an edited sketch
         // under a text cut): off the window thread when it takes a while.
         let _ = self.run_heavy("timeline.roll_to", marker.map(|m| json!({ "position": m })).unwrap_or_else(|| json!({})));
+    }
+
+    /// Visibility in the editor's scene: hidden face-profile sources are temporarily shown
+    /// without changing the session's visibility or either history stack.
+    pub(crate) fn body_visible(&self, name: &str) -> bool {
+        self.session.body_visible(name) || self.dialog.as_ref().is_some_and(|d| d.edit_source_bodies.iter().any(|source| source == name))
     }
 
     /// Everything shown as selected: the selection plus the open dialog's inputs.
@@ -2119,6 +2216,9 @@ impl SolveApp {
         self.home.open = false;
         documents::prepare_open(self);
         if let Ok(r) = self.run("doc.open", json!({ "path": path })) {
+            // An opened design comes up at the home view, not at the angle the design before it
+            // was left at: `prepare_open` keeps the camera when it reuses a blank design.
+            self.cam.set_view(StandardView::Iso);
             self.fit_view();
             stand_up::offer(self, path, &[], Some(&r));
         }
@@ -2169,6 +2269,10 @@ impl SolveApp {
         self.fit_view();
     }
 
+    /// How many frames a fit waits for a viewport that can frame it before it gives up (about
+    /// two seconds): a window that never draws its viewport must not ask for frames forever.
+    const FIT_WAITS: u32 = 120;
+
     pub fn fit_view(&mut self) {
         if render_workspace::result_active(self) {
             render_workspace::fit_result(self);
@@ -2191,6 +2295,7 @@ impl SolveApp {
         self.viewport.orbit_free = None;
         let bounds = viewport::view_bounds(self);
         self.pending_fit = Some((self.cam, bounds, false));
+        self.fit_waits = 0;
         self.cam = self.fitted(self.cam);
     }
 
@@ -2199,6 +2304,7 @@ impl SolveApp {
         self.cancel_view_animation();
         self.viewport.orbit_free = None;
         self.pending_fit = Some((self.cam, bounds, false));
+        self.fit_waits = 0;
         self.cam = self.fitted_bounds(self.cam, &bounds);
     }
 
@@ -2214,12 +2320,20 @@ impl SolveApp {
         cam
     }
 
+    /// `cam` framing `bounds` in the viewport as it is laid out now, or `None` when this layout
+    /// can't frame it: the viewport has not been drawn since the fit was asked for, so the
+    /// rectangle to frame into is the one from before the Home screen or a dialog covered it.
+    fn try_fitted_bounds(&self, cam: Camera, bounds: &solidcraft_engine::geom::Aabb3) -> Option<Camera> {
+        let layout = self.viewport.layout.as_ref()?;
+        if render_workspace::active(self) {
+            return viewport_layout::fit_product_bounds(cam, bounds, &render_workspace::picture_layout(self, layout));
+        }
+        viewport_layout::fit_bounds(cam, bounds, layout, self.view_fov())
+    }
+
     fn fitted_bounds(&self, mut cam: Camera, bounds: &solidcraft_engine::geom::Aabb3) -> Camera {
-        if let Some(layout) = &self.viewport.layout {
-            if render_workspace::active(self) {
-                return viewport_layout::fit_product_bounds(cam, bounds, layout).unwrap_or(cam);
-            }
-            return viewport_layout::fit_bounds(cam, bounds, layout, self.view_fov()).unwrap_or(cam);
+        if self.viewport.layout.is_some() {
+            return self.try_fitted_bounds(cam, bounds).unwrap_or(cam);
         }
         // Framed at the angle the view draws with, keeping the camera's own.
         let previous = cam;
@@ -2234,12 +2348,35 @@ impl SolveApp {
         if self.viewport.layout.is_some()
             && let Some((cam, bounds, animate)) = self.pending_fit.take()
         {
-            let to = if bounds.is_empty() { self.fitted(cam) } else { self.fitted_bounds(cam, &bounds) };
+            // Nothing to frame: the camera goes to the empty design's own distance.
+            let want = if bounds.is_empty() { viewport::view_bounds(self) } else { bounds };
+            let to = if want.is_empty() { Some(self.fitted(cam)) } else { self.try_fitted_bounds(cam, &want) };
+            let Some(to) = to else {
+                // The viewport hasn't been drawn since the fit was asked for (the Home screen was
+                // over it, as when a sample or a file is opened from it), so framing it now would
+                // frame it into the rectangle of whatever was there before and leave the design
+                // wherever the camera happened to be. Keep the request and frame it when the
+                // viewport is drawn; give up only if that never comes.
+                if self.fit_waits < Self::FIT_WAITS {
+                    self.fit_waits += 1;
+                    self.pending_fit = Some((cam, bounds, animate));
+                } else {
+                    self.fit_waits = 0;
+                    self.cam = self.fitted_bounds(cam, &want);
+                }
+                ctx.request_repaint();
+                return;
+            };
+            self.fit_waits = 0;
             if animate {
                 self.animate_to(to);
             } else {
                 self.cam = to;
                 self.cam_anim = None;
+                // An open's framing settles here, once the layout is known. An open still meshing
+                // takes this as the camera it framed from the outlines, so the framing it does
+                // when the last body is ready isn't mistaken for the user having moved the view.
+                open_meshing::note_framed(self);
             }
             ctx.request_repaint();
         }
@@ -2407,7 +2544,15 @@ impl SolveApp {
         }
         open_meshing::tick(self, ctx);
         open_meshing::refresh(self, ctx.input(|i| i.time));
-        self.esc_handled = false;
+        // Routing survives a layout re-pass, but never the next input frame. The legacy
+        // policy retains its original per-pass cancellation flag behavior.
+        let first_pass = ctx.current_pass_index() == 0;
+        if first_pass {
+            self.escape_owner = None;
+        }
+        if first_pass || !crate::viewport_status::enabled(self) {
+            self.esc_handled = false;
+        }
         prefs::apply(self, ctx);
         // The view's own dark or light only changes tokens, not egui's visuals: no restyle.
         theme::set_viewport_dark(self.preferences.viewport_theme.dark());
@@ -2518,6 +2663,7 @@ impl SolveApp {
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         value_step::set_enabled(ui.ctx(), self.preferences.step_values);
+        canvas::set_boxes_shown(ui.ctx(), self.preferences.value_boxes_in_view);
         let t0 = now_ms();
         // The first frames draw with the bundled faces while the system's CJK, Hangul and Thai
         // faces are read on a thread; the fonts are installed again once they are there.
@@ -2609,6 +2755,7 @@ impl SolveApp {
             toolbar::toolbar(self, ui);
         }
         theme::TabAccent::publish(self, ui.ctx());
+        browser::publish_row_prefs(self, ui.ctx());
         if !floating {
             agent_chat::show(self, ui);
         }
@@ -2707,6 +2854,7 @@ impl SolveApp {
         self.resolve_fit(ui.ctx());
         params_dialog::show(self, ui.ctx());
         design_properties::show(self, ui.ctx());
+        sketch_report::show(self, ui.ctx());
         bom_panel::show(self, ui.ctx());
         material_card_review::show(self, ui.ctx());
         recovery_ui::show(self, ui.ctx());

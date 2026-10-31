@@ -20,9 +20,10 @@
   design until you show them again. Hidden tabs keep
   their customised buttons, commands in search and shortcuts; with all tabs hidden, **+** remains.
 - **Browser** (left). The design as a tree: document settings and units, named views, the
-  origin, bodies, sketches, construction planes, canvases, joints and components. The eye shows or
-  hides an item, a component's radio button makes it the active component, and right-clicking any
-  row gives that item's menu. Right-click the design or a component and choose **Expand All** or
+  origin, bodies, sketches, construction planes, canvases, joints and components. The eye at the
+  row's right end shows or hides an item (**Preferences › Interface › Eye next to the fold arrow**
+  puts it back beside the fold arrow), a component's radio button makes it the active component,
+  and right-clicking any row gives that item's menu. Right-click the design or a component and choose **Expand All** or
   **Collapse All** to open or close every folder under that row (the design row stays visible
   when the whole tree is collapsed). Rows drag into groups and other components. **Preferences ›
   Interface › Bodies folders** sets when a component's bodies sit in a Bodies folder of their own:
@@ -34,10 +35,16 @@
   reach something under something else (two lines drawn on top of each other, coincident points,
   an edge in front of a face, overlapping bodies), hold the left button still for half a second
   (long-press on a touch screen) or right-click › **Select Other…**: a list of everything under
-  the cursor opens there, the sketch being edited first. Hovering a row lights it up; clicking it
+  the cursor opens there, including hidden bodies and sketches near the pointer.
+  The popup grows to fit the available window space, opening above the pointer when it needs
+  the extra room, and scrolls only when the rows do not fit. Turn off **Select hidden geometry
+  with Select Other** in Preferences › Sketch & selection to restore the original visible-only
+  list under the pointer. Picking a hidden object leaves its
+  visibility unchanged, so an Extrude profile can be chosen through a covering body.
+  The sketch being edited comes first. Hovering a row lights it up; clicking it
   selects it (Shift or Ctrl adds), and in a command's dialog it goes to the active selection box.
   Esc or a click elsewhere closes the list. Clicking again on the same spot, with nothing changed
-  in between, selects the next thing in that list. The
+  in between, cycles through visible candidates at that point. The
   wheel zooms at the cursor, the middle button pans and right-drag orbits freely (the mouse
   preset in Preferences switches to SolidWorks, Inventor, Alias, Maya, Blender, Tinkercad, OpenSCAD, HFSS or Touchpad style). On a
   trackpad, pinch zooms and two-finger scroll pans (Navigation › Two-finger scroll pans;
@@ -189,9 +196,22 @@ it sits on the left or under the browser and is wide enough for names. They are 
 rows: the same eyes, folds and right-click menus, so one list is enough for single-part work. The
 History at the bottom is unchanged.
 
+Interface › **Menus** › **Large icons** (the default is **List**) shows a section's
+command menu as rows of large icons instead of a list of names. Point at an icon for its name,
+shortcut and help; the arrow keys move across and between rows. Rest the pointer on an icon for
+two seconds and a pin in its corner can be clicked to pin it to the ribbon or remove it (a
+quicker click anywhere on the icon starts the command). Right-clicking the icon, or dragging it
+onto the ribbon, also pins it; a pinned command always shows its pin.
+
+Interface › **Leave pinned commands out of the drop-down menus** (off by default) lists in a
+section's menu only the commands that are not already buttons on the ribbon. When the window is
+too narrow for a section's buttons, its menu lists them again.
+
 ### Colour themes
 
-Interface › **Theme** lists Dark, Light and System (follows the operating system), the built-in
+Interface › **Theme** lists Dark, Light and System (follows the operating system, and changes
+with it; on Linux it reads the desktop's dark or light style through the desktop portal, as
+GNOME and KDE set it), the built-in
 themes and any themes you have imported. A choice applies at once. Under the themes, **Viewport** draws the 3D view in the Light or Dark theme's colours whatever the window uses, for example the model on a light view in a dark window (**Follow theme**, the default, keeps the theme's own). **Logo** draws the SolidCraft logo at the top left in shades of the theme's accent instead of the theme's logo colours. The built-in themes are Gruvbox
 (dark and light, each in hard, normal and soft contrast), SolidCraft 95, Platinum 9, Cupertino,
 Green Phosphor, Amber Phosphor, Blueprint, One Dark, Tokyo Night, Solarized Light, Nord, High

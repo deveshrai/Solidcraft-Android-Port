@@ -2772,6 +2772,9 @@ pub struct Document {
     /// Physical material per body (by body name); others use the default.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub materials: std::collections::BTreeMap<String, String>,
+    /// The flat face per body (by body name) that a slicer export lays on the print bed.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub print_faces: std::collections::BTreeMap<String, crate::config::ConfigFaceTarget>,
     /// Physical materials defined in this design (`material.create`), next to the built-in ones.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub user_materials: Vec<UserMaterial>,
@@ -2792,9 +2795,11 @@ pub struct Document {
     /// order; feature ids remain the source of truth when features are renamed or reordered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub timeline_groups: Vec<TimelineGroup>,
-    /// Browser item order per component folder (`"<component>/<folder>"` → item keys).
+    /// Browser order per component folder (`"<component>/<folder>"` → groups and item keys).
+    /// The `components` folder orders a component's sub-components (by placement id); it is not
+    /// drawn as a folder.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub browser_order: std::collections::BTreeMap<String, Vec<String>>,
+    pub browser_order: std::collections::BTreeMap<String, Vec<BrowserEntry>>,
     /// Named views: saved cameras.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub named_views: Vec<NamedView>,
@@ -2883,8 +2888,69 @@ pub struct BrowserGroup {
     #[serde(default)]
     pub component: u64,
     pub folder: String,
+    /// The group that holds this one; `None` is the top level of its folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u64>,
+    /// The group's items and child groups in display order. A child group missing here still
+    /// belongs to it (its `parent` says so) and is listed after the ones that are here.
     #[serde(default)]
-    pub items: Vec<String>,
+    pub items: Vec<BrowserEntry>,
+}
+
+/// One line of a browser order list: a group (a number in a saved design) or an item (a string:
+/// an item key or body name, so a body named `"1"` never clashes with group 1).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BrowserEntry {
+    Group(u64),
+    Item(String),
+}
+
+impl From<&str> for BrowserEntry {
+    fn from(key: &str) -> Self {
+        BrowserEntry::Item(key.to_string())
+    }
+}
+
+impl From<String> for BrowserEntry {
+    fn from(key: String) -> Self {
+        BrowserEntry::Item(key)
+    }
+}
+
+impl BrowserEntry {
+    pub fn item(key: &str) -> Self {
+        BrowserEntry::Item(key.to_string())
+    }
+
+    pub fn as_item(&self) -> Option<&str> {
+        match self {
+            BrowserEntry::Item(k) => Some(k),
+            BrowserEntry::Group(_) => None,
+        }
+    }
+
+    pub fn is_item(&self, key: &str) -> bool {
+        self.as_item() == Some(key)
+    }
+}
+
+/// How many groups may sit inside one another (a top-level group is level 1).
+pub const MAX_GROUP_NESTING: usize = 8;
+
+/// The folders a browser group or order list can be for. `components` only orders sub-components.
+pub const BROWSER_FOLDERS: [&str; 4] = ["bodies", "sketches", "construction", "components"];
+
+impl BrowserGroup {
+    /// The keys of the items directly in this group, in order.
+    pub fn item_keys(&self) -> impl Iterator<Item = &str> {
+        self.items.iter().filter_map(BrowserEntry::as_item)
+    }
+
+    /// Whether this group holds the item directly.
+    pub fn has_item(&self, key: &str) -> bool {
+        self.items.iter().any(|e| e.is_item(key))
+    }
 }
 
 /// A saved history folder. Folders may nest; each feature or joint belongs to at most one folder.
@@ -3018,6 +3084,7 @@ impl Document {
             body_components: Default::default(),
             body_offsets: Default::default(),
             materials: Default::default(),
+            print_faces: Default::default(),
             user_materials: Vec::new(),
             appearances: Default::default(),
             favorites: Default::default(),
@@ -3033,7 +3100,7 @@ impl Document {
     }
 
     /// Rename body `old` to `new` where the design keeps things by body name outside its
-    /// features: materials, appearances, plastic rules, configuration columns, offsets, components and the
+    /// features: materials, print faces, appearances, plastic rules, configuration columns, offsets, components and the
     /// browser's groups and order. (The features are the rename command's to change.)
     ///
     /// A name the design numbered (`Body1`) is not used again after the rename: the design's
@@ -3048,6 +3115,10 @@ impl Document {
         }
         if let Some(m) = self.materials.remove(old) {
             self.materials.insert(new.to_string(), m);
+        }
+        if let Some(mut face) = self.print_faces.remove(old) {
+            face.body = new.to_string();
+            self.print_faces.insert(new.to_string(), face);
         }
         if let Some(rule) = self.plastic.assigned.remove(old) {
             self.plastic.assigned.insert(new.to_string(), rule);
@@ -3075,15 +3146,16 @@ impl Document {
         if let Some(c) = self.body_components.remove(old) {
             self.body_components.insert(new.to_string(), c);
         }
-        for g in self.browser_groups.iter_mut().filter(|g| g.folder == "bodies") {
-            for k in g.items.iter_mut().filter(|k| *k == old) {
-                *k = new.to_string();
+        let rename = |e: &mut BrowserEntry| {
+            if e.is_item(old) {
+                *e = BrowserEntry::item(new);
             }
+        };
+        for g in self.browser_groups.iter_mut().filter(|g| g.folder == "bodies") {
+            g.items.iter_mut().for_each(rename);
         }
         for (_, v) in self.browser_order.iter_mut().filter(|(k, _)| k.ends_with("/bodies")) {
-            for k in v.iter_mut().filter(|k| *k == old) {
-                *k = new.to_string();
-            }
+            v.iter_mut().for_each(rename);
         }
     }
 
@@ -3402,9 +3474,13 @@ impl Document {
     /// Read a design file's JSON (any format this build knows; older ones are upgraded).
     pub fn from_json(s: &str) -> Result<Document> {
         crate::render_resources::check_json_budget(s)?;
-        let d = crate::format::read(s)?;
+        let mut d = crate::format::read(s)?;
         if d.features.len() > MAX_FEATURES || d.params.len() > MAX_PARAMS {
             return Err(DocError::Invalid("document too large".into()));
+        }
+        // A design from elsewhere may nest groups too deep, loop, or name things that are gone.
+        if let Some((groups, order)) = d.browser_pruned() {
+            (d.browser_groups, d.browser_order) = (groups, order);
         }
         Ok(d)
     }
@@ -4050,7 +4126,7 @@ impl Document {
                 return Err(DocError::Invalid("a text's height must be positive".into()));
             }
             if let Some(e) = &exprs.text {
-                let words = self.eval_words(e).map_err(|error| DocError::Expr(format!("text: {error}")))?;
+                let words = self.eval_words(e, vals).map_err(|error| DocError::Expr(format!("text: {error}")))?;
                 if words.trim().is_empty() || words.chars().count() > solidcraft_sketch::MAX_TEXT_CHARS {
                     return Err(DocError::Invalid(format!("text: `{e}` gives no words, or too many")));
                 }

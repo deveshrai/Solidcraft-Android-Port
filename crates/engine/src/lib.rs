@@ -186,13 +186,15 @@ struct BodyRename {
     names_only: bool,
 }
 
-/// Bodies or component placements copied in one design, for pasting into another
-/// (`component.paste_from_design`): that design's placed model as it was when they were copied,
+/// Bodies, component placements or timeline features copied in one design, for pasting into another:
+/// that design's model as it was when they were copied,
 /// so the copy is what was copied, whatever happens to that design (or its tab) after.
 #[derive(Clone, Debug)]
 pub struct ForeignCopy {
     /// The design's name (it names what the paste adds).
     pub design: String,
+    /// Timeline features, in their original order (`timeline.paste` with `from_design`).
+    pub features: Vec<solidcraft_doc::Feature>,
     /// Its placed model: what its Browser and view showed.
     pub world: Arc<solidcraft_doc::ModelState>,
     /// The bodies copied, as its Browser names them (a body seen in another placement under the
@@ -220,11 +222,28 @@ impl ForeignCopy {
         let placed = placements.iter().filter_map(|p| session.occurrence_placement(p).ok()).map(|p| (p.component, p.occurrence, p.world)).collect();
         ForeignCopy {
             design: session.doc.name.clone(),
+            features: Vec::new(),
             world: session.world_state(),
             bodies,
             names,
             placements,
             placed,
+            doc: session.doc.clone(),
+            model: session.model.clone(),
+            pending_moves: session.pending_moves.clone(),
+        }
+    }
+
+    /// Timeline Copy's snapshot. No placed body geometry is needed to paste sketches.
+    pub fn of_features(session: &Session) -> ForeignCopy {
+        ForeignCopy {
+            design: session.doc.name.clone(),
+            features: session.clipboard.clone(),
+            world: session.model.state(),
+            bodies: Vec::new(),
+            names: Vec::new(),
+            placements: Vec::new(),
+            placed: Vec::new(),
             doc: session.doc.clone(),
             model: session.model.clone(),
             pending_moves: session.pending_moves.clone(),
@@ -413,6 +432,8 @@ pub struct Session {
     /// Revision increments caused only by visibility. Comparing both counters proves that
     /// every intervening increment left an editor's document and model untouched.
     visibility_revision: u64,
+    /// [`Document::browser_stamp`] when the browser's groups and order were last checked.
+    browser_stamp: [u64; 6],
     /// This open design's id for programs that follow it (`document.revision`, #6646): kept
     /// while it stays open, through saves and renames; another for each design started or opened.
     pub document_id: String,
@@ -473,8 +494,10 @@ pub struct Session {
     /// The seams `inspect.continuity` last measured, for the viewport to shade. View state: not
     /// part of the design and not an undo step.
     pub continuity: Vec<ContinuitySeam>,
-    /// Transient activation order only; effect settings remain in their existing fields.
+    /// Oldest active slot first; replacing an effect retains its row position.
     status_order: Vec<status_items::StatusId>,
+    /// Successful source activations, independently of row order and sharing policy.
+    status_activation: Vec<status_items::StatusId>,
     single_surface_analysis: bool,
     latest_analysis: Option<status_items::StatusId>,
     /// What is hidden or shown in the view (`browser.visibility`): saved with the design and an
@@ -629,6 +652,7 @@ impl Session {
             log: Vec::new(),
             revision: 1,
             visibility_revision: 0,
+            browser_stamp: [0; 6],
             document_id: cmd::inspect::new_document_id(),
             followed: None,
             auto_project: true,
@@ -657,6 +681,7 @@ impl Session {
             analysis: None,
             continuity: Vec::new(),
             status_order: Vec::new(),
+            status_activation: Vec::new(),
             single_surface_analysis: true,
             latest_analysis: None,
             checkpoints: Vec::new(),
@@ -925,6 +950,15 @@ impl Session {
         }
         self.revision += 1;
         self.prune_occurrence_state();
+        // Looked at only when what the groups can name has changed, not on every refresh.
+        let stamp = self.doc.browser_stamp();
+        if stamp != self.browser_stamp {
+            if let Some((groups, order)) = self.doc.browser_pruned() {
+                let d = self.doc_mut();
+                (d.browser_groups, d.browser_order) = (groups, order);
+            }
+            self.browser_stamp = self.doc.browser_stamp();
+        }
         // Joints follow the geometry their origins snap to.
         if !self.doc.assembly.joints.is_empty() {
             // A solve that moves parts changes what features reading where a part is placed
@@ -1105,14 +1139,15 @@ impl Session {
         }
     }
 
-    /// Only persistent render intent, part properties or appearances changed. Never evaluate or
-    /// clear a stale model here.
+    /// Only persistent render intent, part properties, appearances or the browser's groups changed.
+    /// Never evaluate or clear a stale model here.
     fn render_only_change(&self, before: &Snapshot) -> bool {
         self.active_sketch == before.active_sketch
             && self.pending_moves == before.pending_moves
             && (self.doc.differs_only_in_render(&before.doc)
                 || self.doc.differs_only_in_part_properties(&before.doc)
-                || self.doc.differs_only_in_appearance(&before.doc))
+                || self.doc.differs_only_in_appearance(&before.doc)
+                || self.doc.differs_only_in_browser(&before.doc))
     }
 
     /// Only what is hidden or shown changed (`browser.visibility`): the document and the model
@@ -1479,6 +1514,7 @@ impl Session {
             log: Vec::new(),
             revision: self.revision,
             visibility_revision: self.visibility_revision,
+            browser_stamp: self.browser_stamp,
             document_id: self.document_id.clone(),
             followed: None,
             auto_project: self.auto_project,
@@ -1507,6 +1543,7 @@ impl Session {
             analysis: None,
             continuity: Vec::new(),
             status_order: Vec::new(),
+            status_activation: Vec::new(),
             single_surface_analysis: self.single_surface_analysis,
             latest_analysis: None,
             checkpoints: Vec::new(),
@@ -1973,6 +2010,7 @@ fn same_but_features(a: &Document, b: &Document) -> bool {
         point_clouds,
         param_comments,
         materials,
+        print_faces,
         user_materials,
         appearances,
         body_components,
@@ -2008,6 +2046,7 @@ fn same_but_features(a: &Document, b: &Document) -> bool {
         && *point_clouds == b.point_clouds
         && *param_comments == b.param_comments
         && *materials == b.materials
+        && *print_faces == b.print_faces
         && *user_materials == b.user_materials
         && *appearances == b.appearances
         && *body_components == b.body_components

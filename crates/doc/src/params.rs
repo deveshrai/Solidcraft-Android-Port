@@ -1150,6 +1150,19 @@ mod design_length_tests {
         assert_eq!(written("", 5.0), w("mm", "5 mm"));
     }
 
+    /// A bare number typed as a formula (`=5`) means the design's units like `5` does.
+    #[test]
+    fn a_formula_that_is_a_bare_number_gets_the_design_unit() {
+        let mut doc = Document::new("Units");
+        doc.units = "in".into();
+        let length = crate::expr::Kind::Length;
+        assert_eq!(doc.with_design_unit("5", length), "5 in");
+        assert_eq!(doc.with_design_unit("=5", length), "=5 in");
+        assert_eq!(doc.with_design_unit("=5 mm", length), "=5 mm");
+        let inches = doc.eval(&doc.with_design_unit("=5", length), length).unwrap();
+        assert!((inches - 127.0).abs() < 1e-9, "{inches}");
+    }
+
     #[test]
     fn the_written_value_reads_back_within_a_micrometre() {
         for units in ["mm", "cm", "m", "in", "ft"] {

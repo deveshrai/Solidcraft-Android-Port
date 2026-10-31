@@ -2937,6 +2937,60 @@ fn freeform_chain_offsets_take_the_straight_pieces_of_the_chain_along() {
     certified(&s, &curves);
 }
 
+#[test]
+fn sketch_inspect_names_each_curve_of_a_free_form_loop_once() {
+    // A loop is walked piece by piece, and a conic or spline as many short pieces:
+    // `sketch.inspect` listed such a curve once per piece, 50 times for one Bézier (#9179).
+    let svg = r#"<svg width="40mm" height="40mm" viewBox="-5 -5 40 40"><path d="M0,0 L20,0 L20,10 Q20,20 10,30 Q0,20 0,10 Z"/></svg>"#;
+    let mut s = new_sketch();
+    run(&mut s, "sketch.insert_svg", json!({"text": svg}));
+    let drawn: std::collections::BTreeSet<String> = sketch(&s).curves.iter().map(|c| c.id.clone()).collect();
+    assert_eq!(drawn.len(), 5, "three lines and two Bézier curves: {drawn:?}");
+    let line = sketch(&s).curves[0].id.clone();
+    let out = run(&mut s, "sketch.offset", json!({"curves": [line], "distance": 1, "side": [100, 100]}));
+    let made: std::collections::BTreeSet<String> = ids(&out["curves"]).into_iter().collect();
+    assert!(!made.is_empty() && made.is_disjoint(&drawn), "{out}");
+
+    let once = |ids: &[String], what: &str| {
+        let set: std::collections::BTreeSet<&String> = ids.iter().collect();
+        assert_eq!(set.len(), ids.len(), "{what} names a curve twice: {ids:?}");
+    };
+    let si = run(&mut s, "sketch.inspect", json!({}));
+    let state = s.model.state();
+    let solved = state.sketch(s.active_sketch.unwrap()).unwrap();
+    let profiles = si["profiles"].as_array().unwrap();
+    assert_eq!(profiles.len(), 2, "the outline and the wall around it: {si}");
+    for (p, solved) in profiles.iter().zip(&solved.profiles) {
+        let curves = ids(&p["curves"]);
+        once(&curves, "a profile");
+        // In the order the loop walks them, as the solved profile has them.
+        assert_eq!(curves, solidcraft_sketch::distinct_curves(&solved.outer_curves));
+        let holes: Vec<Vec<String>> = p["holes"].as_array().unwrap().iter().map(ids).collect();
+        holes.iter().for_each(|h| once(h, "a hole"));
+        let set = |v: &[String]| v.iter().cloned().collect::<std::collections::BTreeSet<_>>();
+        match holes.as_slice() {
+            [] => assert_eq!(set(&curves), drawn, "the outline is the drawn curves"),
+            [hole] => {
+                assert_eq!(set(&curves), made, "the wall's outside is the offset");
+                assert_eq!(set(hole), drawn, "its hole is the outline");
+            }
+            _ => panic!("one hole at most: {p}"),
+        }
+    }
+
+    // The lists are a profile pick as they stand (a pick refuses a curve named twice): the
+    // wall extrudes from them.
+    let wall = profiles.iter().find(|p| p["holes"].as_array().is_some_and(|h| !h.is_empty())).unwrap();
+    let pick = json!({"type": "whole_boundaries", "profiles": [{"outer": wall["curves"], "holes": wall["holes"]}]});
+    let areas = profiles.iter().map(|p| p["area_mm2"].as_f64().unwrap()).collect::<Vec<_>>();
+    let ring = areas.iter().copied().fold(f64::INFINITY, f64::min).min((areas[1] - areas[0]).abs());
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.extrude", json!({"distance": 10, "profiles": pick}));
+    let volume = body_volumes(&mut s);
+    assert_eq!(volume.len(), 1);
+    assert!((volume[0] - 10.0 * ring).abs() < 0.02 * volume[0], "{volume:?} against {areas:?}");
+}
+
 /// The arc's counter-clockwise sweep from its stored start to its end, degrees, from `sketch.inspect`.
 fn arc_sweep_deg(si: &Value, id: &str) -> f64 {
     let c = si["curves"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap();

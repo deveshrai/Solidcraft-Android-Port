@@ -9,7 +9,7 @@ use std::cell::{Cell, RefCell};
 
 use egui::{Pos2, Stroke};
 use serde_json::{Value, json};
-use solidcraft_engine::geom::{Vec2, Vec3};
+use solidcraft_engine::geom::{Plane, Vec2, Vec3};
 
 use crate::SolveApp;
 use crate::tool_modifiers::{Audit, Binding, Match, ModAction, ModifierCombo, Scope, ToolModifiers, Trigger};
@@ -37,6 +37,16 @@ const EXTEND_BINDINGS: &[Binding] = &[
 
 /// Per-tool modifier descriptors owned by this host file.
 pub const MODIFIERS: &[ToolModifiers] = &[
+    ToolModifiers { tool: "sketch.construction_line", scopes: DRAW_SCOPES, bindings: &[], audit: Audit::Implemented },
+    ToolModifiers { tool: "sketch.construction_line.horizontal", scopes: DRAW_SCOPES, bindings: &[], audit: Audit::Implemented },
+    ToolModifiers { tool: "sketch.construction_line.vertical", scopes: DRAW_SCOPES, bindings: &[], audit: Audit::Implemented },
+    ToolModifiers { tool: "sketch.construction_line.angle", scopes: DRAW_SCOPES, bindings: &[], audit: Audit::Implemented },
+    ToolModifiers { tool: "sketch.construction_line.parallel", scopes: DRAW_SCOPES, bindings: &[], audit: Audit::Implemented },
+    ToolModifiers { tool: "sketch.construction_line.perpendicular", scopes: DRAW_SCOPES, bindings: &[], audit: Audit::Implemented },
+    ToolModifiers { tool: "sketch.construction_line.tangent_external", scopes: DRAW_SCOPES, bindings: &[], audit: Audit::Implemented },
+    ToolModifiers { tool: "sketch.construction_line.tangent_at", scopes: DRAW_SCOPES, bindings: &[], audit: Audit::Implemented },
+    ToolModifiers { tool: "sketch.construction_line.tangent_two", scopes: DRAW_SCOPES, bindings: &[], audit: Audit::Implemented },
+    ToolModifiers { tool: "sketch.construction_line.bisector", scopes: DRAW_SCOPES, bindings: &[], audit: Audit::Implemented },
     ToolModifiers { tool: "sketch.project", scopes: NONE, bindings: &[], audit: Audit::VerifiedNoOp },
     ToolModifiers { tool: "sketch.intersect", scopes: NONE, bindings: &[], audit: Audit::VerifiedNoOp },
     ToolModifiers { tool: "sketch.include_3d", scopes: NONE, bindings: &[], audit: Audit::VerifiedNoOp },
@@ -281,6 +291,10 @@ fn marks(app: &SolveApp, painter: &egui::Painter, proj: &Proj) {
 /// Commands that start with a step of their own: Canvas and Decal ask for the image first,
 /// Edit Canvas opens the canvas panel. False when the command should not go on.
 pub fn start_hook(app: &mut SolveApp, id: &str) -> bool {
+    if id == "inspect.section" && app.preferences.viewport_section_status && app.session.section.is_some() {
+        let _ = app.run(id, json!({"clear":true}));
+        return false;
+    }
     if id == "sketch.intersect"
         && let Some(dialog) = crate::dialogs::Dialog::for_command(app, id)
     {
@@ -461,6 +475,18 @@ pub(crate) fn constrain_lined(app: &mut SolveApp, tool: &mut Tool, placed: &[Vec
     app.session.undo = history;
 }
 
+/// The point of `poly` nearest `p`; None for fewer than two points.
+fn nearest_on_polyline(poly: &[Vec2], p: Vec2) -> Option<Vec2> {
+    poly.windows(2)
+        .map(|w| {
+            let (a, b) = (w[0], w[1]);
+            let ab = b - a;
+            let t = if ab.len2() > 0.0 { ((p - a).dot(ab) / ab.len2()).clamp(0.0, 1.0) } else { 0.0 };
+            a + ab * t
+        })
+        .min_by(|x, y| x.dist(p).total_cmp(&y.dist(p)))
+}
+
 /// Snap a cursor point on the sketch plane to what is inferred while drawing: a crossing of
 /// two curves, a line's midpoint, or alignment (horizontal/vertical) with the previous point
 /// of the tool. None: nothing near, use the grid.
@@ -553,13 +579,20 @@ pub fn refine_snap(
         best = Some((i.dist, i.label(), i.at));
         mid_of = i.arg;
     }
-    // On a curve (coincident with it).
+    // On a curve (coincident with it). A spline, ellipse or conic has no exact shape here: the
+    // nearest point of the polyline it is drawn with, which the click's point-on-curve
+    // constraint then puts on the curve itself (#9321).
     if !mid_only && best.is_none() {
         for (i, c) in sk.curves.iter().enumerate() {
-            let Some(sh) = sk.shape(i) else { continue };
-            let d = sh.dist(lp);
+            let (d, q) = match sk.shape(i) {
+                Some(sh) => (sh.dist(lp), sh.project(lp)),
+                None if c.kind.is_freeform() => {
+                    let Some(q) = nearest_on_polyline(&sk.polyline(i), lp) else { continue };
+                    (q.dist(lp), q)
+                }
+                None => continue,
+            };
             if d < tol * 0.8 && best.is_none_or(|x| d < x.0) {
-                let q = sh.project(lp);
                 best = Some((d, "On", q));
                 mid_of = Some(format!("{}:{},{}", c.id, q.x, q.y));
             }
@@ -701,6 +734,7 @@ pub fn delete_glyph(app: &mut SolveApp) -> bool {
 /// What the extra tools do with clicks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
+    Construction,
     /// Each click on model geometry runs the command with that reference.
     ModelRef,
     /// Click a curve of the active sketch where it should change.
@@ -724,6 +758,9 @@ pub fn takes(id: &str, hit: &Hit) -> bool {
 }
 
 fn mode(id: &str) -> Option<Mode> {
+    if solidcraft_engine::cmd::construction_line_mode(id).is_some() {
+        return Some(Mode::Construction);
+    }
     Some(match id {
         "sketch.project" | "sketch.intersect" | "sketch.include_3d" | "sketch.fit_curves_to_section" | "sketch.isoparametric_curve" => Mode::ModelRef,
         "inspect.curvature_comb" | "canvas.insert" | "canvas.decal" => Mode::ModelRef,
@@ -772,6 +809,9 @@ pub fn image_placement_finished(tool: &Tool) -> bool {
 }
 
 pub fn hint(id: &str) -> Option<String> {
+    if solidcraft_engine::cmd::construction_line_mode(id).is_some() {
+        return Some(crate::sketch_construction::hint(id));
+    }
     Some(
         match id {
             "sketch.project" => "Project: click edges, faces, vertices, other sketches' curves, axes or planes",
@@ -962,6 +1002,7 @@ pub fn on_click(app: &mut SolveApp, tool: &mut Tool, proj: &Proj, pos: Pos2) {
     let at = sketch_point_at(app, proj, pos);
     let cmd = tool.cmd;
     match m {
+        Mode::Construction => crate::sketch_construction::on_click(app, tool, &hits, at),
         Mode::ModelRef if cmd == "inspect.curvature_comb" => {
             let params = hits.iter().find_map(|h| match h {
                 Hit::SketchCurve { sketch, id, .. } => Some(json!({"sketch": sketch, "curves": [id]})),
@@ -1213,6 +1254,10 @@ pub fn on_click(app: &mut SolveApp, tool: &mut Tool, proj: &Proj, pos: Pos2) {
 /// Typed values are checked first, so a rejected one stays in its box to be corrected rather
 /// than reaching the command.
 pub(crate) fn place_point(app: &mut SolveApp, tool: &mut Tool, p: (Vec2, Option<String>)) {
+    if solidcraft_engine::cmd::construction_line_mode(tool.cmd).is_some() {
+        crate::sketch_construction::place_point(app, tool, p);
+        return;
+    }
     if tool.cmd == "sketch.circle.two_tangent" && tool.picks.len() == 2 {
         if let Err(error) = crate::sketch_dims::validate(app, tool) {
             app.set_status(error, true);
@@ -1387,6 +1432,10 @@ fn extend_preview_piece(app: &SolveApp, sketch: u64, id: &str) -> Option<Vec<Vec
 
 /// Rubber band for point tools and pick markers.
 pub fn preview(app: &SolveApp, t: &Tool, painter: &egui::Painter, proj: &Proj) {
+    if solidcraft_engine::cmd::construction_line_mode(t.cmd).is_some() {
+        crate::sketch_construction::preview(app, t, painter, proj);
+        return;
+    }
     let Some(sid) = active_sketch(app) else { return };
     let st = app.session.world_state();
     let Some(ss) = st.sketch(sid) else { return };
@@ -1470,11 +1519,35 @@ pub fn preview(app: &SolveApp, t: &Tool, painter: &egui::Painter, proj: &Proj) {
 /// Glyph size and spacing (screen pixels).
 const GLYPH: f32 = 15.0;
 
+/// Screen pixels per millimetre of the sketch plane below which constraint glyphs hide when the
+/// `hide_constraint_glyphs_zoomed_out` preference is on (#8980). About two pixels per millimetre:
+/// a 10 mm feature is then smaller than a glyph.
+pub const MIN_GLYPH_PX_PER_MM: f32 = 2.0;
+
+/// Whether constraint glyphs should draw at this sketch-plane scale (#8980).
+pub fn constraint_glyphs_visible_at_scale(px_per_mm: f32, hide_when_zoomed_out: bool) -> bool {
+    !hide_when_zoomed_out || px_per_mm >= MIN_GLYPH_PX_PER_MM
+}
+
+/// Pixels on screen for one millimetre along the sketch plane's U axis, near the plane origin.
+fn sketch_px_per_mm(plane: &Plane, proj: &Proj) -> Option<f32> {
+    let a = proj.to_screen(plane.to_world(Vec2::ZERO))?;
+    let b = proj.to_screen(plane.to_world(Vec2::new(1.0, 0.0)))?;
+    Some(a.distance(b))
+}
+
 fn glyphs(app: &SolveApp, painter: &egui::Painter, proj: &Proj, hover: Option<Pos2>) {
     let Some(sid) = active_sketch(app) else { return };
     let st = app.session.world_state();
     let Some(ss) = st.sketch(sid) else { return };
     if ss.sketch.view.hide_constraints {
+        GLYPHS.with(|g| g.borrow_mut().clear());
+        return;
+    }
+    // Zoomed out far enough: fixed-size glyphs would dominate the sketch (#8980).
+    if let Some(scale) = sketch_px_per_mm(&ss.plane, proj)
+        && !constraint_glyphs_visible_at_scale(scale, app.preferences.hide_constraint_glyphs_zoomed_out)
+    {
         GLYPHS.with(|g| g.borrow_mut().clear());
         return;
     }
@@ -1732,6 +1805,29 @@ pub fn show(app: &mut SolveApp, ui: &egui::Ui, painter: &egui::Painter, proj: &P
     marks(app, painter, proj);
     iso_lines(app, painter, proj);
     continuity_legend(app, painter, proj);
+}
+
+#[cfg(test)]
+mod glyph_zoom_tests {
+    use super::{MIN_GLYPH_PX_PER_MM, constraint_glyphs_visible_at_scale};
+
+    #[test]
+    fn glyphs_stay_visible_when_zoomed_in() {
+        assert!(constraint_glyphs_visible_at_scale(MIN_GLYPH_PX_PER_MM, true));
+        assert!(constraint_glyphs_visible_at_scale(10.0, true));
+    }
+
+    #[test]
+    fn glyphs_hide_below_the_zoom_threshold() {
+        assert!(!constraint_glyphs_visible_at_scale(MIN_GLYPH_PX_PER_MM - f32::EPSILON, true));
+        assert!(!constraint_glyphs_visible_at_scale(0.5, true));
+    }
+
+    #[test]
+    fn preference_off_keeps_glyphs_at_every_zoom() {
+        assert!(constraint_glyphs_visible_at_scale(0.1, false));
+        assert!(constraint_glyphs_visible_at_scale(MIN_GLYPH_PX_PER_MM - 1.0, false));
+    }
 }
 
 #[cfg(test)]

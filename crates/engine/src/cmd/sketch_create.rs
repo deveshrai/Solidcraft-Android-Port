@@ -116,7 +116,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .enabled(in_sketch)
         .params("curves: [line ids], value?: bool (default toggles): infinite line type (#1359): construction geometry drawn across the whole view through the line's two points; off, a normal line"),
     CommandSpec::new("sketch.text", "Text", text).at("SKETCH", "CREATE").icon("sketch_text").enabled(in_sketch).params(concat!(
-        "text: string (\\n breaks lines), or text_expression: the words built from text parameters (parameters.add with unit text) and quoted texts joined by + (\"Label + '-L'\"): the text keeps it, its words follow the parameters (a parameter edit or a configuration row relabels it) and `exprs` returns it as `text`; at: baseline start [x,y], height?: capital height mm (default 5), angle?: deg; at's x and y, height and angle each take a number or an expression over the design's parameters as a string (\"plate_width / 2\", \"label_size\"): the text keeps the expression, follows the parameters, and returns it in `exprs`; an expression naming no parameter is the number it comes to, a bare number in one is in the design's units, \
+        "text: string (\\n breaks lines), or text_expression: the words built from text parameters (parameters.add with unit text), number parameters and quoted texts joined by + (\"Label + '-L'\", \"'W' + Width\"; a number parameter shows its value in the design's units, \"85 mm\", an angle in degrees, \"30°\"; number(Width) is the number alone and number(Width, 2) has 2 decimals): the text keeps it, its words follow the parameters (a parameter edit or a configuration row relabels it) and `exprs` returns it as `text`; at: baseline start [x,y], height?: capital height mm (default 5), angle?: deg; at's x and y, height and angle each take a number or an expression over the design's parameters as a string (\"plate_width / 2\", \"label_size\"): the text keeps the expression, follows the parameters, and returns it in `exprs`; an expression naming no parameter is the number it comes to, a bare number in one is in the design's units, \
          font?: an installed font's family or full name, or a .ttf/.otf file path (~ and %VAR% expand; default: the built-in Liberation Sans), ",
         text_style_doc!(),
         created_doc!()
@@ -222,7 +222,7 @@ fn text_source(doc: &solidcraft_doc::Document, p: &Value, cmd: &str, old: Option
             t.clone()
         }
         (None, Some(Value::String(e))) => {
-            let words = doc.eval_words(e.trim()).map_err(|error| bad(cmd, format!("`text_expression`: {error}")))?;
+            let words = doc.eval_words(e.trim(), &doc.param_values().0).map_err(|error| bad(cmd, format!("`text_expression`: {error}")))?;
             exprs.text = Some(e.trim().to_string());
             words
         }
@@ -772,7 +772,7 @@ fn midpoint_line(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Direction leaving curve `ci` at its end point `pi` (continuing the curve past that end).
-fn leaving_dir(sk: &Sketch, ci: usize, pi: usize) -> Option<Vec2> {
+pub(super) fn leaving_dir(sk: &Sketch, ci: usize, pi: usize) -> Option<Vec2> {
     match sk.curves.get(ci)?.kind {
         CurveKind::Line { a, b } => {
             let (pa, pb) = (sk.point(a)?, sk.point(b)?);

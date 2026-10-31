@@ -864,12 +864,16 @@ fn sketch_component_visible(s: &Session, id: u64) -> bool {
 
 /// Is a sketch used by a later feature? A sheet metal base or contour flange uses its sketch as
 /// an Extrude does: shown, its lines lie on the sheet's edges and take the clicks meant for
-/// them (#6804).
+/// them (#6804). So does a Hole at sketch points: shown, its points are drawn in the holes
+/// (#9082). A Single hole snapped to one point (#2110) does not: it was placed on a face, not
+/// built from the sketch, and hiding the sketch would take its other points from the next
+/// Single hole's snap.
 pub fn sketch_consumed(s: &Session, id: u64) -> bool {
-    use solidcraft_doc::FeatureKind;
+    use solidcraft_doc::{FeatureKind, SketchPoints};
     s.doc.features.iter().any(|f| {
         matches!(f.kind, FeatureKind::Extrude { sketch, .. } | FeatureKind::Revolve { sketch, .. }
-            | FeatureKind::SheetBase { sketch, .. } | FeatureKind::SheetContour { sketch, .. } if sketch == id)
+            | FeatureKind::SheetBase { sketch, .. } | FeatureKind::SheetContour { sketch, .. }
+            | FeatureKind::Hole { points: Some(SketchPoints { sketch, single: false, .. }), .. } if sketch == id)
     })
 }
 

@@ -77,6 +77,7 @@ fn section(s: &mut Session, p: &Value) -> Result<Value> {
     s.section = Some((origin, normal));
     s.section_hatch = bool_(p, "hatch").unwrap_or(true);
     s.status_slot(crate::status_items::StatusId::Section, true);
+    s.status_activated(crate::status_items::StatusId::Section);
     s.revision += 1;
     let mut section = json!({"origin": origin, "normal": normal, "hatch": s.section_hatch});
     if let Some(i) = axis {

@@ -5,7 +5,7 @@ members = ["crates/*", "apps/*", "xtask"]
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.27.1"
+version = "0.28.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -165,6 +165,9 @@ egui-wgpu = { path = "vendor/egui-wgpu" }
 # winit 0.30 never binds and eframe 0.36 still requires winit 0.30. Android port: a mouse as a
 # mouse (cursor, every button, the wheel) and the keyboard's modifiers.
 winit = { path = "vendor/winit" }
+
+# macOS: dropping the accessibility adapter leaves AppKit's key-value observers intact (#7535).
+accesskit_macos = { path = "vendor/accesskit_macos" }
 
 # Mutation testing (cargo-mutants, docs/mutation-testing.md): the ci profile with incremental
 # builds, since every mutant rebuilds the crates above the one it changes.

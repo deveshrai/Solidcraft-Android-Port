@@ -1060,3 +1060,51 @@ fn a_definition_of_the_parameter_a_value_names_changes_it() {
     let r = run(&mut s, "expr.evaluate", json!({"expression": "q = w * 2", "kind": "length"}));
     assert_eq!((r["ok"].as_bool(), r["value"].as_f64(), r["defines"].as_str()), (Some(true), Some(60.0), Some("q")), "{r}");
 }
+
+/// The error of the feature named `name` in the last evaluation.
+fn feature_error(s: &Session, name: &str) -> Option<String> {
+    s.model.results.iter().find(|r| r.name == name).and_then(|r| r.error.clone())
+}
+
+/// A sketch dimension set negative fails its sketch; the features built from it fail naming that
+/// sketch, not as a sketch that must come earlier in the timeline (#9075). Their errors follow
+/// the sketch's own (never an earlier one from the cache) and clear when the value is set back.
+#[test]
+fn a_feature_on_a_failed_sketch_names_the_sketch() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    let out = run(
+        &mut s,
+        "sketch.draw.dimensioned",
+        json!({"command": "sketch.rectangle.center", "params": {"center": [0, 0], "corner": [20, 10]}, "dimensions": {"width": 40, "height": 20}}),
+    );
+    let width = out["dimensions"]["width"]["param"].as_str().unwrap_or_default().to_string();
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.extrude", json!({"distance": 5}));
+    // A healthy sketch and its extrude after them.
+    run(&mut s, "sketch.create", json!({"plane": "XY"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [50, 0], "p1": [60, 10]}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.extrude", json!({"sketch": "Sketch2", "distance": 5, "operation": "new"}));
+    assert!(rel(volume(&mut s), 40.0 * 20.0 * 5.0 + 500.0) < 1e-9);
+
+    let r = run(&mut s, "parameters.change", json!({"name": width, "expression": "-10"}));
+    let sketch = feature_error(&s, "Sketch1").unwrap_or_default();
+    assert!(sketch.contains("dimension value -10"), "{sketch}");
+    let extrude = feature_error(&s, "Extrude1").unwrap_or_default();
+    assert!(extrude.contains("`Sketch1`") && extrude.contains("dimension value -10"), "{extrude}");
+    assert!(!extrude.contains("earlier in the timeline"), "{extrude}");
+    assert_eq!((feature_error(&s, "Sketch2"), feature_error(&s, "Extrude2")), (None, None), "{r}");
+    // Another failing value: its own error, not the earlier one from the cache.
+    run(&mut s, "parameters.change", json!({"name": width, "expression": "-5"}));
+    let extrude = feature_error(&s, "Extrude1").unwrap_or_default();
+    assert!(extrude.contains("dimension value -5"), "{extrude}");
+    // The failed sketch renamed: its new name.
+    run(&mut s, "timeline.rename", json!({"feature": "Sketch1", "name": "Outline"}));
+    let extrude = feature_error(&s, "Extrude1").unwrap_or_default();
+    assert!(extrude.contains("`Outline`") && !extrude.contains("Sketch1"), "{extrude}");
+    // Set back: both build again.
+    let r = run(&mut s, "parameters.change", json!({"name": width, "expression": "40"}));
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert!(rel(volume(&mut s), 40.0 * 20.0 * 5.0 + 500.0) < 1e-9);
+}

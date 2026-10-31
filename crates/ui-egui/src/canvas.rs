@@ -349,7 +349,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj
             crate::dialogs_move::step_value_field(&mut d, if back { -1 } else { 1 });
             d.focus = true;
         }
-        let focus = std::mem::take(&mut d.focus);
+        let focus = take_focus(ui.ctx(), &mut d);
         if let Some(bs) = at.and_then(|base| proj.to_screen(base))
             && let Some((label, _, value)) = d.primary()
         {
@@ -541,7 +541,7 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
         Kind::SketchModify(crate::sketch_modify_ui::Mod::Offset { mode, .. }) => !crate::sketch_modify_ui::offset_symmetric(*mode),
         _ => false,
     };
-    let mut focus = std::mem::take(&mut d.focus);
+    let mut focus = take_focus(ui.ctx(), d);
     let half_height = app.cam.half_height();
     let axis = revolve_axis(app, d);
     if matches!(d.kind, Kind::Revolve { .. }) {
@@ -785,6 +785,28 @@ pub(crate) fn box_place(app: &SolveApp, proj: &Proj) -> BoxPlace {
     BoxPlace { dialog: app.viewport.dialog_rect, view: Some(proj.rect), handles: None }
 }
 
+fn boxes_shown_id() -> egui::Id {
+    egui::Id::new("sc_canvas_value_boxes")
+}
+
+/// Show commands' values in boxes in the view or not, from the preference (the app calls this
+/// every frame).
+pub(crate) fn set_boxes_shown(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(boxes_shown_id(), on));
+}
+
+/// Whether a command's values have boxes in the view. Off (Preferences), they are typed in the
+/// command window only, and the view stays clear for picking (#9479).
+pub(crate) fn boxes_shown(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(boxes_shown_id())).unwrap_or(true)
+}
+
+/// Whether the command's value box takes the keyboard this frame: as the window opens, and after
+/// a pick. Without boxes in the view, it is left for the command window's value field (#9479).
+fn take_focus(ctx: &egui::Context, d: &mut Dialog) -> bool {
+    boxes_shown(ctx) && std::mem::take(&mut d.focus)
+}
+
 /// The command's main value in the viewport, next to the geometry: the keyboard goes here while
 /// the window is open, so a number typed straight after a pick sets the value. `at` is its
 /// top-left corner. `select_all` re-selects the whole field, both right after a pick and on every
@@ -838,6 +860,10 @@ fn value_box_full(
     note: Option<&str>,
     place: BoxPlace,
 ) -> Option<egui::Rect> {
+    // Off in Preferences: the value is typed in the command window only (#9479).
+    if !boxes_shown(ui.ctx()) {
+        return None;
+    }
     let t = Tokens::get();
     // Held in place while the pointer is over it and value stepping is on (see `value_box`): by
     // its pivot, the point of the box that sits at `at`, which is not always its top-left corner.

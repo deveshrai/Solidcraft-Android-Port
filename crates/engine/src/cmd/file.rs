@@ -18,6 +18,7 @@ use solidcraft_doc::Document;
 use solidcraft_io::Format;
 
 use super::CommandSpec;
+use super::print_face;
 use crate::params::{bad, bool_, num, str_, string_list};
 use crate::{EngineError, Result, Session};
 
@@ -692,6 +693,26 @@ fn export_to(
     };
     solidcraft_io::vfs::write(path, &bytes).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     Ok(json!({"path": path, "bytes": bytes.len(), "format": format!("{format:?}")}))
+}
+
+/// [`export_to`] for a mesh file a slicer is sent (STL or 3MF): each body laid on its print face.
+#[cfg(not(target_arch = "wasm32"))]
+fn export_laid_to(
+    s: &Session,
+    path: &str,
+    format: Format,
+    bodies: &[String],
+    parts: &[(String, Vec<String>)],
+    quality: solidcraft_io::MeshQuality,
+) -> Result<Value> {
+    let name = std::path::Path::new(path).file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| s.doc.name.clone());
+    let mut state = s.doc.painted(&s.world_state());
+    let laid = print_face::lay_on_print_faces(s, &mut state, bodies, parts);
+    let bytes = solidcraft_io::export_with_parts(&state, bodies, parts, format, &name, &s.doc.metadata, quality)?;
+    solidcraft_io::vfs::write(path, &bytes).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let mut out = json!({"path": path, "bytes": bytes.len(), "format": format!("{format:?}")});
+    laid.report(&mut out);
+    Ok(out)
 }
 
 fn export(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1456,6 +1477,51 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    /// #9170: a design holding a mesh body (an inserted STL) keeps its saved model and opens from
+    /// it. One mesh body left the cache out for the whole model, so every feature, the boxes
+    /// too, was evaluated again on opening.
+    #[test]
+    fn a_design_with_a_mesh_body_keeps_its_saved_model() {
+        let dir = std::env::temp_dir().join(format!("solidcraft-mesh-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stl = dir.join("tetra.stl");
+        let facets = [
+            [[0, 0, 0], [0, 10, 0], [10, 0, 0]],
+            [[0, 0, 0], [10, 0, 0], [0, 0, 10]],
+            [[0, 0, 0], [0, 0, 10], [0, 10, 0]],
+            [[10, 0, 0], [0, 10, 0], [0, 0, 10]],
+        ];
+        let mut text = String::from("solid tetra\n");
+        for f in facets {
+            text += "facet normal 0 0 0\nouter loop\n";
+            for [x, y, z] in f {
+                text += &format!("vertex {x} {y} {z}\n");
+            }
+            text += "endloop\nendfacet\n";
+        }
+        std::fs::write(&stl, text + "endsolid tetra\n").unwrap();
+        let mut session = Session::new(Document::new("Boxes and a mesh"));
+        for x in [0, 40, 80] {
+            session.execute("solid.box", &json!({"length": 20, "width": 20, "height": 20, "corner": [x, 0, 0], "operation": "new_body"})).unwrap();
+        }
+        session.execute("file.insert_mesh", &json!({"path": stl})).unwrap();
+        let triangles = |s: &Session| s.model.state().bodies.iter().filter_map(|b| b.body.triangle_mesh().map(|(_, t)| t.len())).collect::<Vec<_>>();
+        assert_eq!(triangles(&session), [4], "one mesh body");
+        let bytes = session.design_container(solidcraft_io::DesignCompression::Fast, false, true).unwrap();
+        assert!(solidcraft_io::read_design_geometry(&bytes).is_some(), "the model is saved with the mesh body");
+        let path = dir.join("boxes-mesh.solidcraft");
+        std::fs::write(&path, &bytes).unwrap();
+        let mut reopened = Session::default();
+        reopened.execute("doc.open", &json!({"path": path})).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(reopened.model.results.len(), session.model.results.len());
+        assert!(reopened.model.results.iter().zip(&session.model.results).all(|(a, b)| a.ms == b.ms), "taken from the file, not evaluated");
+        assert_eq!(triangles(&reopened), [4]);
+        let volume = |s: &mut Session| s.execute("inspect.measure", &json!({})).unwrap()["total"]["volume_mm3"].as_f64().unwrap();
+        let (saved, opened) = (volume(&mut session), volume(&mut reopened));
+        assert!((opened - saved).abs() < 1e-9 && (saved - (3. * 8000. + 1000. / 6.)).abs() < 1e-6, "{opened} vs {saved}");
+    }
+
     /// A sheet-metal design keeps each sheet body once in its saved model, not again with every
     /// later feature's state: a design of many features after its sheet metal wrote the sheets
     /// over and over, and past the cache's size limit kept only some of its states.
@@ -1496,6 +1562,54 @@ mod tests {
         reopened.execute("doc.open", &json!({"path":path})).unwrap();
         assert!(reopened.model.results.iter().zip(&many.model.results).all(|(a, b)| a.ms == b.ms), "taken from the file, not evaluated");
         assert_eq!(serde_json::to_value(&reopened.model.state().sheets).unwrap(), serde_json::to_value(&flat).unwrap());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// A design's saved model keeps each set of sketch keys once, not again with every state:
+    /// every state wrote the key of each sketch before it, so a design of many sketches and many
+    /// features after them (5,484 features) passed the cache's size limit and kept only some of
+    /// its states. A set is written as the changes from the one before it; the model opens from
+    /// the file with every state (the keys read back: `eval_cost_tests`).
+    #[test]
+    fn a_saved_model_keeps_each_set_of_sketch_keys_once() {
+        let mut s = Session::new(Document::new("Sketches"));
+        let run = |s: &mut Session, id: &str, p: Value| s.execute(id, &p).unwrap();
+        for i in 0..6 {
+            run(&mut s, "sketch.create", json!({"plane":"XY","name":format!("Pad{i}")}));
+            run(&mut s, "sketch.rectangle.two_point", json!({"p0":[20 * i,0],"p1":[20 * i + 10,10]}));
+            run(&mut s, "solid.extrude", json!({"distance":5,"operation":"new"}));
+        }
+        for i in 0..10 {
+            run(&mut s, "solid.box", json!({"length":5,"width":5,"height":5,"corner":[20 * i,40,0],"operation":"new"}));
+        }
+        let saved = saved_geometry(&s, &s.doc).unwrap();
+        let features = saved.records["features"].as_array().unwrap();
+        assert_eq!(features.len(), s.doc.features.len());
+        assert!(features.iter().all(|f| f.get("state").is_some()), "every state kept");
+        let states = saved.records["states"].as_array().unwrap();
+        let sets = saved.records["sketch_key_sets"].as_array().unwrap();
+        // One set per sketch: each later one adds that sketch's key to the one before it.
+        assert_eq!(sets.len(), 6, "{sets:?}");
+        assert_eq!(sets[0]["set"].as_array().unwrap().len(), 1);
+        for (i, set) in sets.iter().enumerate().skip(1) {
+            assert_eq!(
+                (set["base"].as_u64(), set["set"].as_array().unwrap().len(), set["drop"].as_array().unwrap().len()),
+                (Some(i as u64 - 1), 1, 0)
+            );
+        }
+        let last = sets.len() - 1;
+        assert_eq!(
+            states.iter().filter(|st| st["sketch_key_set"] == json!(last)).count(),
+            2 + 10,
+            "the last sketch, its extrude and every box share one set"
+        );
+        let path = std::env::temp_dir().join(format!("solidcraft-sketch-key-cache-{}.solidcraft", std::process::id()));
+        let bytes = solidcraft_io::write_design_container_with_cache(&s.doc, solidcraft_io::DesignCompression::Fast, None, Some(&saved)).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        let mut reopened = Session::default();
+        reopened.execute("doc.open", &json!({"path": path})).unwrap();
+        assert_eq!(reopened.model.last_recomputed, 0, "taken from the file, not evaluated");
+        assert!(reopened.model.results.iter().zip(&s.model.results).all(|(a, b)| a.ms == b.ms));
         std::fs::remove_file(path).unwrap();
     }
 

@@ -24,6 +24,8 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         // Sketch icons in the colour of their solve state (#7245).
         let check = setting::sketch_state_icons(app, ui).on_hover_text(app.tr("prefs.sketch_state_icons_note"));
         crate::scenario::publish_target("prefs:sketch_state_icons", check.rect);
+        let construction = setting::sketch_construction_lines(app, ui);
+        crate::scenario::publish_target("prefs:sketch_construction_lines", construction.rect);
         let dimension = setting::sketch_auto_dimensions(app, ui);
         crate::scenario::publish_handle("prefs:sketch_auto_dimensions", dimension.rect.center());
         ui.add_enabled_ui(app.preferences.sketch_auto_dimensions, |ui| {
@@ -48,6 +50,8 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
                 });
             });
         });
+        ui_kit::checkbox(ui, app.tr("prefs.sketch_open_look_at"), &mut app.preferences.sketch_open_look_at)
+            .on_hover_text(app.tr("prefs.sketch_open_look_at_note"));
         ui_kit::settings_block_hint(
             ui,
             app.tr("prefs.sketch_exit_view"),
@@ -72,10 +76,15 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         // Conflicting curves and points in the conflict colour (#7244).
         let check = setting::sketch_conflict_colour(app, ui).on_hover_text(app.tr("prefs.sketch_conflict_colour_note"));
         crate::scenario::publish_target("prefs:sketch_conflict_colour", check.rect);
+        // Constraint glyphs hide when zoomed out (#8980).
+        let check = setting::hide_constraint_glyphs_zoomed_out(app, ui).on_hover_text(app.tr("prefs.hide_constraint_glyphs_zoomed_out_note"));
+        crate::scenario::publish_target("prefs:hide_constraint_glyphs_zoomed_out", check.rect);
     });
     ui_kit::settings_section(ui, "selection", app.tr("prefs.selecting"), |ui| {
         ui_kit::checkbox(ui, crate::i18n::tr_label("Click selects whole bodies"), &mut app.ui.pick_bodies);
         ui_kit::checkbox(ui, app.tr("prefs.prefer_free_sketch_points"), &mut app.preferences.prefer_free_sketch_points);
+        let hidden = setting::select_other_hidden(app, ui).on_hover_text(app.tr("prefs.select_other_hidden_help"));
+        crate::scenario::publish_target("prefs:select_other_hidden", hidden.rect);
         let click = app.tr("prefs.click");
         let shift = app.tr("prefs.shift");
         let ctrl = app.tr("prefs.ctrl_cmd");

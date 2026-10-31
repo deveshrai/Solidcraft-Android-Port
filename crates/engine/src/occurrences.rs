@@ -582,8 +582,11 @@ impl Session {
             || self.doc.browser_groups.iter().any(|g| {
                 g.component == component
                     && g.folder == folder
-                    && g.items.iter().any(|i| i == item)
-                    && self.folder_hidden(&format!("{scope}/g{}", g.id))
+                    && g.has_item(item)
+                    // A hidden group hides the groups inside it.
+                    && std::iter::successors(Some(g.id), |id| self.doc.browser_group(*id).and_then(|g| g.parent))
+                        .take(solidcraft_doc::MAX_GROUP_NESTING + 1)
+                        .any(|id| self.folder_hidden(&format!("{scope}/g{id}")))
             })
     }
 

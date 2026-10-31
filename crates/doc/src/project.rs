@@ -238,13 +238,14 @@ fn resolve_uncached(
         }
         LinkSource::Origin => vec![LinkGeom::Point(plane.to_local(Vec3::ZERO))],
         LinkSource::Axis { name } => {
-            let d = match name.to_ascii_uppercase().as_str() {
-                "X" => Vec3::X,
-                "Y" => Vec3::Y,
-                "Z" => Vec3::Z,
-                _ => return Err(DocError::Unknown(format!("axis `{name}`"))),
+            let (o, d) = match name.to_ascii_uppercase().as_str() {
+                "X" => (Vec3::ZERO, Vec3::X),
+                "Y" => (Vec3::ZERO, Vec3::Y),
+                "Z" => (Vec3::ZERO, Vec3::Z),
+                // A construction axis, by name (#9324), where the timeline so far puts it.
+                _ => crate::eval::construction_axis_in(Some(doc), st, name, 0)?,
             };
-            let o = plane.to_local(Vec3::ZERO);
+            let o = plane.to_local(o);
             let d2 = Vec2::new(d.dot(plane.x), d.dot(plane.y));
             match d2.normalized() {
                 Some(u) if d2.len() > 1e-9 => vec![LinkGeom::Line(o - u * AXIS_HALF, o + u * AXIS_HALF)],

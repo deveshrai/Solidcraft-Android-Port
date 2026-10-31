@@ -31,10 +31,16 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
                 ui.add_space(t.space_6);
                 ui_kit::settings_precision_sample(ui, &format!("{:.*}°", usize::from(app.preferences.angle_decimals.min(6)), 45.0));
             });
+            ui_kit::row(ui, app.tr("prefs.parameter_list_rows"), |ui| {
+                let tip = app.tr("prefs.parameter_list_rows_tip").to_string();
+                ui_kit::settings_number(ui, &mut app.preferences.parameter_list_rows, PARAMETER_LIST_ROWS, 1.0).on_hover_text(tip);
+            });
         });
         let tip = app.tr("ui.step_values_tip").to_string();
         let step = setting::step_values(app, ui).on_hover_text(tip);
         crate::scenario::publish_handle("prefs:step_values", step.rect.center());
+        let tip = app.tr("prefs.value_boxes_in_view_tip").to_string();
+        setting::value_boxes_in_view(app, ui).on_hover_text(tip);
     });
     ui_kit::settings_section(ui, "orientation", app.tr("prefs.orientation"), |ui| {
         ui.horizontal_wrapped(|ui| {

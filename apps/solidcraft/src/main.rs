@@ -22,6 +22,8 @@
 mod app_icon;
 mod come_forward;
 mod control_server;
+#[cfg(target_os = "linux")]
+mod desktop_theme;
 mod device_lost;
 #[cfg(target_os = "windows")]
 mod native_crash;
@@ -202,13 +204,29 @@ impl eframe::App for App {
         }
         solidcraft_ui_egui::recovery_ui::close(&mut self.solve);
         solidcraft_ui_egui::open_elsewhere::close(&mut self.solve);
-        // Before a restart below starts the next instance, which would otherwise get nothing from
-        // the 3D mouse driver (`solidcraft_3dx_client::stop`).
+        // Before a restart (`Drop for App`) starts the next instance, which would otherwise get
+        // nothing from the 3D mouse driver (`solidcraft_3dx_client::stop`).
         #[cfg(target_os = "macos")]
         solidcraft_3dx_client::stop();
         solidcraft_engine::crash::end_session();
-        if let Some(lost_at) = self.gpu.as_ref().and_then(|g| g.lost_at) {
-            device_lost::restart(self.gpu.as_ref().is_some_and(|g| g.restart_on_software), lost_at);
+        // The next start (after a lost device, or into an update) begins once the app is dropped
+        // (`Drop for App`), when the settings are on disk.
+    }
+}
+
+impl Drop for App {
+    /// eframe drops its settings storage first, which waits for `app.ron` to be written, then the
+    /// app, then the window and its GPU surface. So the next start begins here: started from
+    /// `on_exit`, it read `app.ron` while the old process was still writing it, found it
+    /// unreadable and moved it aside, resetting every setting (#9044).
+    fn drop(&mut self) {
+        if let Some(gpu) = &self.gpu
+            && let Some(lost_at) = gpu.lost_at
+        {
+            device_lost::restart(gpu.restart_on_software, lost_at, &gpu.reason);
+            // The window's GPU surface is still to be dropped, and on a lost device that may
+            // never return (#9044).
+            device_lost::end();
         }
         // An update asked to restart into the new version or to run its installer.
         if let Some((program, args)) = solidcraft_ui_egui::update::take_launch(&mut self.solve) {
@@ -236,6 +254,8 @@ struct LostWatch {
     restart_on_software: bool,
     /// When the loss was seen: the app is closing to start again.
     lost_at: Option<u64>,
+    /// Why, as wgpu said it: passed to the next start ([`device_lost::REASON_ENV`]).
+    reason: String,
 }
 
 impl App {
@@ -249,6 +269,7 @@ impl App {
         eprintln!("SolidCraft graphics: the device was lost ({reason}); starting again");
         solidcraft_engine::crash::phase(&format!("graphics device lost: {reason}"));
         gpu.lost_at = Some(device_lost::now_secs());
+        gpu.reason = reason;
         self.solve.quit_requested = true;
     }
 }
@@ -422,6 +443,12 @@ fn services(cc: &eframe::CreationContext<'_>, folder: &DialogFolder) -> Services
         graphics_adapters: Vec::new(),
         graphics_path: graphics_path().map(|p| p.to_string_lossy().to_string()),
         window_system: window_system_now(),
+        // Linux: the desktop's dark or light setting, which the window is not told on every
+        // desktop (#7944). Windows and macOS: the window's own theme.
+        #[cfg(target_os = "linux")]
+        desktop_dark: Some(desktop_theme::start(&cc.egui_ctx)),
+        #[cfg(not(target_os = "linux"))]
+        desktop_dark: None,
         http_get: Some(std::sync::Arc::new(http_get)),
         http_download: Some(std::sync::Arc::new(http_download)),
         // Already an installed app: only the browser build offers to install.
@@ -750,6 +777,16 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     objc2_foundation::NSProcessInfo::processInfo().setProcessName(objc2_foundation::ns_string!("SolidCraft"));
     mark("main");
+    // On OCLP-patched Macs, wgpu picks a Metal Shading Language standard that the system's
+    // compiler refuses (`invalid value 'metal3.2'`), because the patched OS reports a newer
+    // macOS version than the GPU's Metal compiler supports. Re-launching with
+    // SYSTEM_VERSION_COMPAT=1 makes the OS report the real (older) version so wgpu selects
+    // a standard the compiler accepts. The variable must be set before the process starts, so
+    // we detect OCLP here and re-exec immediately, before any macOS framework call (#3080, #4605).
+    #[cfg(target_os = "macos")]
+    if let Err(e) = startup::relaunch_with_version_compat() {
+        log::warn!("startup: OCLP check failed (continuing normally): {e}");
+    }
     // Validate before legacy adoption, crash markers or any user preference read.
     let settings = settings_dir().map_err(|error| eframe::Error::AppCreation(error.into()))?;
     if std::env::var_os("SOLIDCRAFT_SETTINGS_DIR").is_none() {
@@ -821,7 +858,11 @@ fn main() -> eframe::Result {
     // The launch before this one closed because its graphics device was lost (`App::watch_device`).
     let after_loss = device_lost::recent(std::env::var(device_lost::LOST_ENV).ok().as_deref(), device_lost::now_secs());
     if after_loss {
-        notes.push(device_lost::note(cpu_renderer));
+        let reason = std::env::var(device_lost::REASON_ENV).ok();
+        if let Some(reason) = device_lost::reason(reason.as_deref()) {
+            log::warn!("graphics: the last launch lost its device ({reason})");
+        }
+        notes.push(device_lost::note(cpu_renderer, reason.as_deref()));
     }
     if safe_mode {
         notes.push("Safe mode: default settings (yours are kept for the next normal start), no recovery offer, software rendering.".into());
@@ -961,6 +1002,7 @@ fn main() -> eframe::Result {
                 lost: rs.device_lost.clone(),
                 restart_on_software: device_lost::restart_on_software(after_loss, cpu_renderer),
                 lost_at: None,
+                reason: String::new(),
             });
             if !safe_mode {
                 app.preferences.graphics_adapter =
@@ -1016,6 +1058,10 @@ fn main() -> eframe::Result {
                 app.session.doc_mut().name = "Sample Plate".into();
                 app.session.mark_saved();
                 app.session.undo.clear();
+                // Built straight into the session, so nothing asked for a fit: frame it at the
+                // home view as any opened design is (#9195). The fit waits for the first layout.
+                app.cam.set_view(solidcraft_engine::render::StandardView::Iso);
+                app.fit_view();
             }
             // Lock files next to open designs: a design open on another computer says so (#5467),
             // the files given at launch included.
@@ -1099,12 +1145,13 @@ fn main() -> eframe::Result {
 }
 
 /// egui-wgpu is about to start a step of getting the graphics device and the window's surface up:
-/// the crash journal keeps it, and the adapter once it is picked.
+/// the crash journal keeps it until the app runs (a window opened later goes through the same
+/// steps), and the adapter once it is picked.
 fn startup_step(step: &'static str, detail: &str) {
     if step == eframe::egui_wgpu::STEP_ADAPTER_CHOSEN {
         solidcraft_engine::crash::set_environment(&format!("Renderer: {detail}"));
     }
-    solidcraft_engine::crash::phase(step);
+    solidcraft_engine::crash::startup_step(step);
 }
 
 /// The renderer settings: with `cpu`, the software adapter (WARP, lavapipe, llvmpipe). The

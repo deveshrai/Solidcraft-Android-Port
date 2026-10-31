@@ -728,10 +728,21 @@ pub fn tick(app: &mut SolveApp, ctx: &egui::Context) {
     }
 }
 
-/// Check now (Preferences): ignores the daily interval, not GitHub's rate limit.
+/// Check now (Help or Preferences): show progress and the result, ignoring the daily interval,
+/// but not GitHub's rate limit. A check already in flight serves the manual request too.
 pub fn check_now(app: &mut SolveApp, ctx: &egui::Context) {
+    app.updater.open = true;
+    // Keep a download or a completed installation on screen without starting another check.
+    if app.updater.job.is_some() || app.updater.installed.as_ref().is_some_and(Result::is_ok) || !available(app) {
+        return;
+    }
+    if let Some((_, manual)) = &mut app.updater.rx {
+        *manual = true;
+        app.updater.last_manual = unix_now();
+        return;
+    }
     let now = unix_now();
-    if app.updater.rx.is_some() || now - app.updater.last_manual < MANUAL_COOLDOWN_S || !available(app) {
+    if now - app.updater.last_manual < MANUAL_COOLDOWN_S {
         return;
     }
     if now < app.preferences.update.rate_limited_until {
@@ -773,9 +784,9 @@ fn start(app: &mut SolveApp, ctx: &egui::Context, manual: bool) {
             let _ = tx.send(fetch());
             ctx.request_repaint();
         });
-        if spawned.is_err() {
+        if let Err(error) = spawned {
             app.updater.rx = None;
-            app.updater.status = Status::Idle;
+            app.updater.status = if manual { Status::Failed(error.to_string()) } else { Status::Idle };
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -801,10 +812,10 @@ fn poll(app: &mut SolveApp) {
             let newer = is_newer(&release.tag, current_version());
             app.updater.status = if newer { Status::Idle } else { Status::UpToDate };
             if newer && manual {
-                // Asked for: show it even if it was skipped or put off.
+                // Asked for: offer it even if it was skipped or put off. check_now already
+                // opened the window; don't reopen it if the user closed it while checking.
                 app.preferences.update.skipped.clear();
                 app.preferences.update.remind_after = 0.0;
-                app.updater.open = true;
             }
             if app.updater.job.is_none() && app.updater.release.as_ref().is_none_or(|known| !is_newer(&known.tag, &release.tag)) {
                 app.updater.release = Some(release);
@@ -889,6 +900,12 @@ fn poll_install(app: &mut SolveApp) {
         Err(TryRecvError::Disconnected) => Err("the update stopped".into()),
     };
     app.updater.job = None;
+    // Cancel already cleared the job in the UI; ignore a late "cancelled" result so Offer returns
+    // without an error banner (#8908).
+    if matches!(&result, Err(e) if e == "cancelled" || e.contains("cancelled")) {
+        app.updater.installed = None;
+        return;
+    }
     match &result {
         Ok(install::Outcome::Installer(program, args)) => {
             // The installer replaces this program: start it once SolidCraft has closed. On
@@ -948,10 +965,14 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     if !app.updater.open {
         return;
     }
-    let Some(release) = app.updater.release.clone() else {
-        app.updater.open = false;
+    if app.updater.job.is_none()
+        && !app.updater.installed.as_ref().is_some_and(Result::is_ok)
+        && (matches!(app.updater.status, Status::Checking | Status::Failed(_)) || offered_or_newer(app).is_none())
+    {
+        show_check_status(app, ctx);
         return;
-    };
+    }
+    let Some(release) = app.updater.release.clone() else { return };
     let kind = app.updater.kind().clone();
     let install = install_method(app);
     let managed = app.updater.managed_by().map(str::to_string);
@@ -1084,12 +1105,43 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         Some("restart") => restart(app),
         Some("close") => app.updater.open = false,
         Some("cancel_download") => {
-            if let Some((_, progress)) = &app.updater.job {
+            // Drop the job from the UI at once so Cancel leaves "Downloading" immediately; the
+            // worker still sees the flag and stops at the next feed/checksum/chunk check (#8908).
+            if let Some((_, progress)) = app.updater.job.take() {
                 progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             }
+            app.updater.installed = None;
         }
         _ if closed => app.updater.open = false,
         _ => {}
+    }
+}
+
+/// Manual checks also have a visible result when no update can be offered.
+fn show_check_status(app: &mut SolveApp, ctx: &egui::Context) {
+    let (message, warning) = if !available(app) {
+        (crate::i18n::tr("update.check_unavailable").to_string(), false)
+    } else {
+        match &app.updater.status {
+            Status::Checking => (crate::i18n::tr("update.checking").to_string(), false),
+            Status::UpToDate => (crate::i18n::tr("update.up_to_date").to_string(), false),
+            Status::Failed(error) => (crate::i18n::format("update.failed", &[("error", error)]), true),
+            Status::Idle => (crate::i18n::tr("update.check_unavailable").to_string(), false),
+        }
+    };
+    let id = egui::Id::new("sc_update");
+    let (closed, action) = ui_kit::Window::new(id, "update", crate::i18n::tr("update.check_for_updates"))
+        .cards(1.7)
+        .actions("", crate::i18n::tr("ui.close"), None)
+        .show(ctx, true, |ui| {
+            ui_kit::text(ui, &message, ui_kit::Text::Report("check_status", warning));
+            ui_kit::text(ui, &crate::i18n::format("update.you_have", &[("version", current_version())]), ui_kit::Text::Note("have"));
+        });
+    if let Some(area) = ctx.memory(|m| m.area_rect(id)) {
+        crate::scenario::publish_rect("update:window", area);
+    }
+    if closed || action == ui_kit::Action::Cancel {
+        app.updater.open = false;
     }
 }
 

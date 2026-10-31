@@ -59,8 +59,8 @@ pub(crate) use confirm::{Confirm, Tone};
 pub use container::{Container, DockEdges, Edge, Surface};
 pub(crate) use disclosure::*;
 pub(crate) use drag::*;
-pub use fields::cell_editor;
 pub(crate) use fields::*;
+pub use fields::{cell_editor, wide_cell_editor};
 pub(crate) use file_view::{FileView, RecentRow, RecoveryMessage, SampleCard};
 pub(crate) use framing::*;
 pub(crate) use history::*;
@@ -94,6 +94,8 @@ pub(crate) use sphere::{SphereTile, sphere_cursor, sphere_grid, sphere_grid_drag
 pub(crate) use stages::{StageAction, StageBar};
 pub(crate) use status::*;
 pub(crate) use table::*;
+#[cfg(test)]
+pub(crate) use text::ellipsize_middle;
 pub(crate) use text_menu::menu_open as text_menu_open;
 pub(crate) use tree::*;
 pub(crate) use value_focus::*;

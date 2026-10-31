@@ -71,11 +71,17 @@ are converted; `describe_command` shows a command's schemas) can be checked as t
 recipe given with `--in`, and for calls bridged to the app; the default is `off`, which changes
 nothing. `warn` runs the call and adds `param_warnings` to its result, such as ``unknown key
 `operaton`; did you mean `operation`?`` (a starting script's warnings go to stderr). `strict`
-refuses the call, and the design is left as it was. Bridged, the server checks each call (and
-each step of a `batch`) against its own commands' contracts before sending it: `strict` sends
-nothing that breaks one, and a command the server has no contract for goes to the app unchecked.
-Use the server from the same release as the app: an app newer than the server may take keys the
-server's contracts don't know yet, and `strict` would refuse them.
+refuses the call, and the design is left as it was. Bridged, the server asks the app once per
+connection whether it checks a request's own level (`control.capabilities` and `param_check` in
+[control-protocol.md](control-protocol.md)). If it does, every call and `batch` is sent with the
+level and the app checks it against its own commands, so a newer app's keys are not refused. At
+`strict`, a reply that doesn't say the app checked the call at that level is an error (it may
+have run unchecked: inspect the design), and the server checks the next calls itself.
+An older app is checked here instead, against the server's own commands' contracts, before
+anything is sent: `strict` sends nothing that breaks one, and a command the server has no
+contract for goes to the app unchecked. With such an app, use the server from the same release:
+an app newer than the server may take keys the server's contracts don't know yet, and `strict`
+would refuse them.
 
 ### Which files the agent can reach
 

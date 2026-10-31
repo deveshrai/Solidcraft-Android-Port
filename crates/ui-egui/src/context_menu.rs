@@ -65,6 +65,10 @@ pub enum Target {
     Units,
     /// Insert › Insert Design: the designs open in other tabs, and Browse… (#8570).
     InsertDesign,
+    /// View › Visual style: the four styles, the current one marked (#8868).
+    VisualStyle,
+    /// View › Navigation tool: Orbit, Pan, Zoom; the latched one marked (#8868).
+    ViewTool,
     /// The mouse mappings (Preferences › Navigation), from the status bar (#7023).
     Navigation,
     /// An assembly joint.
@@ -431,6 +435,38 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
             .collect(),
         Target::NamedView { name } => crate::browser::view_items(app, name),
         Target::InsertDesign => insert_design_items(app),
+        Target::VisualStyle => crate::navigation_bar::VISUAL_STYLES
+            .iter()
+            .enumerate()
+            .map(|(index, (style, label))| {
+                let current = usize::from(app.ui.visual_style) == index;
+                let mut item = cmd(app, "view.visual_style", label).with(json!({"style": style})).key(if current { "current" } else { "" });
+                item.icon = crate::navigation_bar::visual_style_icon(u8::try_from(index).unwrap_or_default()).into();
+                item
+            })
+            .collect(),
+        Target::ViewTool => {
+            let latched = match app.viewport.nav {
+                Some(crate::viewport::NavMode::Orbit) => "orbit",
+                Some(crate::viewport::NavMode::Pan) => "pan",
+                Some(crate::viewport::NavMode::Zoom) => "zoom",
+                None => "",
+            };
+            [("orbit", "Orbit"), ("pan", "Pan"), ("zoom", "Zoom")]
+                .into_iter()
+                .map(|(tool, label)| {
+                    let current = latched == tool;
+                    // Picking the latched tool again releases it, as its navigation-bar button does.
+                    let mut item = cmd(app, "view.tool", label).with(json!({"tool": if current { "none" } else { tool }})).key(if current {
+                        "current"
+                    } else {
+                        ""
+                    });
+                    item.icon = tool.into();
+                    item
+                })
+                .collect()
+        }
     };
     if !crate::render_workspace::active(app) {
         v.extend(crate::browser::folded_folder_items(app, target));
@@ -631,6 +667,9 @@ fn viewport_items(app: &SolveApp) -> Vec<Item> {
         let planar =
             sel.iter().any(|s| matches!(s, Sel::Face { body, index, .. } if crate::dialogs::planar_face(&app.session, body, *index).is_some()));
         v.push(act("ui.lookAt", "Look At", "lookat").on(planar));
+        let marked = matches!(sel.as_slice(), [Sel::Face { body, index, .. }] if crate::print_face_ui::is_print_face(app, body, *index));
+        let one_flat = planar && matches!(sel.as_slice(), [Sel::Face { .. }]);
+        v.push(cmd(app, "body.print_face", if marked { "Clear Print Face" } else { "Print Face" }).on(one_flat));
         v.push(Item::sep());
         v.push(act("ui.appearance", "Appearance", "appearance").key("A"));
         v.push(act("ui.properties", "Properties", "measure").with(json!({ "bodies": [face] })));
@@ -1740,7 +1779,11 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
         }
         "ui.editCanvas" | "ui.calibrateCanvas" => {
             if let Some(c) = id_of(&p, "canvas") {
-                app.tree.canvas_panel = Some(crate::browser::CanvasPanel::new(app, c, item.id == "ui.calibrateCanvas"));
+                let calibrate = item.id == "ui.calibrateCanvas";
+                app.tree.canvas_panel = Some(crate::browser::CanvasPanel::new(app, c, calibrate));
+                if calibrate {
+                    app.set_status(crate::i18n::tr("browser.calibrate_click_a"), false);
+                }
             }
         }
         "ui.newGroup" | "ui.ungroup" | "ui.groupSelected" => crate::browser::group_action(app, &item.id, &p),
@@ -2600,6 +2643,67 @@ mod tests {
         assert_eq!(items(&h.app, &Target::Units).iter().find(|item| item.label == "cm").unwrap().shortcut, "current");
         h.step(&json!({"click":{"handle":"button:document.units"}})).unwrap();
         assert!(h.app.viewport.context_menu.is_none());
+    }
+
+    #[test]
+    fn visual_style_toolbar_start_offers_the_four_styles_not_an_error() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        let error = |h: &crate::scenario::Harness| h.app.status.as_ref().is_some_and(|(_, _, error)| *error);
+        h.app.status = None;
+        h.call("ui.start", json!({"command":"view.visual_style"}));
+        assert!(!error(&h), "{:?}", h.app.status);
+        assert_eq!(h.app.menu.target, Target::VisualStyle);
+        assert!(h.app.viewport.context_menu.is_some());
+        let menu = describe(&h.app);
+        let labels: Vec<_> = menu["items"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(labels, ["Shaded with edges", "Shaded", "Wireframe", "Shaded with hidden edges"]);
+        let rows = items(&h.app, &Target::VisualStyle);
+        assert_eq!(rows.iter().filter(|i| i.shortcut == "current").map(|i| i.label.as_str()).collect::<Vec<_>>(), ["Shaded with edges"]);
+        h.call("ui.menuPick", json!({"item":"Wireframe"}));
+        assert_eq!(h.app.ui.visual_style, 2);
+        assert!(h.app.viewport.context_menu.is_none());
+        assert!(!error(&h));
+        assert!(h.app.session.undo.is_empty(), "a display style is not a design edit");
+        // The real ribbon path: the VIEW tab's panel drop-down, then the Visual style row.
+        h.step(&json!({"click":{"handle":"tab:VIEW"}})).unwrap();
+        h.step(&json!({"click":{"handle":"panel:VIEW:VIEWS"}})).unwrap();
+        h.step(&json!({"click":{"handle":"toolbar:view.visual_style"}})).unwrap();
+        assert!(!error(&h), "{:?}", h.app.status);
+        assert_eq!(h.app.menu.target, Target::VisualStyle);
+        assert!(h.app.viewport.context_menu.is_some());
+        assert_eq!(items(&h.app, &Target::VisualStyle).iter().find(|i| i.label == "Wireframe").unwrap().shortcut, "current");
+        // The drop-down closes on a pick, so the toggle is checked with the opener's rect directly.
+        let button = egui::Rect::from_min_size(egui::pos2(40.0, 60.0), egui::vec2(28.0, 28.0));
+        h.app.start_at("view.visual_style", Some(button));
+        assert_eq!(h.app.viewport.context_menu, Some(button.left_bottom()));
+        h.app.start_at("view.visual_style", Some(button));
+        assert!(h.app.viewport.context_menu.is_none(), "a second click closes the menu");
+        let missing = h.call("engine.execute", json!({"command":"view.visual_style","params":{}}));
+        assert_eq!(missing["ok"], false);
+        assert!(h.app.viewport.context_menu.is_none());
+    }
+
+    #[test]
+    fn view_tool_toolbar_start_offers_orbit_pan_zoom_and_releases_the_latched_one() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        h.app.status = None;
+        let error = |h: &crate::scenario::Harness| h.app.status.as_ref().is_some_and(|(_, _, error)| *error);
+        h.call("ui.start", json!({"command":"view.tool"}));
+        assert!(!error(&h), "{:?}", h.app.status);
+        assert_eq!(h.app.menu.target, Target::ViewTool);
+        let menu = describe(&h.app);
+        let labels: Vec<_> = menu["items"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(labels, ["Orbit", "Pan", "Zoom"]);
+        assert!(items(&h.app, &Target::ViewTool).iter().all(|i| i.shortcut != "current"));
+        h.call("ui.menuPick", json!({"item":"Pan"}));
+        assert_eq!(h.app.viewport.nav, Some(crate::viewport::NavMode::Pan));
+        h.call("ui.start", json!({"command":"view.tool"}));
+        assert_eq!(items(&h.app, &Target::ViewTool).iter().find(|i| i.label == "Pan").unwrap().shortcut, "current");
+        h.call("ui.menuPick", json!({"item":"Pan"}));
+        assert_eq!(h.app.viewport.nav, None, "picking the latched tool releases it, as its navigation-bar button does");
+        assert!(!error(&h));
     }
 
     #[test]

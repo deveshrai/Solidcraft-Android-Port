@@ -321,6 +321,51 @@ mod tests {
     }
 
     #[test]
+    fn newest_status_uses_activation_not_row_order_and_filters_unpresented_effects() {
+        use crate::status_items::StatusId::{Continuity, Section, SurfaceAnalysis};
+        let mut s = Session::default();
+        s.execute("inspect.zebra", &json!({})).unwrap();
+        s.execute("inspect.section", &json!({"plane":"XY"})).unwrap();
+        s.execute("inspect.draft", &json!({"angle":7})).unwrap();
+        assert_eq!(status(&mut s).iter().map(|item| item.id).collect::<Vec<_>>(), [SurfaceAnalysis, Section]);
+        assert_eq!(s.newest_status_item(&[SurfaceAnalysis, Continuity, Section]).unwrap().command, "inspect.draft");
+        s.execute("inspect.section", &json!({"plane":"XZ"})).unwrap();
+        assert_eq!(s.newest_status_item(&[SurfaceAnalysis, Continuity, Section]).unwrap().id, Section);
+        let before = (s.revision, s.undo.len(), s.doc.to_json(), s.status_activation.clone());
+        assert_eq!(s.newest_status_item(&[SurfaceAnalysis, Continuity]).unwrap().command, "inspect.draft");
+        assert_eq!((s.revision, s.undo.len(), s.doc.to_json(), s.status_activation.clone()), before);
+        assert!(s.execute("inspect.zebra", &json!({"stripes":-1})).is_err());
+        assert_eq!(s.status_activation, before.3);
+        s.execute("inspect.draft", &json!({"clear":true})).unwrap();
+        assert!(s.newest_status_item(&[SurfaceAnalysis, Continuity]).is_none());
+        s.execute("inspect.zebra", &json!({})).unwrap();
+        assert_eq!(s.newest_status_item(&[SurfaceAnalysis, Continuity, Section]).unwrap().command, "inspect.zebra");
+    }
+
+    #[test]
+    fn newest_status_tracks_independent_continuity_and_policy_normalisation() {
+        use crate::status_items::StatusId::{Continuity, SurfaceAnalysis};
+        for continuity_first in [false, true] {
+            let mut s = Session::default();
+            boxed(&mut s, 10.0);
+            s.set_single_surface_analysis(false);
+            let shading = ("inspect.zebra", json!({}));
+            let seams = ("inspect.continuity", json!({"edges":[[5,0,0]],"samples":5}));
+            for (cmd, params) in if continuity_first { [seams, shading] } else { [shading, seams] } {
+                s.execute(cmd, &params).unwrap();
+            }
+            let latest = if continuity_first { "inspect.zebra" } else { "inspect.continuity" };
+            assert_eq!(s.newest_status_item(&[SurfaceAnalysis, Continuity]).unwrap().command, latest);
+            s.set_single_surface_analysis(true);
+            assert_eq!(s.newest_status_item(&[SurfaceAnalysis]).unwrap().command, latest);
+            s.set_single_surface_analysis(false);
+            let clear = s.newest_status_item(&[SurfaceAnalysis, Continuity]).unwrap().clear;
+            s.execute(&clear.command, &json!({"clear":true})).unwrap();
+            assert!(s.newest_status_item(&[SurfaceAnalysis, Continuity]).is_none());
+        }
+    }
+
+    #[test]
     fn status_items_zero_seam_continuity_never_leaves_a_phantom_winner() {
         use crate::status_items::StatusId;
         for single in [false, true] {

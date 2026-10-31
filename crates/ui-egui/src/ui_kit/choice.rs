@@ -33,6 +33,7 @@ pub(crate) struct Segments<'a> {
 }
 
 pub(crate) fn segmented(ui: &mut Ui, selected: &mut usize, options: &[&str], config: Segments<'_>) -> bool {
+    crate::prefs_search::note_unlabelled(ui, options);
     if crate::prefs_search::suppress_chrome(ui) && !crate::prefs_search::texts_hit(ui, options) {
         return false;
     }
@@ -608,6 +609,9 @@ pub(crate) struct PopupOption<'a> {
     pub color: egui::Color32,
 }
 
+/// Rows a completion list shows before it scrolls.
+const POPUP_LIST_ROWS: usize = 8;
+
 /// Focus-neutral suggestion popup. The owner handles navigation and completion semantics;
 /// `selected` is the highlighted row, or `None` when no row is picked yet (#3663). Its rows
 /// take no focus, and where they were drawn is kept under `id.with("rows")`, so an owner can
@@ -647,31 +651,56 @@ pub(crate) fn popup_list(
             .show(ui, |ui| {
                 super::scope(ui, |ui| {
                     ui.set_width(width);
-                    for (index, option) in options.iter().enumerate() {
-                        let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), t.control_height), egui::Sense::CLICK);
-                        rows.push(rect);
-                        let picked = selected == Some(index);
-                        if picked || response.hovered() {
-                            ui.painter().rect_filled(rect, t.control_radius, if picked { t.selected_bg } else { t.hover });
+                    // A long list (every parameter, #9246) scrolls past its first rows and keeps
+                    // the chosen row in view.
+                    let scrolls = options.len() > POPUP_LIST_ROWS;
+                    let followed = id.with("followed");
+                    let follow = scrolls && selected.is_some() && ctx.data(|d| d.get_temp::<Option<usize>>(followed)) != Some(selected);
+                    ctx.data_mut(|d| d.insert_temp(followed, selected));
+                    let scroll = egui::ScrollArea::vertical()
+                        .id_salt(id.with("scroll"))
+                        .max_height(t.control_height * POPUP_LIST_ROWS as f32)
+                        .auto_shrink([false, true])
+                        .vscroll(scrolls);
+                    scroll.show(ui, |ui| {
+                        for (index, option) in options.iter().enumerate() {
+                            let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), t.control_height), egui::Sense::CLICK);
+                            if follow && selected == Some(index) {
+                                ui.scroll_to_rect_animation(rect, None, egui::style::ScrollAnimation::none());
+                            }
+                            // A row scrolled out of view is not under the pointer.
+                            rows.push(if ui.is_rect_visible(rect) { rect.intersect(ui.clip_rect()) } else { egui::Rect::NOTHING });
+                            let picked = selected == Some(index);
+                            if picked || response.hovered() {
+                                ui.painter().rect_filled(rect, t.control_radius, if picked { t.selected_bg } else { t.hover });
+                            }
+                            let inner = rect.shrink2(vec2(t.space_8, 0.0));
+                            let kind = crate::i18n::tr_label(option.kind);
+                            let kind_width = super::metrics::label_width(ui, kind);
+                            let text_rect = egui::Rect::from_min_max(
+                                inner.min,
+                                egui::pos2((inner.right() - kind_width - t.space_8).max(inner.left()), inner.bottom()),
+                            );
+                            super::text::paint_text(
+                                ui,
+                                text_rect,
+                                option.text,
+                                mono.clone(),
+                                if picked { t.form_primary } else { option.color },
+                                false,
+                            );
+                            ui.painter().text(inner.right_center(), egui::Align2::RIGHT_CENTER, kind, kind_font.clone(), t.form_dim);
+                            response
+                                .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), picked, option.text));
+                            // Tip the full name first: long identifiers still clip inside a capped popup.
+                            let tip = if option.detail.is_empty() { option.text.to_owned() } else { format!("{}\n{}", option.text, option.detail) };
+                            let response = response.on_hover_text(tip);
+                            crate::scenario::publish_handle(&format!("dialog:suggestion:{index}"), response.rect.center());
+                            if response.clicked() {
+                                chosen = Some(index);
+                            }
                         }
-                        let inner = rect.shrink2(vec2(t.space_8, 0.0));
-                        let kind = crate::i18n::tr_label(option.kind);
-                        let kind_width = super::metrics::label_width(ui, kind);
-                        let text_rect = egui::Rect::from_min_max(
-                            inner.min,
-                            egui::pos2((inner.right() - kind_width - t.space_8).max(inner.left()), inner.bottom()),
-                        );
-                        super::text::paint_text(ui, text_rect, option.text, mono.clone(), if picked { t.form_primary } else { option.color }, false);
-                        ui.painter().text(inner.right_center(), egui::Align2::RIGHT_CENTER, kind, kind_font.clone(), t.form_dim);
-                        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), picked, option.text));
-                        // Tip the full name first: long identifiers still clip inside a capped popup.
-                        let tip = if option.detail.is_empty() { option.text.to_owned() } else { format!("{}\n{}", option.text, option.detail) };
-                        let response = response.on_hover_text(tip);
-                        crate::scenario::publish_handle(&format!("dialog:suggestion:{index}"), response.rect.center());
-                        if response.clicked() {
-                            chosen = Some(index);
-                        }
-                    }
+                    });
                     super::divider(ui, "completion_detail");
                     if let Some(option) = selected.and_then(|index| options.get(index)) {
                         super::text(ui, option.detail, super::Text::Note("completion_detail"));

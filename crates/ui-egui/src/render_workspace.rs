@@ -652,21 +652,25 @@ pub fn enter(app: &mut SolveApp, render: bool) -> Result<(), String> {
             return Err(crate::i18n::tr("render.error_finish_operation").into());
         }
         app.run("render.scene", json!({}))?;
-        if !active(app) {
+        let entering = !active(app);
+        if entering {
             app.render_workspace.design_camera = Some((app.cam, app.ui.perspective));
             app.ui.tab = "RENDER".into();
             select_stage(app, app.render_workspace.view.stage.key());
             if app.render_workspace.view.selection == RenderSelection::Nothing {
                 selection_editor(app, &RenderSelection::Nothing);
             }
-            let scene = solidcraft_engine::product_scene::extract(&app.session).map_err(|e| e.to_string())?;
-            if !scene.bounds.is_empty() {
-                app.fit_bounds(scene.bounds);
-            }
         }
         setups::refresh_dirty(app);
         if app.render_workspace.revision != app.session.revision && !app.render_workspace.view.dirty {
             setups::load(app);
+        }
+        // Fit once the setup in effect is known: the fit frames that image's aspect.
+        if entering {
+            let scene = solidcraft_engine::product_scene::extract(&app.session).map_err(|e| e.to_string())?;
+            if !scene.bounds.is_empty() {
+                app.fit_bounds(scene.bounds);
+            }
         }
         #[cfg(not(target_arch = "wasm32"))]
         app.render_workspace.start_deferred_path_host();
@@ -1908,6 +1912,20 @@ fn hash_surface(surface: Option<solidcraft_engine::render::surface::OpaqueSurfac
     }
 }
 
+/// The image's width over its height.
+pub fn image_aspect(setup: &RenderSetup) -> f64 {
+    f64::from(setup.width.max(1)) / f64::from(setup.height.max(1))
+}
+
+/// `layout` seen from the picture: while Frame shows the picture's frame the preview projects
+/// into that frame, not the viewport, so a fit that keeps the product inside this layout keeps
+/// it inside the image. Elsewhere the preview fills the viewport and the layout is unchanged.
+pub(crate) fn picture_layout(app: &SolveApp, layout: &crate::viewport_layout::Layout) -> crate::viewport_layout::Layout {
+    let Some(frame) = shot::preview_rect(app, layout.viewport) else { return layout.clone() };
+    // The same 16-point margin the viewport's fit keeps inside its free area.
+    crate::viewport_layout::Layout { viewport: frame, drawable: layout.drawable.intersect(frame.shrink(16.0)), ..layout.clone() }
+}
+
 /// The size the product preview draws at for a viewport of `full` physical pixels: the full
 /// size when the viewport executor admits it, else the largest size at the same aspect it does.
 /// Without an executor the request is left for resolution to report.
@@ -2058,7 +2076,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             clip: [0.0; 4],
             cap: [0.0; 4],
             images: Vec::new(),
-            points: Vec::new(),
+            clouds: Vec::new(),
             analysis: [0.0; 8],
             analysis_colors: [0.0; 36],
             access: None,

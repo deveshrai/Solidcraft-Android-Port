@@ -121,7 +121,13 @@ fn curve_arg(sk: &Sketch, p: &Value, cmd: &str) -> Result<usize> {
 fn curve_by_id(sk: &Sketch, id: &str, cmd: &str) -> Result<usize> {
     let c = sk.curve_index(id).ok_or_else(|| bad(cmd, format!("unknown curve `{id}`")))?;
     if sk.is_linked_curve(c) {
-        return Err(bad(cmd, format!("`{id}` is projected geometry: break its link first")));
+        let action = match cmd {
+            "sketch.trim" => "Trim",
+            "sketch.extend" => "Extend",
+            "sketch.break" => "Break",
+            _ => "edit",
+        };
+        return Err(bad(cmd, format!("`{id}` is projected from the model — use Break Link on it, then {action} again")));
     }
     if sk.freeform_offsets.iter().any(|offset| offset.output == id)
         || sk.offsets.iter().filter_map(|offset| offset.topology.as_ref()).any(|topology| topology.roles.iter().any(|role| role.output == id))
@@ -1749,12 +1755,29 @@ fn round_corner(sk: &mut Sketch, p: &Value, r: f64, cmd: &str) -> Result<Option<
             }
         }
     };
+    // A tangent point at a curve's other end would leave nothing of it (a quarter arc rounded
+    // with its own radius was left as an arc of no length): that radius does not fit, as one too
+    // large for two lines doesn't.
+    let far = |c: usize| ends(c).map(|(a, b)| if a == q { b } else { a }).and_then(|f| sk.point(f));
+    let (far_a, far_b) = (far(ca), far(cb));
+    let used_up = |t: Vec2, end: Option<Vec2>| end.is_some_and(|e| t.dist(e) < TOL * 10.0);
+    // Where the curves meet smoothly (a line along an arc's end, off by rounding), the round's
+    // tangent points fall on the corner within rounding: an arc of no length, refused as such.
+    let (mut smooth, mut short) = (false, false);
     let mut best: Option<(f64, Vec2, Vec2, Vec2)> = None;
     for oa in offsets(&sa) {
         for ob in offsets(&sb) {
             for cen in intersections(&oa, &ob) {
                 let (ta, tb) = (sa.project(cen), sb.project(cen));
-                if on_bounded(&sa, ta).is_none() || on_bounded(&sb, tb).is_none() || ta.dist(pc) < 1e-9 || tb.dist(pc) < 1e-9 {
+                if on_bounded(&sa, ta).is_none() || on_bounded(&sb, tb).is_none() {
+                    continue;
+                }
+                if ta.dist(pc) < TOL * 10.0 || tb.dist(pc) < TOL * 10.0 {
+                    smooth = true;
+                    continue;
+                }
+                if used_up(ta, far_a) || used_up(tb, far_b) {
+                    short = true;
                     continue;
                 }
                 let score = ta.dist(pc) + tb.dist(pc);
@@ -1764,7 +1787,9 @@ fn round_corner(sk: &mut Sketch, p: &Value, r: f64, cmd: &str) -> Result<Option<
             }
         }
     }
-    let (_, cen, ta, tb) = best.ok_or_else(|| bad(cmd, "that radius does not fit the corner"))?;
+    let (_, cen, ta, tb) = best.ok_or_else(|| {
+        bad(cmd, if smooth && !short { "the curves meet smoothly there: there is no corner to round" } else { "that radius does not fit the corner" })
+    })?;
     let (na, nb) = (sk.add_point(ta, None)?, sk.add_point(tb, None)?);
     for (c, n) in [(ca, na), (cb, nb)] {
         if let Some(cu) = sk.curves.get_mut(c) {
