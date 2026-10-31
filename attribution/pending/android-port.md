@@ -111,3 +111,4 @@
 | docs/screenshots/android/devterm-enclosure-pick-ops-tab-0280a.gif | SolidCraft contributors | screen recording of SolidCraft itself on Android (Galaxy Tab, 0.28.0a), 2x speed: faces and edges picked with the crosshair, then Press Pull and Fillet | MIT OR Apache-2.0 |
 | docs/screenshots/android/devterm-enclosure-rear-tab-0280a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.28.0a): a handheld's enclosure from behind, eight screws | MIT OR Apache-2.0 |
 | docs/screenshots/android/devterm-enclosure-tab-0280a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.28.0a): a handheld's enclosure built over MCP | MIT OR Apache-2.0 |
+| docs/screenshots/android/devterm-build-tab-0280a.gif | SolidCraft contributors | screen recording of SolidCraft itself on Android (Galaxy Tab, 0.28.0a), real time: a handheld terminal built over MCP | MIT OR Apache-2.0 |

@@ -1,6 +1,6 @@
 """The README's hero image: the port next to upstream, with a screenshot of the latest device test.
 
-    python3 scripts/android-hero.py SCREENSHOT.png docs/screenshots/android/hero-port-vs-upstream.png 0.27.1 0.27.1a
+    python3 scripts/android-hero.py SCREENSHOT.png docs/screenshots/android/hero-port-vs-upstream.png 0.28.0 0.28.0a
 
 Needs Pillow. Edit the call-out and caption text below for each release's test."""
 import sys
@@ -40,16 +40,16 @@ ImageDraw.Draw(mask).rounded_rectangle((0, 0, *shot.size), radius=12, fill=255)
 im.paste(shot, (fx + pad, fy + pad), mask)
 
 # Call-out over the screenshot: what the run did.
-cx, cy = fx + pad + 170, fy + pad + 452
-box = (cx, cy, cx + 410, cy + 66)
+cx, cy = fx + pad + 60, fy + pad + 440
+box = (cx, cy, cx + 470, cy + 66)
 d.rounded_rectangle(box, radius=10, fill=(255, 236, 160), outline=YELLOW, width=3)
-d.text((cx + 14, cy + 6), "220 mm M10 lead screw: 1.2 s", font=font(20, "SemiBold"), fill=(30, 30, 30))
-d.text((cx + 14, cy + 34), "helical B-rep · whole stage over MCP in 68 s", font=font(16), fill=(60, 60, 60))
+d.text((cx + 14, cy + 6), "Enclosure + 8 M2 screws over MCP: 19.9 s", font=font(20, "SemiBold"), fill=(30, 30, 30))
+d.text((cx + 14, cy + 34), "121 calls · then picked and edited by finger", font=font(16), fill=(60, 60, 60))
 
 d.text((60, fy + shot.height + 2 * pad + 22),
-       "A linear stage (guide rods, bearing blocks, lead screw, nut, coupling, motor), built by an agent",
+       "A handheld terminal's enclosure (shell, frame, screw posts, ports, vents), built by an agent over",
        font=font(20), fill=DIM)
-d.text((60, fy + shot.height + 2 * pad + 50), "over the MCP server on a Galaxy Tab: 52 operations and every check in 68 s.", font=font(20), fill=DIM)
+d.text((60, fy + shot.height + 2 * pad + 50), "the MCP server on a Galaxy Tab; the new crosshair picks a screw head and an edge by finger.", font=font(20), fill=DIM)
 
 # The comparison table.
 tx, c1, c2 = 1060, 1530, 1670
@@ -69,7 +69,7 @@ def cross(x, y):
 
 
 rows = [
-    ("Android app", "touch, mouse and keyboard, file picker", None, True),
+    ("Android app", "touch, a crosshair for small picks, mouse, keyboard", None, True),
     ("Helical B-rep threads", "exact, any pitch, long lead screws, phase", "faceted", True),
     ("Involute gears", "ten types, bore, keyway, hub", None, True),
     ("MCP server on the network", "Claude Code from Termux or Wi-Fi", "stdio", True),
