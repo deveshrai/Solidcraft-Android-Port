@@ -1,0 +1,188 @@
+{
+  "bodies": [
+    {
+      "area_mm2": 1524.1643876936123,
+      "bbox": {
+        "max": [
+          84.9999959958729,
+          4.999994562098545,
+          30.000000000000004
+        ],
+        "min": [
+          75.00000000000188,
+          -4.9999971122930305,
+          0.0
+        ]
+      },
+      "center_of_mass": [
+        80.00606755458647,
+        0.004051446550841172,
+        14.999936468750246
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 14,
+      "face_types": {
+        "cylinder": 2,
+        "other": 2,
+        "plane": 4
+      },
+      "faces": 8,
+      "kernel": {
+        "edges": 16,
+        "faces": 8,
+        "shells": 1,
+        "vertices": 12
+      },
+      "mass_g": 2.6189450551295526,
+      "material": "Default",
+      "name": "Rod",
+      "vertices": 10,
+      "volume_mm3": 2030.1899652167074
+    },
+    {
+      "area_mm2": 9022.975317112583,
+      "bbox": {
+        "max": [
+          27.540266539367444,
+          27.54026653936744,
+          15.000000114791314
+        ],
+        "min": [
+          -27.54026653936744,
+          -27.540266539367437,
+          -6.322393691915456e-8
+        ]
+      },
+      "center_of_mass": [
+        2.167952870187442e-10,
+        -5.063041219525613e-10,
+        7.4999993918058445
+      ],
+      "closed": true,
+      "density_g_cm3": 1.29,
+      "edges": 434,
+      "face_types": {
+        "cone": 48,
+        "cylinder": 49,
+        "other": 48,
+        "plane": 2
+      },
+      "faces": 147,
+      "kernel": {
+        "edges": 438,
+        "faces": 148,
+        "shells": 1,
+        "vertices": 292
+      },
+      "mass_g": 38.25853449961422,
+      "material": "Default",
+      "name": "Helical Gear m2 z24",
+      "vertices": 290,
+      "volume_mm3": 29657.778681871492
+    }
+  ],
+  "body_count": 2,
+  "params": [],
+  "sketches": [
+    {
+      "curves": 145,
+      "dof": 627,
+      "id": 3,
+      "name": "Tooth Profile",
+      "profiles": 2,
+      "status": "solved",
+      "visible": true
+    },
+    {
+      "curves": 1,
+      "dof": 2,
+      "id": 4,
+      "name": "Helix",
+      "profiles": 0,
+      "status": "solved",
+      "visible": true
+    }
+  ],
+  "timeline": [
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 3,
+      "ms": 49.839124999999996,
+      "name": "Tooth Profile",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "Sketch",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 4,
+      "ms": 0.039583,
+      "name": "Helix",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "Sketch",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 5,
+      "ms": 65.454792,
+      "name": "Sweep1",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "SweepFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 6,
+      "ms": 0.804708,
+      "name": "Cylinder1",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "CylinderFeature",
+      "warning": null
+    },
+    {
+      "boolean_diagnostics": {
+        "events": [],
+        "truncated": false
+      },
+      "error": null,
+      "id": 7,
+      "ms": 115.249292,
+      "name": "Thread1",
+      "rolled_back": false,
+      "suppressed": false,
+      "type": "ThreadFeature",
+      "warning": null
+    }
+  ],
+  "total": {
+    "area_mm2": 10547.139704806195,
+    "edges": 448,
+    "faces": 155,
+    "mass_g": 40.87747955474377,
+    "open_bodies_skipped": 0,
+    "vertices": 300,
+    "volume_mm3": 31687.9686470882
+  }
+}

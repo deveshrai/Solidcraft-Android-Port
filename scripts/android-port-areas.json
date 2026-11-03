@@ -11,6 +11,17 @@
       "test": "dialogs_thread::contribution_tests::contribution_thread_catalogue_is_parseable_and_rendering_keeps_custom_designations",
       "why": "trips egui's debug assertion in the test harness; fails the same on a clean upstream checkout (0.22.0 to 0.25.1)"
     }
+,
+    {
+      "package": "solidcraft-ui-egui",
+      "test": "prefs::tests::origin_plane_names_change_only_the_names_shown",
+      "why": "egui's 'Time shouldn't move backwards' assertion in the test harness; fails the same on a clean upstream 0.30.1 checkout"
+    },
+    {
+      "package": "solidcraft-ui-egui",
+      "test": "prefs::tests::the_system_theme_leaves_the_window_to_follow_the_system",
+      "why": "egui's 'Dropped TexturesDelta with unapplied deltas' assertion in the test harness; fails the same on a clean upstream 0.30.1 checkout"
+    }
   ],
   "areas": [
     {
