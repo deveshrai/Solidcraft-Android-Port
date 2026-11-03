@@ -20,6 +20,8 @@ mod mcp_http;
 // Plain functions, built (and tested) on every system.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 mod names;
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+mod startup;
 
 #[cfg(target_os = "android")]
 mod android {
@@ -32,6 +34,7 @@ mod android {
 
     use crate::documents::Documents;
     use crate::mcp_host::McpHost;
+    use crate::startup::Backend;
 
     /// The viewport scene's depth and stencil buffers and anti-aliasing, as on the desktop: a
     /// 24-bit depth buffer is the one every Android GPU has. The scene draws offscreen with them;
@@ -50,6 +53,9 @@ mod android {
         escape: bool,
         /// Settings › MCP server.
         mcp: McpHost,
+        /// The app's folder, the graphics this launch started on, and whether that was a fallback:
+        /// told once a frame is on screen (`startup::drew`).
+        started: Option<(std::path::PathBuf, Backend, bool)>,
     }
 
     /// Whether Escape has something to close: Preferences, a dialog, a tool, a sketch being
@@ -72,6 +78,9 @@ mod android {
                 ctx.request_repaint();
                 if self.frames == 2 {
                     solidcraft_engine::crash::phase(solidcraft_engine::crash::RUNNING);
+                    if let Some((dir, backend, fallback)) = self.started.take() {
+                        crate::startup::drew(&dir, backend, fallback);
+                    }
                 }
             }
             // The design on screen is the one whose commands a crash report replays.
@@ -181,17 +190,22 @@ mod android {
         // The MCP agent's files: where a file manager or USB can reach them, when there is such a place.
         let agent_folder = app.external_data_path().or_else(|| data.clone()).map(|d| d.join("Agent")).unwrap_or_default();
         let activity = app.activity_as_ptr();
+        // A launch before this one that never drew a frame: this one starts on OpenGL ES.
+        let (backend, fallback) = data.as_deref().map_or((Backend::Default, false), crate::startup::begin);
+        // Where a launch that can't start says why: a computer reaches it over USB.
+        let error_file = app.external_data_path().or_else(|| data.clone()).map(|d| d.join(crate::startup::ERROR_FILE));
+        let mut crashed = Vec::new();
         if let Some(dir) = data.as_ref().map(|d| d.join("crashes")) {
             let build = solidcraft_engine::crash::Build {
                 version: solidcraft_ui_egui::help::VERSION,
                 commit: solidcraft_ui_egui::help::COMMIT,
                 built: solidcraft_ui_egui::help::BUILD_DATE,
             };
-            solidcraft_engine::crash::install(dir, build);
+            crashed = solidcraft_engine::crash::install(dir, build);
         }
         eframe::egui_wgpu::set_startup_hook(startup_step);
         solidcraft_engine::crash::phase("window");
-        let options = eframe::NativeOptions {
+        let mut options = eframe::NativeOptions {
             android_app: Some(app),
             depth_buffer: 0,
             stencil_buffer: 0,
@@ -199,6 +213,12 @@ mod android {
             persistence_path: data.as_ref().map(|d| d.join("app.ron")),
             ..Default::default()
         };
+        if backend == Backend::Gles
+            && let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup
+        {
+            setup.instance_descriptor.backends = eframe::wgpu::Backends::GL;
+        }
+        let started = data.clone().map(|d| (d, backend, fallback));
         let result = eframe::run_native(
             "SolidCraft",
             options,
@@ -249,18 +269,42 @@ mod android {
                         info.backend, info.name, info.driver
                     ));
                 }
-                Ok(Box::new(Shell { app, frames: 0, documents, escape: false, mcp }))
+                // Crashes since the last start, as on the desktop: Help › Crash Reports has them.
+                solidcraft_ui_egui::crash_ui::announce(&mut app, &crashed);
+                if fallback {
+                    app.set_status("The last launch could not start its graphics, so this one uses OpenGL ES.", false);
+                }
+                Ok(Box::new(Shell { app, frames: 0, documents, escape: false, mcp, started }))
             }),
         );
         if let Err(e) = result {
             log::error!("SolidCraft could not start: {e}");
+            // The journal keeps it, so the next launch's crash report says why; the marker stays,
+            // so the next launch tries the other graphics.
+            solidcraft_engine::crash::phase(&format!("could not start: {e}"));
+            let version = option_env!("SOLIDCRAFT_PORT_VERSION").filter(|v| !v.is_empty()).unwrap_or(solidcraft_ui_egui::help::VERSION);
+            if let Some(path) = &error_file
+                && let Err(w) = std::fs::write(path, crate::startup::error_text(version, backend, &e.to_string()))
+            {
+                log::warn!("could not write {}: {w}", path.display());
+            }
         }
         // The system destroyed the activity, and the app has shut down (designs saved, document
         // copies flushed). winit's event loop can only be made once per process, so a new
         // activity in this process could never start: end the process, and the next launch
         // starts a fresh one.
         log::info!("the activity ended; exiting");
-        std::process::exit(0);
+        exit_now();
+    }
+
+    /// End the process at once. `std::process::exit` runs the process's exit-time destructors
+    /// while the system's own threads (InsetsAnimation, the renderer) still use what they free,
+    /// and Android then aborts the app (`pthread_mutex_lock called on a destroyed mutex`, port
+    /// issue #4). Everything worth keeping is written by now.
+    #[allow(unsafe_code)]
+    fn exit_now() -> ! {
+        // SAFETY: `_exit` takes no pointers and never returns; it only ends the process.
+        unsafe { libc::_exit(0) }
     }
 }
 

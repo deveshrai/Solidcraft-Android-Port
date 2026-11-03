@@ -76,6 +76,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     }
     let mut report: Option<String> = None;
     let mut delete: Option<Option<String>> = None;
+    let mut save: Option<String> = None;
     let (closed, action) = ui_kit::Window::new(egui::Id::new("sc_crash_reports"), "bug_report", crate::i18n::tr_label("Crash Reports"))
         .cards(2.0)
         .actions("", crate::i18n::tr("ui.close"), None)
@@ -118,6 +119,11 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                                     ui_kit::icon_label_button(ui, crate::i18n::tr("crash.copy_path"), "copy", true, false)
                                         .clicked()
                                         .then(|| ctx.copy_text(r.path.clone()));
+                                    // SolidCraft Android port: no folder to open there, so a report leaves through the
+                                    // system's save picker (port issue #4).
+                                    if ui_kit::icon_label_button(ui, crate::i18n::tr("crash.save_copy"), "export_tray", true, false).clicked() {
+                                        save = Some(r.id.clone());
+                                    }
                                     if ui_kit::icon_label_button(ui, crate::i18n::tr("crash.report"), "bug_report", true, false).clicked() {
                                         report = Some(r.id.clone());
                                     }
@@ -156,6 +162,20 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     {
         match crash::read(&dir, &id) {
             Ok(v) => crate::issue_report::begin_crash(app, ctx, &v),
+            Err(e) => app.crashes.note = e,
+        }
+    }
+    if let Some(id) = save
+        && let Some(dir) = app.crashes.dir_path()
+    {
+        match crash::read(&dir, &id).and_then(|v| serde_json::to_string_pretty(&v).map_err(|e| e.to_string())) {
+            Ok(text) => app.pick_save(&format!("solidcraft-crash-{id}.json"), &["json"], move |app, to| {
+                if let Some(to) = to
+                    && let Err(e) = solidcraft_engine::io::vfs::write(&to, text.as_bytes())
+                {
+                    app.crashes.note = e.to_string();
+                }
+            }),
             Err(e) => app.crashes.note = e,
         }
     }
@@ -271,6 +291,28 @@ mod tests {
         h.step(&json!({"widget": "Delete all"})).unwrap();
         h.frames(2);
         assert!(solidcraft_engine::crash::list(&d).is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// SolidCraft Android port (port issue #4): a report leaves through the save picker as its JSON.
+    #[test]
+    fn a_crash_report_saves_a_copy_through_the_picker() {
+        let d = folder("save");
+        let out = d.join("saved.json");
+        let mut h = crate::scenario::Harness::new();
+        h.app.crashes.folder = Some(d.clone());
+        let answer = out.to_string_lossy().into_owned();
+        h.app.services.pick_save = Some(Box::new(move |name, _| {
+            assert_eq!(name, "solidcraft-crash-20261012-162341-bb60791ed6692f1d.json");
+            Box::pin(std::future::ready(Some(answer.clone())))
+        }));
+        super::open(&mut h.app);
+        h.frames(4);
+        h.step(&json!({"widget": "Save a copy"})).unwrap();
+        h.frames(4);
+        let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&out).expect("the copy is saved")).unwrap();
+        assert_eq!(saved["command"]["command"], "solid.fillet");
+        assert_eq!(saved["kind"], "unclean_exit");
         let _ = std::fs::remove_dir_all(&d);
     }
 

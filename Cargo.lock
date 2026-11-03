@@ -4282,6 +4282,7 @@ dependencies = [
  "egui",
  "getrandom 0.3.4",
  "jni",
+ "libc",
  "log",
  "serde",
  "serde_json",

@@ -17,7 +17,12 @@ const MAX_BODY: usize = 24_000;
 // Room for all three answers and the original bounded diagnostic context.
 const MAX_REPORT: usize = 32_000;
 const MAX_IMAGE_PIXELS: usize = 16_000_000;
-const ISSUE_URL: &str = "https://github.com/tangency-labs/solidcraft/issues/new";
+// SolidCraft Android port: the port's crashes go to the port's tracker, not upstream's.
+const ISSUE_URL: &str = if cfg!(target_os = "android") {
+    "https://github.com/deveshrai/Solidcraft-Android-Port/issues/new"
+} else {
+    "https://github.com/tangency-labs/solidcraft/issues/new"
+};
 
 thread_local! {
     static CAD_INPUT_BLOCKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

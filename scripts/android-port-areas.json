@@ -170,6 +170,29 @@
       ]
     },
     {
+      "name": "Crash reports",
+      "why": "Port issue #4: a report saves a copy through the system's picker (Android has no folder to open), and Report drafts the issue on the port's tracker on Android",
+      "files": [
+        "crates/ui-egui/src/crash_ui.rs",
+        "crates/ui-egui/src/issue_report.rs"
+      ],
+      "tests": [
+        "solidcraft-ui-egui --lib a_crash_report_saves_a_copy_through_the_picker a_crash_report_opens_a_reviewed_issue_draft"
+      ],
+      "markers": [
+        {
+          "file": "crates/ui-egui/src/crash_ui.rs",
+          "pattern": "SolidCraft Android port: no folder to open there",
+          "count": 1
+        },
+        {
+          "file": "crates/ui-egui/src/issue_report.rs",
+          "pattern": "SolidCraft Android port: the port's crashes go to the port's tracker",
+          "count": 1
+        }
+      ]
+    },
+    {
       "name": "The Android build",
       "why": "Crates and settings the Android app needs: no arboard there, Android's system fonts, the patched winit, the port's app registered with the repository checks",
       "files": [

@@ -40,5 +40,7 @@ egui = { workspace = true }
 winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
 # The document pickers (SolidCraftActivity) through JNI; the version the activity glue uses.
 jni = "0.22"
+# `_exit`: leave without the exit-time destructors that abort on some devices (MIT OR Apache-2.0).
+libc = "0.2"
 # log → logcat (MIT OR Apache-2.0).
 android_logger = { version = "0.15", default-features = false }
