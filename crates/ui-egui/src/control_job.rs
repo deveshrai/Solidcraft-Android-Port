@@ -67,13 +67,22 @@ const AHEAD_AREAS: &[&str] = &[
 const NAMES_A_FILE: &[&str] = &["path", "paths", "file", "files", "dir", "folder", "url", "out"];
 
 /// Commands that change nothing in the design and write a file: they run on a copy.
-const ANSWERED_ON_A_COPY: &[&str] = &["file.export", "file.save_mesh"];
+const ANSWERED_ON_A_COPY: &[&str] =
+    &["file.export", "file.export_3mf", "file.export_obj", "file.export_step", "file.export_stl", "file.export_urdf", "file.save_mesh"];
 
 /// Commands that only read the design, which can take long on a large one (a measure of every
 /// body, an inspection that measures them, #4604; a clearance or interference check of every pair
 /// of bodies, minutes on an assembly of 150): they run on a copy too, whatever the preference,
 /// since an answer from the design as it was when asked has no order to keep.
-const READ_ON_A_COPY: &[&str] = &["inspect.measure", "document.inspect", "inspect.clearance", "inspect.interference"];
+const READ_ON_A_COPY: &[&str] = &[
+    "inspect.measure",
+    "document.inspect",
+    "inspect.clearance",
+    "inspect.interference",
+    // Physical properties of a component or placement: every body of every placement (#8706).
+    "component.properties",
+    "occurrence.properties",
+];
 
 /// Exports and readings computing at once; more run here.
 const MAX_ANSWERING: usize = 4;
@@ -451,9 +460,19 @@ impl SolveApp {
         if let Some(level) = level {
             copy.param_check = level;
         }
+        // The copy has no history and no file (#9624): an inspection reports the design's own.
+        let s = &self.session;
+        let own = (id == "document.inspect").then(|| (s.undo.len(), s.redo.len(), s.path.clone()));
         let rx = spawn(scope, move || {
             let mut reply = match copy.execute(id, &params) {
-                Ok(v) => json!({"ok": true, "result": v}),
+                Ok(mut v) => {
+                    if let (Some((undo, redo, path)), Some(o)) = (own, v.as_object_mut()) {
+                        o.insert("undo".into(), json!(undo));
+                        o.insert("redo".into(), json!(redo));
+                        o.insert("path".into(), json!(path));
+                    }
+                    json!({"ok": true, "result": v})
+                }
                 Err(e) => json!({"ok": false, "error": e.to_string()}),
             };
             if let Some(level) = level {

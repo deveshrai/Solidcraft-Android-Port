@@ -143,6 +143,9 @@ pub struct TreeState {
     /// Find in Timeline: the feature the history scrolls to the next time it draws its items, in
     /// the bottom strip or in the history on the left (#5850).
     pub timeline_reveal: Option<u64>,
+    /// Show components marked out of the History bar anyway (#10393). Held by the session, like
+    /// the bar's Show All toggle; the History controls' menu carries the switch.
+    pub history_show_hidden: bool,
     /// The feature of the face or edge last picked in the view, so a new pick scrolls the
     /// history to it once.
     pub view_pick: Option<u64>,
@@ -166,6 +169,9 @@ pub struct TreeState {
     pub section_hidden: bool,
     /// What waits for the Capture Position question: a command id, or [`SAVE`].
     pub capture_prompt: Option<String>,
+    /// The design, undo depth and visibility when the button last went down: a drag over the eyes
+    /// merges the steps it made into one (`eye_drag_frame`).
+    eye_press: Option<(Arc<Document>, usize, solidcraft_engine::Visibility)>,
     /// The last row clicked (for Shift ranges).
     anchor: Option<String>,
     /// Row keys in drawing order this frame (for Shift ranges).
@@ -361,7 +367,7 @@ pub fn group_items(app: &SolveApp, id: u64, scope: &str) -> Vec<Item> {
         v.push(Item::action("ui.newGroup", "New Group", "folder").with(json!({ "component": g.component, "folder": g.folder, "parent": id })));
     }
     v.extend([
-        Item::action("ui.rename", "Rename", "rename").with(json!({ "group": id })),
+        Item::action("ui.rename", "Rename", "rename").key("F2").with(json!({ "group": id })),
         Item::action("ui.ungroup", "Ungroup", "folder").with(json!({ "group": id })),
         Item::sep(),
         // The group itself: its items keep their own state.
@@ -371,6 +377,11 @@ pub fn group_items(app: &SolveApp, id: u64, scope: &str) -> Vec<Item> {
         v.push(Item::action("ui.isolate", "Isolate", "body").with(json!({ "bodies": group_bodies(app, id) })));
     }
     v
+}
+
+/// Move Sketches to Their Parts (`component.move_sketches.to_parts`) for `sketches` (ids).
+pub(crate) fn sketches_to_parts_item(sketches: Vec<String>) -> Item {
+    Item::action("component.move_sketches.to_parts", "Move Sketches to Their Parts", "move").with(json!({ "sketches": sketches }))
 }
 
 /// The menu of a folder row (Bodies, Sketches, Construction).
@@ -385,6 +396,11 @@ pub fn folder_items(app: &SolveApp, component: u64, folder: &str, scope: &str) -
     }
     if folder == "sketches" {
         v.push(paste_item(app, component, scope, folder, None));
+        // The folder's selected sketches, or all of them, go to the part whose face they are on (#10218).
+        if !app.session.doc.components.is_empty() && !all.is_empty() {
+            let sketches = if sel.is_empty() { all.iter().map(|e| e.key.clone()).collect() } else { sel.clone() };
+            v.push(sketches_to_parts_item(sketches));
+        }
     }
     v.push(Item::action("ui.newGroup", "New Group", "folder").with(json!({ "component": component, "folder": folder })));
     if sel.len() > 1 {
@@ -435,6 +451,35 @@ pub fn toggle_folder(app: &mut SolveApp, key: &str) {
     let _ = app.run("browser.visibility", json!({ "tree_folders": [key], "visible": app.session.folder_hidden(key) }));
 }
 
+/// A drag over the eyes is one undo step (#9680). When the button goes down the undo depth and the
+/// hidden items are noted; when it comes up, the steps the drag made are merged into the first of
+/// them. Runs every frame, whatever else is open, so a release is never missed.
+pub(crate) fn eye_drag_frame(app: &mut SolveApp, ctx: &egui::Context) {
+    let (pressed, down) = ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down()));
+    if pressed {
+        app.tree.eye_press = Some((app.session.doc.clone(), app.session.undo.len(), without_origin(app.session.visibility.clone())));
+    }
+    if down {
+        return;
+    }
+    let dragged = ctx.data_mut(|d| d.remove_temp::<bool>(crate::ui_kit::eye_drag_id())).is_some();
+    let Some((doc, depth, visibility)) = app.tree.eye_press.take().filter(|_| dragged) else { return };
+    // shortcut: once the history is full (200 steps) its length stops growing, so the drag is left as
+    // separate steps, like the point-cloud and canvas drags; the visibility test keeps a trimmed front
+    // from being merged wrongly.
+    let undo = &mut app.session.undo;
+    if undo.len() > depth + 1 && undo.get(depth).is_some_and(|s| Arc::ptr_eq(&s.doc, &doc) && without_origin(s.visibility.clone()) == visibility) {
+        undo.truncate(depth + 1);
+    }
+}
+
+/// The Origin's own eye is not an undo step (`set_origin_shown`), so the drag's steps do not hold it:
+/// it is left out of the comparison.
+fn without_origin(mut visibility: solidcraft_engine::Visibility) -> solidcraft_engine::Visibility {
+    visibility.origin_hidden = None;
+    visibility
+}
+
 /// A folder shortcut target lasts until another click, Escape, or a change of design/model.
 /// Visibility changes keep the document snapshot, so V can toggle the same folder again.
 pub(crate) fn update_folder_pick(app: &mut SolveApp, ctx: &egui::Context) {
@@ -447,6 +492,14 @@ pub(crate) fn update_folder_pick(app: &mut SolveApp, ctx: &egui::Context) {
 
 fn pick_folder(app: &mut SolveApp, key: &str) {
     app.tree.picked_folder = Some(FolderPick { key: key.into(), session: app.session.uid, doc: Arc::downgrade(&app.session.doc) });
+}
+
+/// The group whose row was clicked last (its key ends in `/g<id>`), while that pick still holds
+/// and the group exists: F2 renames it (#10005).
+pub(crate) fn picked_group(app: &SolveApp) -> Option<u64> {
+    let pick = app.tree.picked_folder.as_ref().filter(|pick| pick.current(app))?;
+    let id = pick.key.rsplit_once("/g")?.1.parse().ok()?;
+    find_group(app, id).map(|g| g.id)
 }
 
 pub(crate) fn toggle_picked_folder(app: &mut SolveApp) -> bool {
@@ -725,10 +778,11 @@ impl Lit {
         // which does not rewrite the browser selection.
         let dialog_picks = app.dialog.as_ref().map(|d| d.items()).unwrap_or_default();
         for s in app.session.selection.iter().chain(&dialog_picks) {
-            selected.insert(match s {
-                Sel::Body { name } | Sel::Face { body: name, .. } | Sel::Edge { body: name, .. } | Sel::Vertex { body: name, .. } => {
-                    Thing::Body(name.clone())
-                }
+            let thing = match s {
+                Sel::Body { name } => Thing::Body(name.clone()),
+                // A picked face, edge or vertex lights the feature it belongs to (see
+                // `browser::features`), not the whole body as if the body were selected.
+                Sel::Face { .. } | Sel::Edge { .. } | Sel::Vertex { .. } => continue,
                 Sel::Feature { id } => Thing::Sketch(*id),
                 Sel::Profile { sketch, .. } | Sel::ExternalSketchCurve { sketch, .. } | Sel::ExternalSketchPoint { sketch, .. } => {
                     Thing::Sketch(*sketch)
@@ -743,7 +797,8 @@ impl Lit {
                 Sel::Axis { name } => Thing::Axis(name.clone()),
                 Sel::ConstructionPoint { name } => Thing::Point(name.clone()),
                 Sel::Occurrence { .. } => continue,
-            });
+            };
+            selected.insert(thing);
         }
         let hovered = match &app.viewport.hover {
             Some(Hit::Face { body, .. } | Hit::Edge { body, .. } | Hit::Vertex { body, .. }) => Some(Thing::Body(body.clone())),
@@ -1652,7 +1707,7 @@ fn occurrence_rows_inner(
     if r.double && !takes_components && gear {
         crate::dialogs_gears::open(app, placement.component);
     }
-    if r.clicked && takes_components {
+    if r.clicked && (takes_components || crate::dialogs_move::picks_components(app)) {
         if let Some(mut d) = app.dialog.take() {
             d.pick(&app.session, Sel::Occurrence { path: path.to_vec() });
             app.dialog = Some(d);
@@ -1718,6 +1773,8 @@ fn occurrence_rows_inner(
     }
     if !render {
         features::rows(app, ui, placement.component, path, depth + 1, acts);
+        // The joints that attach this placement, as the root's Joints folder lists them (#9130).
+        crate::dialogs_assembly::component_joints(app, ui, path, key, depth + 1);
     }
     if path.len() < 64 {
         for child in &placement.children {
@@ -2133,7 +2190,7 @@ pub fn canvas_items(app: &SolveApp, id: u64) -> Vec<Item> {
         Item::action("canvas.to_sketch", "Canvas to Sketch", "canvas").with(json!({ "canvas": id })),
         Item::sep(),
         Item::action("ui.delete", "Delete", "delete").with(json!({ "canvases": [id] })),
-        Item::action("ui.rename", "Rename", "rename").with(json!({ "canvas": id })),
+        Item::action("ui.rename", "Rename", "rename").key("F2").with(json!({ "canvas": id })),
         Item::sep(),
         Item::action("ui.canvasVisible", "Show/Hide", "eye").key("V").with(json!({ "canvas": id, "visible": !visible })),
     ]
@@ -2773,7 +2830,9 @@ fn inline_rename(app: &mut SolveApp, ui: &mut egui::Ui, row: Rect, label_left: f
     if escape {
         // Dropping the state cancels the edit.
     } else if commit {
-        crate::context_menu::commit_rename(app, &rename);
+        if crate::context_menu::commit_rename(app, &rename).is_err() {
+            app.menu.rename = Some(rename);
+        }
     } else {
         app.menu.rename = Some(rename);
     }
@@ -2834,7 +2893,7 @@ fn entry_row(
             label: &e.label,
             name: true,
             selected,
-            dim: !e.visible || parent_hidden,
+            dim: !visible || parent_hidden,
             cut,
             color: e.color,
             swatch: appearance.swatch,
