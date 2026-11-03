@@ -306,9 +306,10 @@ def cmd_upstream_failures(args):
         for u in upstream_failures():
             r = subprocess.run(["cargo", "test", "-q", "-p", u["package"], "--lib", "--", u["test"]], cwd=tmp, capture_output=True, text=True, env=env)
             out = r.stdout + r.stderr
-            failed = re.findall(r"^test (\S+) \.\.\. FAILED", out, flags=re.M)
+            # `-q` prints an F per failing test, not `test NAME ... FAILED`: read the summary line.
+            failed = re.search(r"^test result: FAILED\. \d+ passed; [1-9]\d* failed", out, flags=re.M)
             if failed:
-                print(f"  still fails upstream ({len(failed)}): {u['test']}")
+                print(f"  still fails upstream: {u['test']}")
             else:
                 bad += 1
                 print(red(f"  passes on upstream {target}: {u['test']}: remove it from upstream_failures in {os.path.relpath(AREAS, ROOT)}"))
