@@ -193,6 +193,24 @@
       ]
     },
     {
+      "name": "OpenGL ES",
+      "why": "The viewport shader compiles on OpenGL ES (the fallback for GPUs whose Vulkan fails, port issue #4): no `invariant` on a fragment input, which naga writes and GLES refuses",
+      "files": [
+        "crates/gpu/Cargo.toml",
+        "crates/gpu/src/view.rs"
+      ],
+      "tests": [
+        "solidcraft-gpu --lib the_gl_viewport_shader_has_no_invariant_fragment_input shader_is_valid"
+      ],
+      "markers": [
+        {
+          "file": "crates/gpu/src/view.rs",
+          "pattern": "port: naga writes `invariant gl_FragCoord`",
+          "count": 1
+        }
+      ]
+    },
+    {
       "name": "The Android build",
       "why": "Crates and settings the Android app needs: no arboard there, Android's system fonts, the patched winit, the port's app registered with the repository checks",
       "files": [

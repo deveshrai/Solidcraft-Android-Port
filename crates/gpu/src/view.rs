@@ -2277,6 +2277,16 @@ fn access_texture(device: &wgpu::Device, queue: Option<&wgpu::Queue>, bgl: &wgpu
 
 pub const SHADER: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/shaders/viewport.wgsl"));
 
+/// The viewport shader, with the lighting library, as `backend` compiles it. SolidCraft Android
+/// port: naga writes `invariant gl_FragCoord` into a fragment shader that reads an `@invariant`
+/// position, and OpenGL ES refuses it (naga leaves it out for WebGL only), so on GL every viewport
+/// pipeline failed and the 3D view was empty. GL gets the shader without `@invariant`: its vertex
+/// stage works positions out the same way in every pass regardless.
+pub fn viewport_source(backend: wgpu::Backend) -> String {
+    let shader = if backend == wgpu::Backend::Gl { SHADER.replace("@invariant ", "") } else { SHADER.to_string() };
+    format!("{shader}\n{}", pbr::SOURCE)
+}
+
 fn tri_layout() -> wgpu::VertexBufferLayout<'static> {
     const A: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Uint32];
     wgpu::VertexBufferLayout { array_stride: TRI_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &A }
@@ -2426,7 +2436,7 @@ impl Renderer {
     /// kind. When the two differ (a 1× window pass with no depth, say, and a multisampled scene
     /// target), the scene is always drawn offscreen and blitted into the window's pass.
     pub fn with_window_target(device: &wgpu::Device, t: GpuTarget, window: GpuTarget, tess: Option<crate::TessGpu>) -> Self {
-        let source = format!("{SHADER}\n{}", pbr::SOURCE);
+        let source = viewport_source(device.adapter_info().backend);
         let module =
             device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("sc_viewport"), source: wgpu::ShaderSource::Wgsl(source.into()) });
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -4348,6 +4358,33 @@ mod tests {
     fn shader_is_valid() {
         let module = naga::front::wgsl::parse_str(super::SHADER).unwrap_or_else(|e| panic!("{}", e.emit_to_string(super::SHADER)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap();
+    }
+
+    /// SolidCraft Android port: the viewport shader as wgpu translates it for OpenGL ES 3.0 puts no
+    /// `invariant` on a fragment shader's input, which GLES refuses (the 3D view was empty on GL).
+    #[test]
+    fn the_gl_viewport_shader_has_no_invariant_fragment_input() {
+        use naga::back::glsl;
+        let fragment_invariants = |source: &str| {
+            let module = naga::front::wgsl::parse_str(source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(source)));
+            let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all()).validate(&module).unwrap();
+            let options = glsl::Options { version: glsl::Version::Embedded { version: 300, is_webgl: false }, ..Default::default() };
+            let mut found = Vec::new();
+            for ep in module.entry_points.iter().filter(|e| e.stage == naga::ShaderStage::Fragment) {
+                let pipeline = glsl::PipelineOptions { shader_stage: naga::ShaderStage::Fragment, entry_point: ep.name.clone(), multiview: None };
+                let mut out = String::new();
+                if let Ok(mut w) = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
+                    && w.write().is_ok()
+                    && out.contains("invariant gl_FragCoord")
+                {
+                    found.push(ep.name.clone());
+                }
+            }
+            found
+        };
+        assert!(!fragment_invariants(&super::viewport_source(wgpu::Backend::Vulkan)).is_empty(), "the shader still has the case");
+        assert_eq!(fragment_invariants(&super::viewport_source(wgpu::Backend::Gl)), Vec::<String>::new());
+        assert!(super::viewport_source(wgpu::Backend::Vulkan).contains("@invariant"), "other backends keep it");
     }
 
     /// The ambient occlusion sample count rides in the uniform's `ao.y`, beside the radius, kept
