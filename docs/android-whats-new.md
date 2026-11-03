@@ -5,6 +5,7 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.30.1a](#0301a): upstream 0.29.0 to 0.30.1, an OpenGL ES fallback, crash reports you can save
 - [0.28.0a](#0280a): upstream 0.28.0, a crosshair for picking by finger
 - [0.27.1a](#0271a): upstream 0.26 and 0.27, long threads, a thread start angle, faster checks
 - [0.25.1a](#0251a): upstream 0.24.1, 0.25.0 and 0.25.1; a sturdier way to follow upstream
@@ -14,6 +15,32 @@ missing: [android-known-issues.md](android-known-issues.md).
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.30.1a
+
+**Upstream 0.29.0, 0.30.0 and 0.30.1** merged (442 commits). Among much else: Preferences in twelve
+pages under four headings, saved as soon as they change; lasso selection; Measure starts with your
+selection and takes construction geometry; Sketch Offset with several copies; Plane through an axis
+and a point; keep and compare renders; a Render workspace with one editor per selection; inch
+fasteners; security fixes for agent chat, lock files and API keys. Designs are now format 49 (upstream's
+48 plus the port's helical threads).
+
+**The port's own changes:**
+
+- **A phone whose graphics can't start no longer just closes**
+  ([port issue #4](https://github.com/deveshrai/Solidcraft-Android-Port/issues/4), a Galaxy A04): the app
+  leaves cleanly instead of being aborted, and the next launch starts on OpenGL ES; a launch that can't
+  start writes `startup-error.txt` where a computer can reach it over USB.
+- **The 3D view draws on OpenGL ES.** Upstream 0.30.1's viewport shader doesn't compile there (an
+  `invariant` OpenGL ES refuses), which left the view empty on any GPU without working Vulkan; the port
+  compiles it without that on OpenGL.
+- **Crash reports you can save:** they're announced at the next start, and Help › Crash Reports has
+  **Save a copy** on each, through Android's picker. **Report…** and **Report a bug** draft the issue on
+  this port's tracker.
+- **Tested on a Pixel Tablet emulator** on both Vulkan and OpenGL ES, with the DevTerm enclosure, a
+  helical gear and a helical thread over MCP: [android-0301a-test.md](android-0301a-test.md).
+
+![The enclosure built over MCP on OpenGL ES](screenshots/android/opengl-es-enclosure-build-emu-0301a-6x.gif)
 
 ## 0.28.0a
 

@@ -4,7 +4,7 @@ What is wrong or missing in the current port release, and what is planned for th
 entry says how to work around it today. Fixed entries move to [Fixed](#fixed) with the release that
 fixed them.
 
-Current: **port 0.28.0a** (upstream 0.28.0). Next: **0.28.0b**, or the next upstream release's **a**, if upstream releases
+Current: **port 0.30.1a** (upstream 0.30.1). Next: **0.30.1b**, or the next upstream release's **a**, if upstream releases
 first. See also [android-vs-upstream.md](android-vs-upstream.md) for what upstream has that the port
 doesn't, and the reverse.
 
@@ -20,6 +20,8 @@ doesn't, and the reverse.
 | Issue | Seen on | Work-around today | Plan |
 |---|---|---|---|
 | **A tap on a dialog's OK can also select in the view.** With the crosshair button on, tapping **OK** in the Extrude window (opened by Press Pull on a screw head) closed it and then selected the face of the body behind it, as if the tap went through. Enter in the value field instead did not. | Galaxy Tab, 0.28.0a | Confirm with Enter, or tap empty space after | Find whether the closing tap reaches the view, and stop it there |
+| **Preferences' page list once ignored taps.** Right after the first start on OpenGL ES, three taps (finger and mouse) on page names didn't change the page; after a minute and from then on, every tap did. | Pixel Tablet emulator, 0.30.1a | Tap again | Reproduce it; if it is the first seconds after start, find what the window is still busy with |
+| **The first crash report's title is cut short** ("Closed …") when it carries a count (×2): the row has one more button (Save a copy) than upstream's. | Pixel Tablet emulator, 0.30.1a | The message below the title says it in full | Wrap the buttons under the title on narrow rows |
 | **The helical thread is hard to find.** Thread opens as upstream's does: Modeled off, and once ticked, Geometry on Faceted. The port's Helical B-rep, Custom and Clearance look missing until you know where they are. | Galaxy Z Fold, 0.23.0a; still so in 0.24.0a | Tick **Modeled**, set **Geometry** to **Helical B-rep** ([android-threads.md](android-threads.md#opening-thread)) | Decide whether the port opens Thread with Modeled ticked and Helical B-rep chosen |
 | **A file saved to a device folder can lose its extension.** Save As writes the name typed in Android's picker; type *gear* and the file is `gear`, not `gear.sc`. The app itself names the tab and its copy correctly and opens the file again, but file managers and other apps don't know what it is. | Pixel 9 and Galaxy Z Fold, 0.23.0a and b | Type the extension: *gear.sc*, *part.stl* | Ask the picker for the name with its extension kept, or rename the saved document through the provider |
 | **Reopen designs doesn't reopen them.** Upstream 0.24.1's Settings › General › *Reopen the designs that were open* records them when the app quits; Android never quits an app that way (it stops it in the background), so nothing is recorded. | Galaxy Tab, 0.25.1a | **File › Open Recent** | Record the open designs when the app goes to the background |
@@ -61,6 +63,10 @@ reported or left to upstream, not patched in the port, so merges stay clean.
     `ui_kit`'s `positioned_shared_buttons_center_text_…`, `sample_grid_stretches_each_row_…` and
     `square_theme_search_and_focus_ring_…`.
   Everything else passes: 2532 engine tests and 2746 UI tests among them.
+- Two more fail on a clean upstream 0.30.1 checkout exactly as on the port, both egui's checks in the
+  test harness: `prefs::tests::origin_plane_names_change_only_the_names_shown` ("time shouldn't move
+  backwards") and `prefs::tests::the_system_theme_leaves_the_window_to_follow_the_system` (unapplied
+  texture deltas). The other 188 Preferences tests pass.
 
 ## By design
 
@@ -87,6 +93,9 @@ reported or left to upstream, not patched in the port, so merges stay clean.
 
 | Issue | Fixed in |
 |---|---|
+| A phone whose graphics couldn't start (a Galaxy A04, [#4](https://github.com/deveshrai/Solidcraft-Android-Port/issues/4)) was aborted at every launch, with no message | 0.30.1a: leaves cleanly, the next launch starts on OpenGL ES, `startup-error.txt` says why ([android-0301a-test.md](android-0301a-test.md#1-a-launch-that-cant-start-its-graphics)) |
+| On OpenGL ES the 3D view was empty: upstream 0.30.1's viewport shader doesn't compile there | 0.30.1a, in the port ([why](android-0301a-test.md#2-the-empty-3d-view-on-opengl-es)) |
+| Crash reports were kept but never shown, couldn't leave the device, and Report… drafted the issue on upstream's tracker | 0.30.1a: announced, **Save a copy**, the port's tracker |
 | The title bar showed upstream's version (v0.25.1), not the port's | 0.27.1a: *v0.27.1a* |
 | A helical thread of more than about 85 turns (an M10 longer than about 128 mm) hung or failed ("volume −651"), and measuring a long threaded body gave a wrong volume | 0.27.1a: a 220 mm M10 thread in 0.8 s on a Mac, 1.2 s on a Galaxy Tab ([android-thread-mating.md](android-thread-mating.md#5-the-test-run)) |
 | Clearance and interference between bodies a hair apart (a screw in its bearing bore) ran into minutes, and clearance could report 0 mm | 0.27.1a: such pairs are meshed finer first (551 s → 4 s) |

@@ -4,8 +4,8 @@
 
 **This is the Android port of SolidCraft.** It is upstream
 [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with every
-upstream release (now 0.28.0), plus an Android app and **features upstream doesn't have yet**. Current
-release: **0.28.0a** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
+upstream release (now 0.30.1), plus an Android app and **features upstream doesn't have yet**. Current
+release: **0.30.1a** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
 
 | Added in this port | What it gives you | Guide |
 |---|---|---|
@@ -14,20 +14,15 @@ release: **0.28.0a** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Por
 | **Involute gears** | Ten types (spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel, crossed helical), bore, keyway and hub, editable after | [Gears](docs/android-gears.md) |
 | **MCP server on the network** | One switch in Settings: Claude Code in Termux on the device, or on a computer on the same Wi-Fi, models in the app while you watch | [MCP server](docs/android-mcp.md) |
 
-**New in 0.28.0a:** upstream 0.28.0, and **picking with a crosshair**
-([asked for](https://github.com/deveshrai/Solidcraft-Android-Port/issues/2) by a2nr): a button at the end
-of the view bar, after which a finger on the model aims a crosshair above the fingertip instead of
-orbiting, and lifting it selects what the crosshair is on.
+**New in 0.30.1a:** upstream 0.29.0 to 0.30.1, and **an OpenGL ES fallback**
+([issue #4](https://github.com/deveshrai/Solidcraft-Android-Port/issues/4)): when a phone's graphics can't
+start, the app now leaves cleanly and the next launch uses OpenGL ES, where the 3D view now draws. Crash
+reports are shown at the next start and can be saved through Android's picker.
 
-On a Galaxy Tab, a DevTerm-like handheld built by an agent over the MCP server: 11 parts, 201 calls, about
-30 s, shown in real time ([the test](docs/android-devterm-test.md)).
+The DevTerm enclosure with eight M2 screws, built by an agent over the MCP server on OpenGL ES, 6×
+speed ([the test](docs/android-0301a-test.md)):
 
-![A DevTerm-like handheld built over MCP on a Galaxy Tab, in real time](docs/screenshots/android/devterm-build-tab-0280a.gif)
-
-Its enclosure with eight M2 screws, then a screw head's face picked and pressed out, and an edge on the
-front picked and filleted, all by finger:
-
-![A screw head and an edge picked with the crosshair, then Press Pull and Fillet, on a Galaxy Tab](docs/screenshots/android/devterm-enclosure-pick-ops-tab-0280a.gif)
+![A handheld's enclosure built over MCP on OpenGL ES, 6x speed](docs/screenshots/android/opengl-es-enclosure-build-emu-0301a-6x.gif)
 
 [What's new](docs/android-whats-new.md) ·
 [port vs upstream](docs/android-vs-upstream.md) ·
