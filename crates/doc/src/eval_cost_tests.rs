@@ -1256,7 +1256,22 @@ fn marking_work(doc: &mut Document, kind: FeatureKind) -> (Counts, Vec<ThreadInf
 
 /// A cosmetic tap marking at `p`.
 fn marking(p: Vec3) -> FeatureKind {
-    FeatureKind::Thread { face: FacePick(p), designation: Some("M6".into()), length: None, modeled: false, handedness: ThreadHandedness::Right }
+    FeatureKind::Thread {
+        face: FacePick(p),
+        designation: Some("M6".into()),
+        length: None,
+        modeled: false,
+        // SolidCraft Android port: the helical thread's fields, all off.
+        helical: false,
+        pitch: None,
+        depth: None,
+        angle: None,
+        clearance: None,
+        start_offset: None,
+        end_offset: None,
+        start_angle: None,
+        handedness: ThreadHandedness::Right,
+    }
 }
 
 /// A tap marking looks for its cylinder in the bodies near it only: each body searched was

@@ -44,6 +44,7 @@
         "crates/kernel/src/thread_tests.rs",
         "crates/doc/src/document.rs",
         "crates/doc/src/eval.rs",
+        "crates/doc/src/eval_cost_tests.rs",
         "crates/doc/src/lib.rs",
         "crates/engine/src/cmd/features.rs",
         "crates/engine/src/thread_tests.rs",
