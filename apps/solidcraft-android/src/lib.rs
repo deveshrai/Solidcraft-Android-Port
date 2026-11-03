@@ -42,6 +42,11 @@ mod android {
     const DEPTH_BITS: u8 = 24;
     const STENCIL_BITS: u8 = 8;
     const MSAA: u16 = 4;
+    /// The version the APK's build gives (0.30.1a), else SolidCraft's.
+    const PORT_VERSION: &str = match option_env!("SOLIDCRAFT_PORT_VERSION") {
+        Some(v) if !v.is_empty() => v,
+        _ => solidcraft_ui_egui::help::VERSION,
+    };
 
     struct Shell {
         app: SolveApp,
@@ -197,7 +202,8 @@ mod android {
         let mut crashed = Vec::new();
         if let Some(dir) = data.as_ref().map(|d| d.join("crashes")) {
             let build = solidcraft_engine::crash::Build {
-                version: solidcraft_ui_egui::help::VERSION,
+                // The port's own version (0.30.1a), as the title bar shows it.
+                version: PORT_VERSION,
                 commit: solidcraft_ui_egui::help::COMMIT,
                 built: solidcraft_ui_egui::help::BUILD_DATE,
             };
@@ -282,9 +288,8 @@ mod android {
             // The journal keeps it, so the next launch's crash report says why; the marker stays,
             // so the next launch tries the other graphics.
             solidcraft_engine::crash::phase(&format!("could not start: {e}"));
-            let version = option_env!("SOLIDCRAFT_PORT_VERSION").filter(|v| !v.is_empty()).unwrap_or(solidcraft_ui_egui::help::VERSION);
             if let Some(path) = &error_file
-                && let Err(w) = std::fs::write(path, crate::startup::error_text(version, backend, &e.to_string()))
+                && let Err(w) = std::fs::write(path, crate::startup::error_text(PORT_VERSION, backend, &e.to_string()))
             {
                 log::warn!("could not write {}: {w}", path.display());
             }
