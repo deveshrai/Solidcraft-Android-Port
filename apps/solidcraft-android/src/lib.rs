@@ -197,6 +197,10 @@ mod android {
         let activity = app.activity_as_ptr();
         // A launch before this one that never drew a frame: this one starts on OpenGL ES.
         let (backend, fallback) = data.as_deref().map_or((Backend::Default, false), crate::startup::begin);
+        // A launch that died in the driver compiling the GPU evaluation: bodies on the CPU.
+        if let Some(dir) = data.as_deref() {
+            solidcraft_gpu::tess_guard::remember_in(dir);
+        }
         // Where a launch that can't start says why: a computer reaches it over USB.
         let error_file = app.external_data_path().or_else(|| data.clone()).map(|d| d.join(crate::startup::ERROR_FILE));
         let mut crashed = Vec::new();

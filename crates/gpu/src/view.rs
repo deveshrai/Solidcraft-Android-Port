@@ -3281,11 +3281,16 @@ pub fn tessellation(adapter: &wgpu::Adapter, device: &wgpu::Device, queue: &wgpu
         return None;
     }
     let info = adapter.get_info();
-    if hangs_on_gpu_tessellation(info.backend, &info.name) || std::env::var_os("SOLIDCRAFT_CPU_TESS").is_some() {
+    // SolidCraft (Android port): also where the driver crashes compiling it (`tess_guard`).
+    if hangs_on_gpu_tessellation(info.backend, &info.name)
+        || std::env::var_os("SOLIDCRAFT_CPU_TESS").is_some()
+        || crate::tess_guard::crashes_compiling(info.backend, &info.name)
+        || crate::tess_guard::died_compiling()
+    {
         log::warn!("bodies are built on the CPU on {} ({:?})", info.name, info.backend);
         return None;
     }
-    match crate::TessGpu::with_shader(info.name.clone(), device.clone(), queue.clone(), shader) {
+    match crate::tess_guard::compiling(|| crate::TessGpu::with_shader(info.name.clone(), device.clone(), queue.clone(), shader)) {
         Ok(t) => Some(t),
         Err(e) => {
             log::warn!("bodies are built on the CPU on {} ({:?}): {e}", info.name, info.backend);

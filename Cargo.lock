@@ -4150,6 +4150,7 @@ dependencies = [
  "serde",
  "serde_json",
  "solidcraft-engine",
+ "solidcraft-gpu",
  "solidcraft-mcp",
  "solidcraft-ui-egui",
  "winit",

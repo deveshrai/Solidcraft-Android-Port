@@ -26,6 +26,8 @@ pub mod path;
 mod pbr;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod select;
+// SolidCraft (Android port): bodies on the CPU where the driver dies compiling the evaluation.
+pub mod tess_guard;
 pub mod view;
 
 /// The tessellation compute shader (WGSL).

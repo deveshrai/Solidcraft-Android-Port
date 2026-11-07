@@ -25,6 +25,7 @@ crate-type = ["cdylib", "rlib"]
 # The MCP server on the network (src/mcp_http.rs), built and tested on every system.
 [dependencies]
 solidcraft-engine = { workspace = true }
+solidcraft-gpu = { workspace = true }
 solidcraft-mcp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
