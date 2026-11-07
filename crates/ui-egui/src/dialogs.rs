@@ -1331,7 +1331,10 @@ impl Dialog {
             // Web previews run synchronously; a helical gear's sweep can take seconds.
             Kind::Gear(_) => return !cfg!(target_arch = "wasm32"),
             // Web previews run synchronously; a modelled thread can take seconds.
-            Kind::Thread { .. } => return !cfg!(target_arch = "wasm32") && self.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false),
+            // SolidCraft (Android port): a custom thread is always modelled.
+            Kind::Thread { helix, .. } => {
+                return !cfg!(target_arch = "wasm32") && (helix.custom || self.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false));
+            }
             _ => {}
         }
         matches!(

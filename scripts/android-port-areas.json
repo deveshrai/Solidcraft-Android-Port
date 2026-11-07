@@ -10,8 +10,7 @@
       "package": "solidcraft-ui-egui",
       "test": "dialogs_thread::contribution_tests::contribution_thread_catalogue_is_parseable_and_rendering_keeps_custom_designations",
       "why": "trips egui's debug assertion in the test harness; fails the same on a clean upstream checkout (0.22.0 to 0.25.1)"
-    }
-,
+    },
     {
       "package": "solidcraft-ui-egui",
       "test": "prefs::tests::origin_plane_names_change_only_the_names_shown",
@@ -49,12 +48,11 @@
     },
     {
       "name": "Helical B-rep threads",
-      "why": "Exact helical threads, custom pitch, clearance, offsets; the Thread dialog's Type and Geometry rows",
+      "why": "Helical threads of any pitch, depth, angle and clearance between offsets, turned to a start angle (an exact screw sweep on solidcore, crates/doc/src/eval_helical.rs); the Thread dialog's Custom form and Helical B-rep option",
       "files": [
-        "crates/kernel/src/lib.rs",
-        "crates/kernel/src/thread_tests.rs",
         "crates/doc/src/document.rs",
         "crates/doc/src/eval.rs",
+        "crates/doc/src/eval_thread.rs",
         "crates/doc/src/eval_cost_tests.rs",
         "crates/doc/src/lib.rs",
         "crates/engine/src/cmd/features.rs",
@@ -62,29 +60,16 @@
         "crates/ui-egui/src/dialogs_thread.rs",
         "crates/ui-egui/src/dialogs_dense.rs",
         "crates/ui-egui/src/dialogs_all_tests.rs",
-        "crates/kernel/src/body.rs",
-        "crates/kernel/src/tess/seam.rs",
         "crates/engine/src/cmd/clearance.rs",
-        "crates/engine/src/cmd/interference.rs",
-        "crates/kernel/src/tess/mod.rs"
+        "crates/engine/src/cmd/interference.rs"
       ],
       "tests": [
-        "solidcraft-kernel --lib helical",
+        "solidcraft-doc --lib helical",
         "solidcraft-engine --lib thread",
         "solidcraft-ui-egui --lib dialogs_thread",
         "solidcraft-engine --lib clearance interference"
       ],
       "markers": [
-        {
-          "file": "crates/kernel/src/body.rs",
-          "pattern": "SolidCraft \\(Android port\\): a plan for measuring finer",
-          "count": 1
-        },
-        {
-          "file": "crates/kernel/src/tess/seam.rs",
-          "pattern": "each, which looks like a fifth of a radian\\. SolidCraft \\(Android port\\)",
-          "count": 1
-        },
         {
           "file": "crates/engine/src/cmd/clearance.rs",
           "pattern": "SolidCraft \\(Android port\\): meshes too close",
@@ -96,8 +81,13 @@
           "count": 1
         },
         {
-          "file": "crates/kernel/src/tess/mod.rs",
-          "pattern": "SolidCraft \\(Android port\\): an edge cut short",
+          "file": "crates/doc/src/eval.rs",
+          "pattern": "SolidCraft \\(Android port\\): helical threads of any pitch",
+          "count": 1
+        },
+        {
+          "file": "crates/doc/src/eval_thread.rs",
+          "pattern": "SolidCraft \\(Android port\\): the helical thread's fields",
           "count": 1
         }
       ]
@@ -152,23 +142,9 @@
     },
     {
       "name": "Kernel speed",
-      "why": "B-spline surfaces skip zero basis terms; flat joins skip faces that can't reach the contact; straight sweeps keep smooth walls",
-      "files": [
-        "vendor/truck-geometry/src/nurbs/bspsurface.rs",
-        "crates/kernel/src/coplanar.rs",
-        "crates/kernel/src/sweep_path.rs"
-      ],
+      "why": "Gears stay quick: a flank is one face, a swept gear takes a bore quickly; agent work runs off the window thread on Android. (The truck speed fixes went with truck in upstream 0.40.)",
+      "files": [],
       "markers": [
-        {
-          "file": "vendor/truck-geometry/src/nurbs/bspsurface.rs",
-          "pattern": "SolidCraft: (only the degree \\+ 1 basis functions|zero basis terms skipped)",
-          "count": 6
-        },
-        {
-          "file": "crates/kernel/src/coplanar.rs",
-          "pattern": "SolidCraft \\(Android port\\): a side face clear of the faces it would split",
-          "count": 1
-        },
         {
           "file": "apps/solidcraft-android/src/lib.rs",
           "pattern": "agent_off_thread = true",
@@ -176,7 +152,6 @@
         }
       ],
       "tests": [
-        "solidcraft-kernel --lib coplanar sweep_path",
         "solidcraft-engine --lib a_flank_is_one_face_a_curve swept_gears_take_a_bore_quickly"
       ]
     },
@@ -241,6 +216,24 @@
         "crates/ui-egui/src/ui_kit/text_menu.rs"
       ],
       "tests": []
+    },
+    {
+      "name": "GPU tessellation",
+      "why": "Bodies are built on the CPU where the driver crashes compiling upstream 0.40's evaluation shader (Adreno 840 on a Galaxy Z Fold: a null read in vkCreateComputePipelines); a launch that died compiling it leaves a marker, and later launches skip it",
+      "files": [
+        "crates/gpu/src/lib.rs",
+        "crates/gpu/src/view.rs"
+      ],
+      "tests": [
+        "solidcraft-gpu --lib tess_guard"
+      ],
+      "markers": [
+        {
+          "file": "crates/gpu/src/view.rs",
+          "pattern": "SolidCraft \\(Android port\\): also where the driver crashes compiling it",
+          "count": 1
+        }
+      ]
     }
   ]
 }

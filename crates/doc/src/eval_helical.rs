@@ -203,7 +203,7 @@ pub fn helical_thread_on(st: &ModelState, p: Vec3, h: &HelicalInputs) -> Result<
                     // The shaft is the major diameter: down to the basic root.
                     if (dia - major).abs() > 0.02 * major {
                         return Err(DocError::Invalid(format!(
-                            "a helical {m} thread needs a {} mm shaft (this one is {} mm); the standard modelled thread turns a thicker shaft down, or use a custom thread on the shaft as it is",
+                            "a helical {m} thread needs a {} mm shaft (this one is {} mm): make the shaft that size, or use a custom thread on the shaft as it is",
                             show_mm(major),
                             show_mm(dia)
                         )));

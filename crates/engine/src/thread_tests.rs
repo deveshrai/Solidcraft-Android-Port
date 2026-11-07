@@ -1421,8 +1421,8 @@ fn custom(pitch: f64) -> solidcraft_doc::HelicalInputs<'static> {
 }
 
 /// A custom helical thread on a shaft of no standard size (Ø33.25, pitch 1.25, tangency-labs
-/// #4577): the shaft keeps its diameter, the thread is a handful of smooth faces, not a facet
-/// soup, and the body stays a sound solid.
+/// #4577): the shaft keeps its diameter, the thread is smooth faces, not a facet soup, and the
+/// body stays a sound solid.
 #[test]
 fn custom_helical_thread_on_a_non_standard_shaft() {
     let mut s = Session::default();
@@ -1435,7 +1435,9 @@ fn custom_helical_thread_on_a_non_standard_shaft() {
     let st = s.model.state();
     let body = &st.body("Shaft").unwrap().body;
     assert!(body.validity().is_empty(), "{:?}", body.validity());
-    assert!(body.face_count() <= faces + 5, "{} faces", body.face_count());
+    // solidcore's screw sweep is a few faces a turn (upstream's own modelled M20 is 63 faces over
+    // 20 mm), not the old kernel's five: still smooth faces, never a facet soup.
+    assert!(body.face_count() <= faces + 8 * 17, "{} faces", body.face_count());
     let got = before - volume(&mut s, "Shaft");
     assert!((got - want).abs() < want * 0.01, "removed {got}, groove {want}");
     let f = s.doc.features.last().unwrap();
@@ -1517,7 +1519,7 @@ fn left_handed_helical_threads_and_designs_saved_before_upstreams_handedness() {
 }
 
 /// An ISO designation as helical B-rep: an M8 on an 8 mm shaft and in its 6.75 mm tap hole;
-/// a shaft thicker than the thread is refused with the way out (the faceted method turns it).
+/// a shaft thicker than the thread is refused with the way out.
 #[test]
 fn iso_helical_threads_and_their_refusals() {
     let mut s = Session::default();
@@ -1532,7 +1534,7 @@ fn iso_helical_threads_and_their_refusals() {
     let mut s = Session::default();
     run(&mut s, "solid.cylinder", json!({"radius": 5, "height": 16, "body_name": "Bolt"}));
     let e = s.execute("solid.thread", &json!({"face": [5, 0, 8], "designation": "M8", "helical": true})).unwrap_err().to_string();
-    assert!(e.contains("faceted") && e.contains("custom"), "{e}");
+    assert!(e.contains("make the shaft") && e.contains("custom"), "{e}");
     for bad in [json!({"face": [5, 0, 8], "pitch": "1 mm", "start_offset": "0 mm"}), json!({"face": [5, 0, 8], "pitch": "1 mm", "depth": "3 mm"})] {
         assert!(s.execute("solid.thread", &bad).is_err(), "{bad}");
     }
