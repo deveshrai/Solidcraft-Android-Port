@@ -38,7 +38,7 @@ step() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 
-version=$(sed -n 's/^version = "\([0-9.]*\)"$/\1/p' Cargo.toml | head -1)
+version=$(sed -n 's/^version = "\([0-9.]*\(-rc\.[0-9]*\)\{0,1\}\)"$/\1/p' Cargo.toml | head -1)
 [ -n "$version" ] || fail "no version in Cargo.toml"
 letter=""
 [ "$revision" -gt 0 ] && letter=$(printf "\\$(printf '%03o' $((96 + revision)))")
@@ -100,5 +100,8 @@ git tag -a "$tag" -m "SolidCraft $name for Android"
 git push origin "$tag"
 # The port's own repository (origin), not upstream's: OWNER/REPO from the remote's URL.
 repo=$(git remote get-url origin | sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##')
-gh release create "$tag" "$out/$apk_name" --repo "$repo" \
+# An upstream pre-release (x.y.z-rc.n) is published as one here too.
+prerelease=()
+[[ "$version" == *-rc.* ]] && prerelease=(--prerelease)
+gh release create "$tag" "$out/$apk_name" --repo "$repo" "${prerelease[@]}" \
     --title "SolidCraft $name for Android" --notes-file "$notes"

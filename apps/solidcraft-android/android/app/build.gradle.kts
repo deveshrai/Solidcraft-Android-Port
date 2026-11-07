@@ -15,17 +15,24 @@ val cargoProfile: String = findProperty("solidcraft.cargoProfile") as String? ?:
 // The version is SolidCraft's own (the workspace Cargo.toml's), so the APK follows upstream.
 // A port-only release of the same SolidCraft version raises -Psolidcraft.portRevision (1, 2, …),
 // which becomes a letter after the version (0.21.0a, 0.21.0b, …) and the last two digits of the
-// version code.
-val solidcraftVersion: String = Regex("""(?m)^version = "(\d+)\.(\d+)\.(\d+)"""")
-    .find(repo.resolve("Cargo.toml").readText())?.groupValues?.get(0)?.substringAfter('"')?.removeSuffix("\"")
-    ?: error("no version in ${repo.resolve("Cargo.toml")}")
+// version code. An upstream pre-release (0.40.0-rc.2) keeps its suffix: 0.40.0-rc.2a.
+val versionMatch: MatchResult = Regex("""(?m)^version = "(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?"""")
+    .find(repo.resolve("Cargo.toml").readText())
+    ?: error("no version in ${repo.resolve("Cargo.toml")} (x.y.z or x.y.z-rc.n)")
+val solidcraftVersion: String = versionMatch.value.substringAfter('"').removeSuffix("\"")
 val portRevision: Int = ((findProperty("solidcraft.portRevision") as String?)?.toInt() ?: 0).also {
     require(it in 0..26) { "solidcraft.portRevision: 0 (none) or 1…26 (a…z)" }
 }
-val versionParts: List<Int> = solidcraftVersion.split(".").map { it.toInt() }
+val versionParts: List<Int> = versionMatch.groupValues.drop(1).take(3).map { it.toInt() }
+val releaseCandidate: Int? = versionMatch.groupValues.getOrNull(4)?.takeIf { it.isNotEmpty() }?.toInt()?.also {
+    require(it in 1..33) { "a release candidate 1…33" }
+}
 val appVersionName: String = if (portRevision > 0) "$solidcraftVersion${'a' + (portRevision - 1)}" else solidcraftVersion
 // 0.16.2 (revision 0) → 160200: major·10⁶ + minor·10⁴ + patch·10² + revision, always rising.
-val appVersionCode: Int = versionParts[0] * 1_000_000 + versionParts[1] * 10_000 + versionParts[2] * 100 + portRevision
+// A release candidate comes before its release, after every earlier one: 0.40.0-rc.2a →
+// 400000 − 1000 + 2·30 + 1 = 399061, between 0.30.1a (300101) and 0.40.0 (400000).
+val appVersionCode: Int = versionParts[0] * 1_000_000 + versionParts[1] * 10_000 + versionParts[2] * 100 +
+    (releaseCandidate?.let { it * 30 - 1000 } ?: 0) + portRevision
 
 base {
     // APKs come out as SolidCraft-<version>-<build type>.apk.
