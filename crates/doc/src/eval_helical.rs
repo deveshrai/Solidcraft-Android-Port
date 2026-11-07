@@ -217,12 +217,18 @@ pub fn helical_thread_on(st: &ModelState, p: Vec3, h: &HelicalInputs) -> Result<
     if !(pitch.is_finite() && pitch > 0.0) {
         return Err(DocError::Invalid("the pitch must be positive".into()));
     }
-    // A thread starts after the face's end and finishes before the other: by default half a
-    // pitch in from each.
+    // By default a thread starts half a pitch in from the face's end and finishes half a pitch
+    // before the other. A negative offset, to one pitch, runs the groove off that end into the
+    // air, as a tap or die leaves it, so a nut or the end of a bolt has no partial turn of
+    // material across its thread; at a shoulder it would cut into the shoulder. Zero would put
+    // the groove's end on the face's end, which the boolean can't separate.
     let gap = |o: Option<f64>| -> Result<f64> {
         let o = o.unwrap_or(pitch / 2.0);
-        if !(o.is_finite() && o > 0.0) {
-            return Err(DocError::Invalid("a helical thread's start and end offsets must be positive: it starts after the face's end".into()));
+        if !(o.is_finite() && o >= -pitch && o.abs() >= pitch * 0.01) {
+            return Err(DocError::Invalid(format!(
+                "a helical thread's start and end offsets are positive (it starts after the face's end), or negative to one pitch ({} mm) to run off a free end, but not 0",
+                show_mm(-pitch)
+            )));
         }
         Ok(o)
     };
@@ -258,9 +264,10 @@ pub fn helical_grooves(cyl: &kernel::CylinderFace, t: &HelicalThread, both: bool
     if !t.start_angle.is_finite() {
         return Err(DocError::Invalid("the start angle must be a number".into()));
     }
-    let land = (t.pitch * 1e-3).max(1e-4);
-    if t.from < cyl.start.min(cyl.end) + land || t.to > cyl.start.max(cyl.end) - land {
-        return Err(DocError::Invalid("the thread must start after the face's start and finish before its end".into()));
+    // At most a pitch past either end of the face (a groove run off a free end).
+    let over = t.pitch * (1.0 + 1e-9);
+    if t.from < cyl.start.min(cyl.end) - over || t.to > cyl.start.max(cyl.end) + over {
+        return Err(DocError::Invalid("the thread may run at most a pitch past the ends of its face".into()));
     }
     // Into the material: inwards for a shaft, outwards in a hole.
     let into = if cyl.internal { 1.0 } else { -1.0 };

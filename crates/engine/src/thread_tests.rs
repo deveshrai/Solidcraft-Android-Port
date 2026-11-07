@@ -1614,3 +1614,42 @@ fn helical_thread_start_angle_is_saved_and_only_for_helical_threads() {
     let again = body(&reopened);
     assert!((again.volume - turned.volume).abs() < 1e-9 * turned.volume && again.centroid.dist(turned.centroid) < 1e-9);
 }
+
+/// A nut whose helical thread runs off both faces (negative offsets) screws onto a bolt of the
+/// same custom pitch and clearance: turned through a pitch, it sits clear of the bolt somewhere.
+/// With the groove kept inside the bore, the partial turn where it starts stood across the bolt's
+/// thread at every angle (a 12 mm, 2.2 mm pitch bolt and nut, 0.15 mm clearance, on a Galaxy Z Fold).
+#[test]
+fn a_helical_thread_runs_off_a_free_end_and_its_nut_fits_the_bolt() {
+    let mut s = Session::default();
+    run(&mut s, "solid.cylinder", json!({"diameter": 12, "height": 30, "base": [0, 0, 0], "body_name": "Bolt"}));
+    run(
+        &mut s,
+        "solid.thread",
+        json!({"face": [6, 0, 25], "pitch": "2.2 mm", "clearance": "0.15 mm", "start_offset": "-2.2 mm", "end_offset": "1 mm"}),
+    );
+    run(&mut s, "solid.box", json!({"length": 18, "width": 18, "height": 10.8, "corner": [-9, -9, 10], "body_name": "Nut"}));
+    run(&mut s, "solid.cylinder", json!({"diameter": 10.2, "height": 12.8, "base": [0, 0, 9], "operation": "cut", "targets": ["Nut"]}));
+    run(
+        &mut s,
+        "solid.thread",
+        json!({"face": [-5.1, 0, 15], "pitch": "2.2 mm", "clearance": "0.15 mm", "start_offset": "-2.2 mm", "end_offset": "-2.2 mm"}),
+    );
+    let st = s.model.state();
+    assert!(st.body("Nut").unwrap().body.validity().is_empty());
+    assert!(st.body("Bolt").unwrap().body.validity().is_empty());
+    let mut clear = Vec::new();
+    for i in 0..6 {
+        if i > 0 {
+            run(&mut s, "solid.move", json!({"bodies": ["Nut"], "axis": [0, 0, 1], "angle": "60 deg"}));
+        }
+        let r = s.execute("inspect.interference", &json!({"bodies": ["Bolt", "Nut"]})).unwrap();
+        clear.push(r["count"].as_u64() == Some(0));
+    }
+    assert!(clear.iter().any(|c| *c), "the nut stands across the bolt's thread at every angle: {clear:?}");
+    // Zero, or more than a pitch past the face, is refused.
+    for bad in ["0 mm", "-3 mm"] {
+        let e = s.execute("solid.thread", &json!({"face": [6, 0, 5], "pitch": "2.2 mm", "start_offset": bad})).unwrap_err().to_string();
+        assert!(e.contains("offset") || e.contains("pitch"), "{bad}: {e}");
+    }
+}
