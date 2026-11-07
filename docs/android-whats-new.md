@@ -39,6 +39,9 @@ some shells, planar faces with more triangles) in [its release notes](https://gi
   offsets, start angle) is now an exact screw sweep cut by one boolean, as upstream's threads are; its
   old truck code is gone. In the Thread dialog, **Custom** ends upstream's **Form** list, and a
   modelled ISO metric thread has a **Helical B-rep** box. `hand: both` works for helical threads too.
+- **Helical threads run off a free end** with a negative start or end offset (to one pitch), so a nut
+  with countersinks fits its bolt; before, the partial turn where the groove began stood across the
+  mating thread ([the bolt and nut](android-0400rc2a-test.md#4-a-bolt-and-its-nut)).
 - **Gears** work on solidcore unchanged.
 - **No more crash at every launch on Adreno GPUs.** Upstream 0.40's GPU tessellation shader crashes
   Qualcomm's compiler (Galaxy Z Fold, Adreno 840), and a driver crash can't be caught. Bodies are built

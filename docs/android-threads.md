@@ -201,8 +201,11 @@ Readouts, worked out as you type:
 
 **Why offsets?** A helical thread is built by replacing only the threaded part of the cylinder.
 Its groove has to start after one end of the face and finish before the other, so a helical
-thread always leaves a land at each end; the offsets set how wide. They must be more than zero.
-Use a small offset (0.2 mm, say) to run the thread almost to the end.
+thread leaves a land at each end; the offsets set how wide. They can't be zero.
+Use a small offset (0.2 mm, say) to run the thread almost to the end. Since 0.40.0-rc.2a an offset can also be **negative, to one pitch**:
+the groove then runs off that end into the air, as a tap or die leaves it, so a nut or a bolt's tip
+has no partial turn of material across its thread. Use it only at a free end; at a shoulder the
+groove would cut into the shoulder.
 
 **Thread direction** (upstream's, since 0.24.0) turns any thread the other way: cosmetic,
 faceted or helical, ISO or custom. Port releases before 0.24.0a had their own Left-handed box
@@ -310,8 +313,8 @@ feature whose preview fails.
 | *a … mm clearance leaves no thread at a … mm pitch* | Less clearance, or a coarser pitch |
 | *the threaded length is too short for a … mm pitch: it needs at least … mm* | Smaller offsets, a longer length, or a finer pitch |
 | *the start and end offsets leave nothing of the face to thread* | Smaller offsets |
-| *a helical thread's start and end offsets must be positive* | Offsets must be more than 0 |
-| *the thread must start after the face's start and finish before its end* | As above: offsets more than 0 |
+| *a helical thread's start and end offsets are positive … or negative to one pitch … but not 0* | An offset of 0, or more negative than a pitch |
+| *the thread may run at most a pitch past the ends of its face* | As above |
 | *something else of the body meets the thread: it must run on the face alone* | A cross hole, flat or other feature crosses the threaded part: shorten the thread or move the offsets past it |
 | *the shaft is hollow under this thread* / *the wall around the hole is too thin for this thread* | The groove would break through: less depth, or a thicker wall |
 | *a helical M8 thread needs a 8 mm shaft (this one is 10 mm)…* | Use Faceted (turns the shaft down), or Custom on the shaft as it is |
@@ -333,7 +336,7 @@ desktop control channel can do the same. New parameters (all optional):
 | `depth` | Thread depth (default: auto, as above) |
 | `angle` | Thread angle (default 60 deg) |
 | `clearance` | Clearance (default 0) |
-| `start_offset`, `end_offset` | Lands at the start (nearest `face`) and end (default half a pitch; more than 0) |
+| `start_offset`, `end_offset` | Lands at the start (nearest `face`) and end (default half a pitch; negative, to one pitch, runs off a free end; not 0) |
 | `start_angle` | The groove turned about the face's axis (default 0 deg), to phase it against a mating thread |
 | `handedness: "left"` | Left-handed (upstream's parameter; any thread). The port's older `left_handed: true` still means the same |
 
@@ -354,18 +357,22 @@ is rewritten as it opens (`format/pending/helical-thread-handedness.rs`).
 
 ## Limits
 
-- A helical thread can't run off the end of its face: it always leaves a land at each end (at
-  least the offsets). Use Faceted for a thread that runs out of a free end.
-- A helical ISO thread doesn't turn an oversized shaft down; Faceted still does.
-- Only single-shell bodies (no inside voids, one piece).
+- A helical thread runs off a free end only with a negative offset (0.40.0-rc.2a); by default it
+  leaves a land at each end.
+- A helical ISO thread doesn't turn an oversized shaft down (nor, since 0.40, does upstream's).
 - The helical profile is the symmetric basic trapezoid, close to ISO 68-1 but not identical to its
-  crest and root flats. The faceted method keeps the ISO profile.
-- Features after a helical thread that cut through the threaded part itself (a boolean through
-  the helical faces) are slow or may fail: the kernel's B-rep boolean is slow on helical surfaces.
-  Features elsewhere on the body work as usual.
+  crest and root flats. Upstream's modelled ISO thread keeps the ISO profile.
+- On solidcore (0.40.0-rc.2a) later features that cut through the thread are booleans like any
+  other: a 45° lead-in revolved through a 90-turn thread took 14 s on a Galaxy Z Fold. On truck
+  (to 0.30.1a) they were slow or failed, and the thread needed a single-shell body.
 - Readouts and messages are in English for now (other languages fall back to English).
 
 ## For developers: what changed in the code
+
+**Since 0.40.0-rc.2a** the thread is `crates/doc/src/eval_helical.rs`: the groove's section (the
+same as below) swept along a helix by solidcore's exact screw sweep (`kernel::sweep_helix`, one per
+hand) and cut from the body by one boolean, reaching a little past the face so no skin is left. The
+rest of this section is how it was built on truck, up to 0.30.1a; `thread_brep.rs` is gone.
 
 **Why not a boolean.** The kernel's B-rep boolean takes about 6 s to cut a 2-turn smooth helical
 groove and didn't finish a 6-turn one in 3 minutes, which is why modelled threads used a faceted

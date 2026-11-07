@@ -9,7 +9,8 @@ port's own features, a crash the new release brought on Qualcomm GPUs, and a run
 - [1. The port's threads and gears on solidcore](#1-the-ports-threads-and-gears-on-solidcore)
 - [2. A crash at every launch on Adreno](#2-a-crash-at-every-launch-on-adreno)
 - [3. The test run](#3-the-test-run)
-- [4. Not tested yet](#4-not-tested-yet)
+- [4. A bolt and its nut](#4-a-bolt-and-its-nut)
+- [5. Not tested yet](#5-not-tested-yet)
 
 ## In short
 
@@ -86,7 +87,28 @@ Every call succeeded. Interference over the five threaded bodies: 0.05 s.
 
 ![The port's helical threads and upstream's new forms](screenshots/android/threads-solidcore-fold-0400rc2a.jpg)
 
-## 4. Not tested yet
+## 4. A bolt and its nut
+
+A 12 mm bolt with 200 mm of 2.2 mm pitch thread (not an ISO pitch, so a Custom thread), a 6 mm
+hex head (18 mm across flats, chamfered 30°) and a 45° lead-in at its tip, and a hex nut (18 mm
+across flats, 10.8 mm high, Ø10.2 bore, 90° countersinks and 30° chamfers on both faces), both
+threads with 0.15 mm clearance. Built over MCP on the Fold: the bolt's thread took 23 s (90 turns),
+each revolved cut through it 14 s; the nut's thread 1.5 s.
+
+The first nut never fitted: turned through a full pitch in 30° steps on the bolt, it overlapped at
+every angle (10 to 67 mm³). A helical thread had to start and finish inside its face, so the
+partial turn where the groove begins left a wedge of nut across the bolt's thread. On solidcore
+the groove is cut by a boolean and can start in the air, so **an offset can now be negative, to
+one pitch**: the groove runs off that end, as a tap or die leaves it. With both of the nut's
+offsets at −2.2 mm and the bolt's at its tip, the nut is clear of the bolt from 150° to 240°. That
+is about 0.6 mm of axial play, because each part carries the 0.15 mm clearance on every flank.
+For a tighter fit, give only one of the two the clearance.
+
+| The nut on the bolt, clear of it | The bolt's lead-in | The nut's thread running into its countersink |
+|---|---|---|
+| ![The nut on the bolt](screenshots/android/bolt-nut-fit-fold-0400rc2a.jpg) | ![The lead-in](screenshots/android/bolt-lead-in-fold-0400rc2a.jpg) | ![The nut](screenshots/android/nut-run-out-fold-0400rc2a.jpg) |
+
+## 5. Not tested yet
 
 - The DevTerm enclosure and the cassette housing (the long MCP tests) on solidcore.
 - Speed against 0.30.1a on the same device. Upstream makes no speed claim for solidcore either.
