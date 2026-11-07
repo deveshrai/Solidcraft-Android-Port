@@ -4,7 +4,8 @@ What is wrong or missing in the current port release, and what is planned for th
 entry says how to work around it today. Fixed entries move to [Fixed](#fixed) with the release that
 fixed them.
 
-Current: **port 0.30.1a** (upstream 0.30.1). Next: **0.30.1b**, or the next upstream release's **a**, if upstream releases
+Current: **port 0.40.0-rc.2a** (upstream's 0.40.0-rc.2 pre-release); the stable one is **0.30.1a**. Next:
+**0.40.0-rc.2b**, or the next upstream release's **a**, if upstream releases
 first. See also [android-vs-upstream.md](android-vs-upstream.md) for what upstream has that the port
 doesn't, and the reverse.
 
@@ -19,16 +20,22 @@ doesn't, and the reverse.
 
 | Issue | Seen on | Work-around today | Plan |
 |---|---|---|---|
+| **On Adreno GPUs bodies are built on the CPU.** Upstream 0.40's GPU tessellation shader crashes Qualcomm's compiler, so the port skips it there. Showing a large design can take longer than it would on the GPU. | Galaxy Z Fold (Adreno 840), 0.40.0-rc.2a | None needed | Report the crash upstream with the shader; turn the GPU back on for Adreno once a driver or shader change avoids it |
+| **A launch that dies in the GPU's driver moves the app to OpenGL ES for good.** The startup guard from 0.30.1a can't tell a crash while compiling a shader from graphics that don't start, so after the Adreno crash above the next launch used OpenGL ES (MSAA 1x) and kept it. | Galaxy Z Fold, the first 0.40.0-rc.2a build | Stop the app in its first quarter-second once (it then goes back to Vulkan), or reinstall | Keep OpenGL ES only when Vulkan failed before the window drew |
+| **Going back to 0.30.1a needs an uninstall.** 0.40.0-rc.2a's version code is higher, and Android refuses a downgrade; uninstalling deletes the app's settings and crash reports. Designs saved by 0.40.0-rc.2a (format 51) don't open in 0.30.1a. | Any | Save designs to a device folder first, and keep 0.30.1a copies of anything important | By design for a pre-release |
 | **A tap on a dialog's OK can also select in the view.** With the crosshair button on, tapping **OK** in the Extrude window (opened by Press Pull on a screw head) closed it and then selected the face of the body behind it, as if the tap went through. Enter in the value field instead did not. | Galaxy Tab, 0.28.0a | Confirm with Enter, or tap empty space after | Find whether the closing tap reaches the view, and stop it there |
 | **Preferences' page list once ignored taps.** Right after the first start on OpenGL ES, three taps (finger and mouse) on page names didn't change the page; after a minute and from then on, every tap did. | Pixel Tablet emulator, 0.30.1a | Tap again | Reproduce it; if it is the first seconds after start, find what the window is still busy with |
 | **The first crash report's title is cut short** ("Closed …") when it carries a count (×2): the row has one more button (Save a copy) than upstream's. | Pixel Tablet emulator, 0.30.1a | The message below the title says it in full | Wrap the buttons under the title on narrow rows |
-| **The helical thread is hard to find.** Thread opens as upstream's does: Modeled off, and once ticked, Geometry on Faceted. The port's Helical B-rep, Custom and Clearance look missing until you know where they are. | Galaxy Z Fold, 0.23.0a; still so in 0.24.0a | Tick **Modeled**, set **Geometry** to **Helical B-rep** ([android-threads.md](android-threads.md#opening-thread)) | Decide whether the port opens Thread with Modeled ticked and Helical B-rep chosen |
+| **The helical thread is hard to find.** Thread opens as upstream's does. Since 0.40.0-rc.2a **Custom** is the last entry of the **Form** list, and an ISO metric thread's Clearance and Start angle appear only after ticking **Modeled** and then **Helical B-rep**. | Galaxy Z Fold, 0.23.0a; still so in 0.40.0-rc.2a | Form › **Custom**, or **Modeled** › **Helical B-rep** ([android-threads.md](android-threads.md)) | Decide whether the port opens Thread with Modeled ticked |
 | **A file saved to a device folder can lose its extension.** Save As writes the name typed in Android's picker; type *gear* and the file is `gear`, not `gear.sc`. The app itself names the tab and its copy correctly and opens the file again, but file managers and other apps don't know what it is. | Pixel 9 and Galaxy Z Fold, 0.23.0a and b | Type the extension: *gear.sc*, *part.stl* | Ask the picker for the name with its extension kept, or rename the saved document through the provider |
 | **Reopen designs doesn't reopen them.** Upstream 0.24.1's Settings › General › *Reopen the designs that were open* records them when the app quits; Android never quits an app that way (it stops it in the background), so nothing is recorded. | Galaxy Tab, 0.25.1a | **File › Open Recent** | Record the open designs when the app goes to the background |
 | **Samsung's window handle covers the new-tab button.** On Samsung devices the handle at the top centre sits over the tab strip; a tap there can open Samsung's window menu instead of **+**. | Galaxy Z Fold | **Ctrl+N** or **File › New Design** | Keep the tab strip's buttons out of the handle's area on Samsung devices |
 | **Designs saved by 0.22.0a open as "Untitled (n)".** That release's Save As didn't store the typed name in the design (fixed in 0.23.0a), and Open names the tab from the design. | Any, files from 0.22.0a | **Save As** once to rename it | Fall back to the file's name when a design's name is a default "Untitled" one |
 
 ## Planned, larger
+
+The kernel rows below (bores, drafted joins, gear checks, the groove's ends) were found on truck. 0.40.0-rc.2a
+runs on solidcore, and they haven't been checked there yet.
 
 | Issue | Work-around today | Plan |
 |---|---|---|
@@ -93,6 +100,7 @@ reported or left to upstream, not patched in the port, so merges stay clean.
 
 | Issue | Fixed in |
 |---|---|
+| Every launch died 0.2 s in on a Galaxy Z Fold (Adreno 840): upstream 0.40's GPU tessellation shader crashed Qualcomm's compiler | 0.40.0-rc.2a, before release: bodies on the CPU on Adreno ([android-0400rc2a-test.md](android-0400rc2a-test.md#2-a-crash-at-every-launch-on-adreno)) |
 | A phone whose graphics couldn't start (a Galaxy A04, [#4](https://github.com/deveshrai/Solidcraft-Android-Port/issues/4)) was aborted at every launch, with no message | 0.30.1a: leaves cleanly, the next launch starts on OpenGL ES, `startup-error.txt` says why ([android-0301a-test.md](android-0301a-test.md#1-a-launch-that-cant-start-its-graphics)) |
 | On OpenGL ES the 3D view was empty: upstream 0.30.1's viewport shader doesn't compile there | 0.30.1a, in the port ([why](android-0301a-test.md#2-the-empty-3d-view-on-opengl-es)) |
 | Crash reports were kept but never shown, couldn't leave the device, and Report… drafted the issue on upstream's tracker | 0.30.1a: announced, **Save a copy**, the port's tracker |

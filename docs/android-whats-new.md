@@ -5,6 +5,7 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.40.0-rc.2a](#0400-rc2a): upstream's 0.40.0-rc.2 pre-release and its new kernel, solidcore
 - [0.30.1a](#0301a): upstream 0.29.0 to 0.30.1, an OpenGL ES fallback, crash reports you can save
 - [0.28.0a](#0280a): upstream 0.28.0, a crosshair for picking by finger
 - [0.27.1a](#0271a): upstream 0.26 and 0.27, long threads, a thread start angle, faster checks
@@ -15,6 +16,37 @@ missing: [android-known-issues.md](android-known-issues.md).
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.40.0-rc.2a
+
+**A pre-release, like upstream's.** Upstream's [0.40.0-rc.2](https://github.com/tangency-labs/solidcraft/releases/tag/v0.40.0-rc.2)
+is for people who choose to test it, and so is this. Designs saved in it are format 51 (upstream's 50
+plus the port's helical threads), which 0.30.1a can't open: keep a copy of anything you care about.
+Stay on [0.30.1a](https://github.com/deveshrai/Solidcraft-Android-Port/releases/tag/v0.30.1a-android) for
+work. Android installs it over 0.30.1a, and 0.40.0a will install over it; going back to 0.30.1a means
+uninstalling first, which deletes the app's own settings and crash reports (save designs elsewhere first).
+
+**Upstream 0.40.0-rc.2** merged (696 commits). Its headline: **solidcore**, a new pure-Rust geometry
+kernel, replaces truck for every boolean, fillet, shell and thread. Modelled threads are exact
+helical sweeps with many more forms (trapezoidal, Acme, buttress, pipe), several starts, both hands,
+runouts and chamfered tips. Also new: Align follows frames, Find Limits on joints, new Preferences
+layouts, and many fixes. Upstream lists its own known problems with solidcore (variable fillets,
+some shells, planar faces with more triangles) in [its release notes](https://github.com/tangency-labs/solidcraft/releases/tag/v0.40.0-rc.2).
+
+**The port's own changes:**
+
+- **Helical threads on solidcore.** The port's thread (any pitch, depth, flank angle, clearance,
+  offsets, start angle) is now an exact screw sweep cut by one boolean, as upstream's threads are; its
+  old truck code is gone. In the Thread dialog, **Custom** ends upstream's **Form** list, and a
+  modelled ISO metric thread has a **Helical B-rep** box. `hand: both` works for helical threads too.
+- **Gears** work on solidcore unchanged.
+- **No more crash at every launch on Adreno GPUs.** Upstream 0.40's GPU tessellation shader crashes
+  Qualcomm's compiler (Galaxy Z Fold, Adreno 840), and a driver crash can't be caught. Bodies are built
+  on the CPU on Adreno under Android, and a launch that dies compiling that shader on any other GPU sends
+  the next ones to the CPU.
+- **Designs from every earlier port release still open**, threads included.
+- **Tested on a Galaxy Z Fold** (Android 17) over MCP: five gear types and five threads, port and
+  upstream, all built ([the test](android-0400rc2a-test.md)).
 
 ## 0.30.1a
 

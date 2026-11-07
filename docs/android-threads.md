@@ -18,6 +18,18 @@ default. The new geometry is an option next to it.
 Screenshots are from the Pixel Tablet emulator (Android 16, 2560 × 1600) running SolidCraft
 0.21.0 with these changes; the same dialog is in the 0.22.0 and 0.23.0 ports. Using the app in general: [android-touch.md](android-touch.md).
 
+> **0.40.0-rc.2a: on upstream's new kernel.** Upstream 0.40.0-rc.2 replaces the geometry kernel
+> with solidcore, and its own modelled threads are now exact helical sweeps too, with more forms
+> (trapezoidal, Acme, buttress, pipe threads), several starts, both hands at once, a faded
+> runout and a chamfered tip. The faceted method is gone. The port's helical thread keeps what
+> upstream's doesn't have (any pitch on any face, depth, flank angle, clearance, start and end
+> offsets, start angle), and is now built the same way as upstream's: the groove is an exact
+> screw sweep cut out by one boolean, so it has a few smooth faces a turn rather than the old
+> eight in all. In the dialog, **Custom** is the last entry of upstream's **Form** list, and a
+> modelled ISO metric thread has a **Helical B-rep** box for the port's options. The sections
+> below describe 0.21.0–0.30.1a; where they mention Faceted, read upstream's modelled thread.
+> Designs saved by earlier port releases open with their threads as they were.
+
 - [What changed](#what-changed)
 - [Faceted and helical threads](#faceted-and-helical-threads)
 - [Opening Thread](#opening-thread)
@@ -307,7 +319,7 @@ feature whose preview fails.
 | *with a 0.05 mm clearance an M2 thread leaves no crest in a 1.6 mm hole, and a shallower thread would not take the bolt: drill 1.85 mm…* | Drill the size it names (a printed or clearance-fit tap drill is larger than the standard one), or less clearance. Before 0.24.0a the groove was made shallower without a word, too shallow for the bolt |
 | *something else of the body meets the thread* when the part is already in its mating hole | The face is picked by a point, and the point is on both parts: thread the part before putting it in place |
 | *not supported yet: a helical thread on a body of several shells* | The body has an inside void or is in several pieces: use Faceted |
-| *a thread is limited to 400 turns* | Shorter, or a coarser pitch |
+| *a thread is limited to 190 turns* (400 before 0.40.0-rc.2a) | Shorter, or a coarser pitch |
 
 ## Scripts and the command
 

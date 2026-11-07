@@ -183,7 +183,9 @@ Then `git add` the files, `git commit`, and `scripts/android-sync.sh --check-onl
 
 Upstream caps AGENTS.md and each skill (`cargo xtask skills`); the port's lines count toward the
 cap, so when upstream grows a file the port adds to, shorten the port's lines. 0.25.1 grew
-`skills/solidcraft-crash-safety/SKILL.md` past it with the port's Android `unsafe` line.
+`skills/solidcraft-crash-safety/SKILL.md` past it with the port's Android `unsafe` line. 0.40.0-rc.2's AGENTS.md
+left 6 characters for the port's row, so the port also drops two upstream phrases there: "only
+`crates/kernel` uses truck" (truck is gone) and "Local `plan/` notes are optional."
 
 ### The port's speed fixes
 

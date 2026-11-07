@@ -4,25 +4,26 @@
 
 **This is the Android port of SolidCraft.** It is upstream
 [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with every
-upstream release (now 0.30.1), plus an Android app and **features upstream doesn't have yet**. Current
-release: **0.30.1a** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
+upstream release (now 0.30.1, and the 0.40.0-rc.2 pre-release), plus an Android app and **features
+upstream doesn't have yet**. Current release: **0.30.1a**; pre-release: **0.40.0-rc.2a**
+([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
 
 | Added in this port | What it gives you | Guide |
 |---|---|---|
 | **Android app** | Phones, tablets and foldables: one finger orbits, two pan, a pinch zooms, and a **crosshair** picks small edges and faces by finger; a mouse and keyboard work as on a desktop; files through Android's picker (device, SD card, Drive) | [Using it](docs/android-touch.md) |
-| **Helical B-rep threads** | Exact, smooth threads instead of faceted ones; any pitch on any diameter; long lead screws; clearance for printed parts that screw together; a start angle to phase mating threads | [Threads](docs/android-threads.md) |
+| **Helical B-rep threads** | Exact, smooth threads; any pitch on any diameter; clearance for printed parts that screw together; a start angle to phase mating threads | [Threads](docs/android-threads.md) |
 | **Involute gears** | Ten types (spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel, crossed helical), bore, keyway and hub, editable after | [Gears](docs/android-gears.md) |
 | **MCP server on the network** | One switch in Settings: Claude Code in Termux on the device, or on a computer on the same Wi-Fi, models in the app while you watch | [MCP server](docs/android-mcp.md) |
 
-**New in 0.30.1a:** upstream 0.29.0 to 0.30.1, and **an OpenGL ES fallback**
-([issue #4](https://github.com/deveshrai/Solidcraft-Android-Port/issues/4)): when a phone's graphics can't
-start, the app now leaves cleanly and the next launch uses OpenGL ES, where the 3D view now draws. Crash
-reports are shown at the next start and can be saved through Android's picker.
+**New in 0.40.0-rc.2a (a pre-release):** upstream's 0.40.0-rc.2 and its new geometry kernel,
+solidcore. The port's helical threads (any pitch, clearance, start angle) and gears run on it, and
+Qualcomm Adreno phones no longer crash at launch. For work, stay on
+[0.30.1a](https://github.com/deveshrai/Solidcraft-Android-Port/releases/tag/v0.30.1a-android); designs
+saved in the pre-release don't open there.
 
-The DevTerm enclosure with eight M2 screws, built by an agent over the MCP server on OpenGL ES, 6×
-speed ([the test](docs/android-0301a-test.md)):
+Gears and threads built over MCP on a Galaxy Z Fold ([the test](docs/android-0400rc2a-test.md)):
 
-![A handheld's enclosure built over MCP on OpenGL ES, 6x speed](docs/screenshots/android/opengl-es-enclosure-build-emu-0301a-6x.gif)
+![The port's helical threads and upstream's new thread forms on solidcore](docs/screenshots/android/threads-solidcore-fold-0400rc2a.jpg)
 
 [What's new](docs/android-whats-new.md) ·
 [port vs upstream](docs/android-vs-upstream.md) ·

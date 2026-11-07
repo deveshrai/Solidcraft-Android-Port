@@ -6,7 +6,7 @@ built here first and kept up to date with every upstream release.
 
 ![The port and upstream](screenshots/android/hero-port-vs-upstream.png)
 
-Current: **port 0.30.1a**, against **upstream 0.30.1** ([what's new](android-whats-new.md)). This page is kept up to date with each
+Current: **port 0.40.0-rc.2a**, against **upstream 0.40.0-rc.2** (both pre-releases; the stable pair is 0.30.1a and 0.30.1) ([what's new](android-whats-new.md)). This page is kept up to date with each
 port release ([keeping this page current](#keeping-this-page-current)).
 
 - [At a glance](#at-a-glance)
@@ -19,21 +19,20 @@ port release ([keeping this page current](#keeping-this-page-current)).
 
 ## At a glance
 
-| | Upstream 0.30.1 | Port 0.30.1a |
+| | Upstream 0.40.0-rc.2 | Port 0.40.0-rc.2a |
 |---|---|---|
 | Platforms | Windows, macOS, Linux, web | All of upstream's, **plus Android** (phones, tablets, foldables) |
-| Modelled threads | Cut as a faceted groove; the threaded body's curved faces become facets | Faceted as upstream, **or exact helical B-rep**: smooth helical faces, the rest of the body stays exact |
-| Thread sizes | Thread: ISO metric, coarse or fine (M8, M8x1), only on a face that size fits; tapped holes also UNC/UNF, G and Rp | Upstream's, **or any pitch on any diameter** (Type: Custom) |
-| Thread fit for printing | Left- or right-handed (since 0.24.0) | **Clearance**, thread depth, flank angle, start and end offsets, a **start angle** to phase mating threads; long lead screws (hundreds of turns); upstream's left- or right-handed for every kind of thread |
+| Modelled threads | Exact helical sweeps on solidcore: ISO metric, trapezoidal, Acme, buttress and pipe forms, several starts, right, left or both hands, runouts, chamfered tips | All of upstream's, **plus the port's helical thread** (built the same way) for what upstream's doesn't take |
+| Thread sizes | The forms' standard sizes, on a face that size fits | Upstream's, **or any pitch on any diameter** (Form: Custom) |
+| Thread fit for printing | None | **Clearance**, thread depth, flank angle, start and end offsets, a **start angle** to phase mating threads |
 | Gears | None (requested upstream: [#6796](https://github.com/tangency-labs/solidcraft/issues/6796), [#4684](https://github.com/tangency-labs/solidcraft/issues/4684)) | **Ten involute types**: spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel, crossed helical; bore, DIN 6885 keyway and hub; editable after |
-| Booleans on gears and helical threads | (no gears) | Gear flanks are exact Béziers, one to three faces each; B-spline surfaces skip zero basis terms; flat joins skip faces that can't reach the contact ([android-speed.md](android-speed.md)) |
-| Twisted or scaled straight sweeps | One ruled strip per segment past 64 segments or with a hole | **One smooth wall per profile segment**, holes included |
+| Booleans on gears | (no gears) | Gear flanks are exact Béziers, one to three faces each. (The port's truck speed fixes went with truck; [android-speed.md](android-speed.md) describes them up to 0.30.1a) |
 | AI agents | MCP over stdio on the same computer (`solidcraft-cli mcp`), and the agent chat | Upstream's, **plus an MCP server on the network** (Settings › MCP server): Claude Code in Termux on the device, or on a computer on the same Wi-Fi, models in the app; long calls answer "still running" and wait through `pending`, each session on its own thread |
 | Touch | None | Orbit, pan, pinch, tap to select, finger-dragged dialog arrows, **a crosshair to pick small edges and faces by finger** (view bar) |
 | Files | Native file dialogs | Android's file picker: device, SD card, Google Drive, any storage app |
-| Graphics | Vulkan, Metal, DirectX, OpenGL; Windows retries other APIs | Vulkan or OpenGL ES; a launch that can't start makes the next one use OpenGL ES, and the viewport shader compiles on OpenGL ES (upstream 0.30.1's doesn't there) |
+| Graphics | Vulkan, Metal, DirectX, OpenGL; Windows retries other APIs | Vulkan or OpenGL ES; a launch that can't start makes the next one use OpenGL ES; the viewport shader compiles on OpenGL ES; bodies are built on the CPU on Adreno, whose compiler crashes on 0.40's GPU tessellation shader |
 | Crash reports | Kept, shown at the next start, Report… drafts an issue upstream | The same, plus **Save a copy** through Android's picker; Report… drafts it on the port's tracker |
-| Design file format | 48 | 49 (48 plus the helical threads) |
+| Design file format | 50 | 51 (50 plus the helical threads) |
 
 Everything else (sketching, the solver, every feature and workspace, Render, sheet metal,
 assemblies, import and export) is upstream's, unchanged, at the same version.
@@ -45,19 +44,15 @@ repository has them too.
 
 ### Helical B-rep threads
 
-Upstream models a thread by cutting a groove of flat triangles into the face. That works, but the
-body is no longer exact: its curved faces become facets, and later fillets, a second thread or a
-clean STEP export suffer. The port adds **Geometry: Helical B-rep**, a groove made of a few exact
-ruled helicoid faces with planar end caps, checked against Pappus' volume. The body stays exact.
+Since 0.40, upstream's own modelled threads are exact helical sweeps on solidcore, in many standard
+forms. The port's helical thread, built the same way, covers what they don't: **Form: Custom**
+threads any shaft or hole with any pitch, and **Clearance** moves the flanks and root into the
+material so printed parts screw together, the "surface offset" asked for in upstream's
+[#4684](https://github.com/tangency-labs/solidcraft/issues/4684). Thread depth, flank angle, start
+and end offsets and a start angle (to phase a mating thread) are there too, and upstream's
+**Hand** turns it either way, or both.
 
-On top of that, **Type: Custom** threads any shaft or hole with any pitch, and **Clearance** moves
-the flanks and root into the material so printed parts screw together, the "surface offset" asked
-for in upstream's [#4684](https://github.com/tangency-labs/solidcraft/issues/4684). Depth, angle,
-start and end offsets are there too, and a helical thread is left- or right-handed through
-upstream's own **Thread direction** (since 0.24.0, which replaced the port's Left-handed box). An
-M20 × 20 mm builds in under two seconds on a Galaxy Z Fold.
-
-Guide: [android-threads.md](android-threads.md). Code: `crates/kernel/src/thread_brep.rs`.
+Guide: [android-threads.md](android-threads.md). Code: `crates/doc/src/eval_helical.rs`.
 
 ### Gears
 
@@ -90,12 +85,6 @@ Tested live on a Galaxy Z Fold over Wi-Fi, building a cassette housing with five
 Guide: [android-mcp.md](android-mcp.md). Code: `apps/solidcraft-android/src/mcp_http.rs`,
 `apps/solidcraft-android/src/mcp_host.rs`, `crates/ui-egui/src/prefs/mcp_server.rs`.
 
-### Smooth twisted and scaled sweeps
-
-Made for the helical gears, useful everywhere: a straight sweep that twists or scales now gets one
-smooth wall per profile segment, holes included. Before, a 24-tooth helical gear was over 16,000
-ruled strips, too many for a later boolean. Code: `crates/kernel/src/sweep_path.rs`.
-
 ## The Android app
 
 What it takes to run upstream's desktop app on Android
@@ -117,12 +106,12 @@ What it takes to run upstream's desktop app on Android
 
 - **The port opens every upstream design**, from any version.
 - **Upstream releases don't open port designs.** The helical thread fields are a design-format
-  change that upstream hasn't adopted, so the port saves format 49 where upstream 0.30.1 saves 48,
-  and upstream asks to be updated rather than silently rebuilding helical threads as faceted ones.
+  change that upstream hasn't adopted, so the port saves format 51 where upstream 0.40.0-rc.2 saves 50,
+  and upstream asks to be updated rather than silently dropping the helical threads' fields.
   This applies to every design the port saves, with or without threads.
 - **To share with upstream, export STEP.** Gears and threads arrive as exact solids.
 - Designs saved by earlier port releases with a left-handed helical thread (`left_handed`) open
-  with upstream's `handedness: left`, the same thread.
+  with upstream's `hand: left`, the same thread.
 - Gears need no format change of their own: their parameters are in the component's metadata, and
   the gear itself is ordinary sketches and features.
 
