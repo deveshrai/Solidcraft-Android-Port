@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
-use solidcraft_geom::{Mesh, Vec3};
+use solidcore_record::Vec3;
+use solidcraft_geom::Mesh;
 use std::f64::consts::PI;
 
 use crate::Session;
@@ -13,7 +14,7 @@ fn run(s: &mut Session, id: &str, p: Value) -> Value {
 
 /// The meshes of a component's bodies, in world coordinates.
 fn meshes(s: &Session, comp: u64) -> Vec<Mesh> {
-    let st = s.world_state();
+    let st = s.world_state().unwrap();
     st.bodies.iter().filter(|b| s.doc.model_body_component(b) == comp).map(|b| b.mesh().as_ref().clone()).collect()
 }
 
@@ -65,7 +66,7 @@ fn a_spur_gear_has_its_standard_dimensions() {
 
 /// The faces of a component's one body.
 fn face_count(s: &Session, comp: u64) -> usize {
-    let st = s.world_state();
+    let st = s.world_state().unwrap();
     st.bodies.iter().filter(|b| s.doc.model_body_component(b) == comp).map(|b| b.body.face_count()).sum()
 }
 
@@ -327,7 +328,7 @@ fn two_gears_keep_their_own_bodies() {
     assert!(close(bounds(&mb).0.z, -5.0, 1e-6), "the second gear's hub");
     let inner = |m: &[Mesh]| m.iter().flat_map(|m| m.positions.iter()).map(|p| p.x.hypot(p.y)).fold(f64::MAX, f64::min);
     assert!(inner(&ma) < 4.0 && close(inner(&mb), 5.0, 0.02), "only the second gear is bored: {} {}", inner(&ma), inner(&mb));
-    let names: Vec<String> = s.world_state().bodies.iter().map(|b| b.name.clone()).collect();
+    let names: Vec<String> = s.world_state().unwrap().bodies.iter().map(|b| b.name.clone()).collect();
     assert!(names.contains(&"Spur Gear m2 z20".to_string()) && names.contains(&"Spur Gear m2 z20 2".to_string()), "{names:?}");
 }
 

@@ -25,7 +25,7 @@ pub(crate) fn reveal(app: &mut SolveApp, id: u64, body: &str) {
     }
     let component = feature.component;
     let state = app.session.model.state();
-    let world = app.session.world_state();
+    let world = crate::open_meshing::session_world(&app.session);
     let Some(source) = world.body(body).map(|selected| selected.definition_name()) else { return };
     let Some((_, path, _)) = app
         .session
@@ -41,10 +41,10 @@ pub(crate) fn reveal(app: &mut SolveApp, id: u64, body: &str) {
     app.tree.reveal = None;
     app.tree.collapsed.remove("c0");
     for depth in 1..=path.len() {
-        app.tree.collapsed.remove(&occurrence_key(&path[..depth]));
+        app.tree.open_row(&occurrence_key(&path[..depth]));
     }
     let scope = if path.is_empty() { format!("c{component}") } else { occurrence_key(&path) };
-    app.tree.collapsed.remove(&scope);
+    app.tree.open_row(&scope);
     app.tree.expanded.insert(format!("{scope}/features"));
     app.tree.reveal_feature = Some(Reveal { id, path });
 }
@@ -561,11 +561,11 @@ mod tests {
     }
 
     fn find_in_timeline(app: &mut SolveApp, feature: u64, body: &str) {
-        let state = app.session.world_state();
+        let state = app.session.world_state().unwrap();
         let model_body = state.body(body).unwrap();
         let names = solidcraft_engine::doc::naming::face_names(model_body);
         let index = names.iter().position(|name| name.starts_with(&format!("F{feature}:"))).unwrap();
-        app.session.selection = vec![Sel::Face { body: body.into(), index, point: solidcraft_engine::geom::Vec3::ZERO }];
+        app.session.selection = vec![Sel::Face { body: body.into(), index, point: solidcore_record::Vec3::ZERO }];
         let item = crate::context_menu::items(app, &Target::Viewport).into_iter().find(|item| item.id == "ui.findTimeline").unwrap();
         assert!(item.enabled);
         crate::context_menu::run_item(app, &item, pos2(0.0, 0.0));
@@ -656,7 +656,7 @@ mod tests {
     fn browser_find_from_a_body_or_its_face_reveals_the_body() {
         let mut h = Harness::new();
         h.app.run("solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Plate"})).unwrap();
-        for pick in [Sel::Body { name: "Plate".into() }, Sel::Face { body: "Plate".into(), index: 0, point: solidcraft_engine::geom::Vec3::ZERO }] {
+        for pick in [Sel::Body { name: "Plate".into() }, Sel::Face { body: "Plate".into(), index: 0, point: solidcore_record::Vec3::ZERO }] {
             h.app.tree.reveal = None;
             h.app.session.selection = vec![pick.clone()];
             let item = crate::context_menu::items(&h.app, &Target::Viewport).into_iter().find(|item| item.id == "ui.findBrowser").unwrap();
@@ -674,7 +674,7 @@ mod tests {
     }
 
     fn face(body: &str) -> Sel {
-        Sel::Face { body: body.into(), index: 0, point: solidcraft_engine::geom::Vec3::ZERO }
+        Sel::Face { body: body.into(), index: 0, point: solidcore_record::Vec3::ZERO }
     }
 
     #[test]
@@ -731,6 +731,8 @@ mod tests {
     #[test]
     fn only_folded_features_folders_on_screen_work_out_their_mark() {
         let mut h = Harness::new();
+        // The folders sit inside placements, which start closed (#9274).
+        h.app.preferences.browser_components_open = true;
         let component = h.app.run("component.create", json!({"name":"Part"})).unwrap();
         let feature = h.app.run("solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Plate"})).unwrap()["feature"].as_u64().unwrap();
         h.app.run("component.activate", json!({"component":0})).unwrap();
@@ -798,10 +800,10 @@ mod tests {
         let inserted = h.app.run("component.insert_design", json!({"path":source.0.to_string_lossy()})).unwrap();
         let path = vec![inserted["occurrence"].as_u64().unwrap()];
         let name = h.app.session.occurrence_bodies(&path, false).unwrap()[0].clone();
-        let state = h.app.session.world_state();
+        let state = h.app.session.world_state().unwrap();
         let owner = state.body(&name).unwrap().feature;
         assert_ne!(owner, base);
-        h.app.session.selection = vec![Sel::Face { body: name, index: 0, point: solidcraft_engine::geom::Vec3::ZERO }];
+        h.app.session.selection = vec![Sel::Face { body: name, index: 0, point: solidcore_record::Vec3::ZERO }];
         for id in ["ui.findTimeline", "ui.editFeature"] {
             let item = crate::context_menu::items(&h.app, &Target::Viewport).into_iter().find(|item| item.id == id).unwrap();
             assert!(!item.enabled || item.params.as_ref().unwrap()["feature"] == json!(owner), "{id}: {item:?}");

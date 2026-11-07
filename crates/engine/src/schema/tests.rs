@@ -774,7 +774,7 @@ fn face_and_edge_refs_match_the_pick_readers() {
     assert!(parse::<EdgeRef>(json!({"body": "A", "index": 1.0})).is_none());
     assert_eq!(edge_schema["anyOf"][2]["properties"]["index"]["type"], "integer");
     assert_eq!(parse::<EdgeRef>(json!({"body": "A", "index": 4})), Some(EdgeRef::Index { body: "A".into(), index: 4 }));
-    assert_eq!(parse::<FaceRef>(json!({"point": [1, 2, 3]})), Some(FaceRef::Point(solidcraft_geom::Vec3::new(1.0, 2.0, 3.0))));
+    assert_eq!(parse::<FaceRef>(json!({"point": [1, 2, 3]})), Some(FaceRef::Point(solidcore_record::Vec3::new(1.0, 2.0, 3.0))));
 }
 
 /// The pick lists take 1 to 1000 picks, as `face_points` and `edge_points` do, and so do their
@@ -907,7 +907,8 @@ fn shared_types_keep_the_handlers_messages() {
     for (id, p, probe) in [
         ("solid.shell", json!({"thickness": 1, "faces": 5}), json!({"faces": 5})),
         ("solid.shell", json!({"thickness": 1, "faces": null}), json!({"faces": null})),
-        ("solid.shell", json!({"thickness": 1, "faces": []}), json!({"faces": []})),
+        // `solid.shell` takes no faces (a closed hollow body); the draft refuses them.
+        ("solid.draft", json!({"angle": 1, "faces": []}), json!({"faces": []})),
         ("solid.shell", json!({"thickness": 1, "faces": [true]}), json!({"faces": [true]})),
         ("solid.shell", json!({"thickness": 1, "faces": [""]}), json!({"faces": [""]})),
         ("solid.fillet", json!({"radius": 1, "edges": {}}), json!({"edges": {}})),

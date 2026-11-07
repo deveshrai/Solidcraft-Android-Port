@@ -25,7 +25,7 @@ fn a_context_error_offers_no_create_issue_button_10181() {
     h.app.run("solid.box", json!({"length":40,"width":30,"height":20,"body_name":"Body1"})).unwrap();
     h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
     h.settle();
-    h.app.session.selection = vec![Sel::Face { body: "Body1".into(), index: 5, point: solidcraft_engine::geom::Vec3::new(20.0, 15.0, 20.0) }];
+    h.app.session.selection = vec![Sel::Face { body: "Body1".into(), index: 5, point: solidcore_record::Vec3::new(20.0, 15.0, 20.0) }];
     h.app.start("sketch.project");
     h.frames(4);
     assert!(h.app.dialog.as_ref().is_some_and(|d| matches!(d.kind, Kind::SketchProject { .. })), "the Project panel opens for the live sketch");
@@ -249,7 +249,7 @@ fn intersect_dialog_filters_geometry_or_whole_bodies_and_controls_projection_lin
     assert_eq!(apply_commands(&h.app, d).unwrap(), vec![("sketch.intersect".into(), json!({"refs":[{"body":"Post"}],"projection_link":false}))]);
     // A model edge is cut with the plane too (#10484).
     let d = h.app.dialog.as_mut().unwrap();
-    d.inputs[0].items = vec![Sel::Edge { body: "Post".into(), index: 0, point: solidcraft_engine::geom::Vec3::new(0.0, 0.0, 10.0) }];
+    d.inputs[0].items = vec![Sel::Edge { body: "Post".into(), index: 0, point: solidcore_record::Vec3::new(0.0, 0.0, 10.0) }];
     let cmds = apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
     assert_eq!(cmds, vec![("sketch.intersect".into(), json!({"refs":[{"edge":[0.0,0.0,10.0],"body":"Post"}],"projection_link":false}))]);
 }
@@ -280,12 +280,12 @@ fn intersect_dialog_takes_a_line_of_another_sketch() {
     h.step(&json!({"click":{"handle":"dialog:ok"}})).unwrap();
     h.settle();
     assert!(h.app.dialog.is_none());
-    let state = h.app.session.world_state();
+    let state = h.app.session.world_state().unwrap();
     let sk = state.sketch(h.app.session.active_sketch.unwrap()).unwrap();
     let link = &sk.sketch.links[0].id;
     let at: Vec<_> = sk.sketch.link_points(link).iter().filter_map(|p| sk.sketch.point(*p)).map(|p| sk.plane.to_world(p)).collect();
     assert_eq!(at.len(), 1, "{at:?}");
-    assert!(at[0].dist(solidcraft_engine::geom::Vec3::new(20.0, 0.0, 0.0)) < 1e-6, "{at:?}");
+    assert!(at[0].dist(solidcore_record::Vec3::new(20.0, 0.0, 0.0)) < 1e-6, "{at:?}");
 }
 
 #[test]
@@ -324,7 +324,7 @@ fn project_dialog_keeps_geometry_targets_and_can_project_whole_bodies_unlinked()
     h.settle();
     assert!(h.app.dialog.is_none());
     let sketch = h.app.session.active_sketch.expect("Project leaves the sketch active");
-    let state = h.app.session.world_state();
+    let state = crate::open_meshing::session_world(&h.app.session);
     let sketch = &state.sketch(sketch).unwrap().sketch;
     assert!(sketch.links.is_empty());
     assert!(!sketch.curves.is_empty());
@@ -624,7 +624,7 @@ fn transform_handles_and_fields_scale_move_and_turn_the_picks() {
     h.step(&json!({"key": "Enter"})).unwrap();
     h.settle();
     assert!(h.app.dialog.is_none(), "{:?}", h.app.dialog.as_ref().and_then(|d| d.error.clone()));
-    let state = h.app.session.world_state();
+    let state = h.app.session.world_state().unwrap();
     let sk = &state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
     let (mut lo, mut hi) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
     for p in (0..sk.curves.len()).flat_map(|i| sk.polyline(i)) {
@@ -635,7 +635,7 @@ fn transform_handles_and_fields_scale_move_and_turn_the_picks() {
     assert!((hi.0 - 55.0).abs() < 1.5 && (hi.1 - 40.0).abs() < 1.5, "the far corner went to (55, 40): {hi:?}");
     h.app.run("edit.undo", json!({})).unwrap();
     h.settle();
-    let state = h.app.session.world_state();
+    let state = h.app.session.world_state().unwrap();
     let sk = &state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
     let top = (0..sk.curves.len()).flat_map(|i| sk.polyline(i)).fold(f64::MIN, |m, p| m.max(p.x));
     assert!((top - 40.0).abs() < 1e-6, "one undo puts it back: {top}");

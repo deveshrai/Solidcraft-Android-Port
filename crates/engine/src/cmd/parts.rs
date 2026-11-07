@@ -10,7 +10,8 @@
 //! washer, the top of a set screw or pin); the shank runs down −z.
 
 use serde_json::{Value, json};
-use solidcraft_geom::Vec3;
+use solidcore_record::Vec3;
+use solidcraft_geom::prelude::*;
 
 use super::CommandSpec;
 use crate::params::{bad, num, str_, vec3};
@@ -781,6 +782,9 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
         );
         let mut m = m;
         m[3] = [pt.x, pt.y, pt.z, 1.0];
+        if !solidcraft_doc::is_placement(&m) {
+            return Err(bad(cmd, "`point` must be within 1e9 mm and `direction` finite"));
+        }
         if let Some(o) = s.doc_mut().occurrences.iter_mut().find(|o| o.id == occ) {
             o.transform = m;
         }
@@ -811,7 +815,7 @@ fn hole_picks(p: &Value, cmd: &str) -> Result<Vec<Vec3>> {
 /// point on the hole's axis level with it (the same for every pick on one rim).
 fn hole_wall(s: &Session, a: Vec3) -> Option<(Vec3, Vec3)> {
     // Picks are in world coordinates, including rims on already placed standard parts.
-    let st = s.world_state();
+    let st = s.world_state().ok()?;
     let dirs = [Vec3::Z * -1.0, Vec3::Z, Vec3::X, Vec3::X * -1.0, Vec3::Y, Vec3::Y * -1.0];
     for step in [0.2, 0.5, 1.0, 2.0] {
         for b in &st.bodies {
@@ -889,6 +893,7 @@ fn resize(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
+    use solidcraft_geom::prelude::*;
 
     use crate::Session;
 
@@ -899,8 +904,8 @@ mod tests {
         }
     }
 
-    fn bbox(s: &Session, prefix: &str) -> (solidcraft_geom::Vec3, solidcraft_geom::Vec3) {
-        let st = s.world_state();
+    fn bbox(s: &Session, prefix: &str) -> (solidcore_record::Vec3, solidcore_record::Vec3) {
+        let st = s.world_state().unwrap();
         let comp = s.doc.components.iter().find(|c| c.name.starts_with(prefix)).map(|c| c.id).unwrap_or(0);
         let b = st
             .bodies
@@ -1070,7 +1075,7 @@ mod tests {
         // The profile: full width at the rim and up the flank (0.15 k = 0.50 high), drawing in
         // over the crown (r = 4.62 halfway up the head), and a flat top of 0.7 s = 2.8, which
         // leaves a ring of material around the socket's corners at r = 2.31.
-        let st = s.world_state();
+        let st = s.world_state().unwrap();
         let widest = |above: f64| {
             st.bodies.iter().flat_map(|b| b.mesh().positions.clone()).filter(|p| p.z > above).map(|p| p.x.hypot(p.y)).fold(0.0, f64::max)
         };
@@ -1165,8 +1170,8 @@ mod tests {
         assert_eq!(Some(joint.a.occurrence), washer["occurrence"].as_u64());
         // The seating face is X = 41.6: the 20 mm shank runs along -X and the 8 mm head along +X.
         let (lo, hi) = bbox(&s, "SHCS M8x20");
-        assert!(lo.dist(solidcraft_geom::Vec3::new(21.6, 43.5, 53.5)) < 1e-6, "{lo:?}");
-        assert!(hi.dist(solidcraft_geom::Vec3::new(49.6, 56.5, 66.5)) < 1e-6, "{hi:?}");
+        assert!(lo.dist(solidcore_record::Vec3::new(21.6, 43.5, 53.5)) < 1e-6, "{lo:?}");
+        assert!(hi.dist(solidcore_record::Vec3::new(49.6, 56.5, 66.5)) < 1e-6, "{hi:?}");
     }
 
     /// Several holes in one insert: one component placed and seated once per hole, in one undo
@@ -1200,7 +1205,7 @@ mod tests {
         assert_eq!(r["joint"], r["joints"][0]);
         // Each placement sits in its own hole: the head flush on the top face, the shank down
         // the hole's axis.
-        let st = s.world_state();
+        let st = s.world_state().unwrap();
         let mut seated: Vec<(f64, f64)> = Vec::new();
         for b in st.bodies.iter().filter(|b| s.doc.model_body_component(b) == comp) {
             let (lo, hi) = (b.mesh().bounds().min, b.mesh().bounds().max);
@@ -1271,8 +1276,8 @@ mod tests {
                     assert!(s.model.state().threads.iter().any(|t| t.designation == "M8" && (t.pitch - 1.25).abs() < 1e-9), "{family} {units}");
                 }
                 if family == "dowel_pin" {
-                    assert!(b.0.dist(solidcraft_geom::Vec3::new(10., 46., 56.)) < 1e-6, "{b:?}");
-                    assert!(b.1.dist(solidcraft_geom::Vec3::new(40., 54., 64.)) < 1e-6, "{b:?}");
+                    assert!(b.0.dist(solidcore_record::Vec3::new(10., 46., 56.)) < 1e-6, "{b:?}");
+                    assert!(b.1.dist(solidcore_record::Vec3::new(40., 54., 64.)) < 1e-6, "{b:?}");
                 }
                 bounds.push(b);
             }

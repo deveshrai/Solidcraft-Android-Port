@@ -12,7 +12,8 @@
 //!
 //! Everything here is plain geometry in millimetres and radians, without the document.
 
-use solidcraft_geom::Vec2;
+use solidcore_record::Vec2;
+use solidcraft_geom::prelude::*;
 use solidcraft_io::Geom2;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
@@ -362,7 +363,7 @@ fn flank_curves(pts: &[Vec2], plan: Option<&[Piece]>) -> Vec<Geom2> {
 type Piece = (usize, usize, usize);
 
 /// Highest degree of a flank's Bézier: the sketch's highest exact one.
-const MAX_FLANK_DEGREE: usize = solidcraft_geom::MAX_BEZIER_DEGREE;
+const MAX_FLANK_DEGREE: usize = solidcore_record::MAX_BEZIER_DEGREE;
 
 /// The lowest degree whose Bézier follows `pts` to within `tol`.
 fn lowest_degree(pts: &[Vec2], tol: f64) -> Option<usize> {

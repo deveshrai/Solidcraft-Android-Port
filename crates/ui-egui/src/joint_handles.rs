@@ -1,5 +1,7 @@
 //! Explicit assembly Move: only the selected part's allowed joint axes are shown. Distances
 //! and angles are relative to the current drag, and each drag is one cancellable undo step.
+use solidcore_record::Vec3;
+use solidcraft_engine::geom::prelude::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -10,7 +12,6 @@ use serde_json::json;
 use solidcraft_engine::{
     Sel,
     doc::{Document, apply_point, joints, mat_inverse, mat_mul},
-    geom::Vec3,
 };
 
 use crate::{
@@ -142,7 +143,7 @@ impl Mode {
             .filter(|(_, _, _, path, _)| path.last() == Some(&self.occurrence))
             .map(|(name, ..)| name)
             .collect();
-        let world = app.session.world_state();
+        let world = crate::open_meshing::session_world(&app.session);
         self.radii = self
             .axes
             .iter()
@@ -710,7 +711,7 @@ mod tests {
         let joint =
             h.app.run("joint.create", json!({"type":kind,"a":a,"b":b,"flip":true,"angle":0,"name":"Guide"})).unwrap()["joint"].as_u64().unwrap();
         let component = h.app.session.doc.find_component("Arm").unwrap();
-        let world = h.app.session.world_state();
+        let world = crate::open_meshing::session_world(&h.app.session);
         let body = world.bodies.iter().find(|b| h.app.session.doc.model_body_component(b) == component).unwrap().name.clone();
         h.app.session.selection = vec![Sel::Face { body, index: 0, point: Vec3::new(30., 0., 10.) }];
         h.call("ui.view", json!({"view":"top"}));
@@ -1004,6 +1005,33 @@ mod tests {
     }
 
     #[test]
+    fn tools_near_and_far_fields_edit_coarse_and_fine_without_ordering_them() {
+        for theme in ["light", "dark"] {
+            let mut h = Harness::new();
+            h.app.home.open = false;
+            h.call("ui.prefs", json!({"language":"en","theme":theme,"open":"Tools"}));
+            for (query, key, text, expected) in
+                [("Near-axis step", "joint_rotation_coarse", "0.025", (0.025, 0.1)), ("Far-axis step", "joint_rotation_fine", "12.5", (0.025, 12.5))]
+            {
+                h.app.prefs_window.filter = query.into();
+                h.frames(5);
+                let target = format!("prefs:{key}");
+                crate::prefs::reveal_preference(&mut h, &target);
+                h.step(&json!({"click":{"handle":target},"double":true})).unwrap();
+                h.step(&json!({"key":"A","cmd":true})).unwrap();
+                h.step(&json!({"text":text})).unwrap();
+                h.step(&json!({"key":"Enter"})).unwrap();
+                assert_eq!((h.app.preferences.joint_rotation_coarse, h.app.preferences.joint_rotation_fine), expected, "{theme}: {query}");
+            }
+            h.call("ui.prefs", json!({"button":"apply"}));
+            h.call("ui.prefs", json!({"button":"defaults"}));
+            assert_eq!((h.app.preferences.joint_rotation_coarse, h.app.preferences.joint_rotation_fine), (10.0, 0.1));
+            h.call("ui.prefs", json!({"button":"cancel"}));
+            assert_eq!((h.app.preferences.joint_rotation_coarse, h.app.preferences.joint_rotation_fine), (0.025, 12.5));
+        }
+    }
+
+    #[test]
     fn precision_settings_persist_validate_and_read_old_preferences() {
         let mut app = SolveApp::new(Default::default(), Default::default());
         for key in ["joint_rotation_coarse", "joint_rotation_fine"] {
@@ -1044,7 +1072,7 @@ mod tests {
         let conflicting: Vec<_> = solved.conflicts.iter().map(|(_, name, _)| name.as_str()).collect();
         assert!(!conflicting.is_empty(), "the scenario must conflict: {:?}", solved.conflicts);
         let component = h.app.session.doc.find_component("Red").unwrap();
-        let world = h.app.session.world_state();
+        let world = h.app.session.world_state().unwrap();
         let body = world.bodies.iter().find(|b| h.app.session.doc.model_body_component(b) == component).unwrap().name.clone();
         h.app.session.selection = vec![Sel::Body { name: body }];
         h.frames(3);

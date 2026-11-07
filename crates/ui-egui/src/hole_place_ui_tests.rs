@@ -6,9 +6,10 @@
 //! section of it.
 
 use serde_json::json;
+use solidcore_record::Vec3;
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::FeatureKind;
-use solidcraft_engine::geom::Vec3;
+use solidcraft_engine::geom::prelude::*;
 
 use crate::dialogs::Kind;
 use crate::scenario::{Harness, handle_at, rect_of};
@@ -67,7 +68,7 @@ fn last_hole(h: &Harness) -> (u64, Vec3) {
 }
 
 fn solid_at(h: &Harness, p: Vec3) -> bool {
-    h.app.session.model.state().bodies.iter().any(|b| b.body.contains(p))
+    h.app.session.model.state().bodies.iter().any(|b| b.body.classify_point(p).unwrap() == solidcraft_engine::kernel::PointClass::Inside)
 }
 
 const MIDDLE: Vec3 = Vec3::new(20.0, 15.0, 20.0);
@@ -304,6 +305,9 @@ fn the_dialog_shows_the_sizes_beside_a_section_of_the_hole() {
 #[test]
 fn tapped_thread_depth_field_keeps_focus_and_typing_separate_from_acceptance() {
     let mut h = Harness::new();
+    // Tall enough for the tapped hole's rows and its section, so the partial depth field shows
+    // above the dialog's footer (at 1000 px it scrolls under OK, and has no handle).
+    h.call("ui.resize", json!({"width": 1600, "height": 1400}));
     h.app.run("solid.box", json!({"length":40,"width":30,"height":20})).unwrap();
     let hole = h.app.run("solid.hole", json!({"position":[20,15,20],"thread":"M6","depth":12})).unwrap()["feature"].as_u64().unwrap();
     let original = h.app.session.doc.to_json();
@@ -334,7 +338,7 @@ fn hole_design_preferences_keep_both_controls_and_cancel_after_page_split() {
     let mut h = Harness::new();
     h.call("ui.prefs", json!({"language":"en", "open":"Tools"}));
     let page = rect_of("prefs:page_body").unwrap();
-    for label in ["Snap to face and edge centers", "Move holes by clicking or dragging"] {
+    for label in ["Snap to centers", "Move by click or drag"] {
         let mut point = None;
         for _ in 0..12 {
             point = h.output.accesskit_update.as_ref().and_then(|tree| {

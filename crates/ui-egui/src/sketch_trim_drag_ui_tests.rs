@@ -3,7 +3,8 @@
 //! the one piece under it.
 
 use serde_json::{Value, json};
-use solidcraft_engine::geom::Vec2;
+use solidcore_record::Vec2;
+use solidcraft_engine::geom::prelude::*;
 use solidcraft_engine::sketch::Shape;
 
 use crate::scenario::Harness;
@@ -117,7 +118,7 @@ fn run(h: &mut Harness, id: &str, p: Value) -> Value {
 
 fn sketch(h: &Harness) -> solidcraft_engine::sketch::Sketch {
     let sid = h.app.session.active_sketch.expect("sketch mode");
-    h.app.session.world_state().sketch(sid).expect("the sketch").sketch.clone()
+    h.app.session.world_state().unwrap().sketch(sid).expect("the sketch").sketch.clone()
 }
 
 fn screen(h: &mut Harness, x: f64, y: f64) -> egui::Pos2 {

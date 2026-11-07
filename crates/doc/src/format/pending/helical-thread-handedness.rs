@@ -1,8 +1,9 @@
-//! A helical thread's hand is saved as upstream's `handedness` (`"left"`), which every Thread
-//! has, instead of the port's own `left_handed: true`. Designs saved by port releases before
-//! 0.24.0a are rewritten as they open: a Thread's `left_handed: true` becomes
-//! `handedness: "left"`, and `left_handed` is dropped. A release without this change would read
-//! a left-handed helical thread as right-handed, so it must ask for an update instead.
+//! A helical thread's hand is saved as upstream's `hand` (`"left"`), which every Thread has,
+//! instead of the port's own `left_handed: true`. Designs saved by port releases before 0.24.0a
+//! are rewritten as they open: a Thread's `left_handed: true` becomes `hand: "left"`, and
+//! `left_handed` is dropped. (It wrote `handedness` until upstream 0.40 renamed that to `hand`;
+//! it runs after that rename, so it writes `hand` now.) A release without this change would
+//! read a left-handed helical thread as right-handed, so it must ask for an update instead.
 use serde_json::Value;
 
 pub fn step(v: &mut Value) -> crate::Result<()> {
@@ -17,7 +18,7 @@ pub fn step(v: &mut Value) -> crate::Result<()> {
         if let Some(left) = object.remove("left_handed")
             && left.as_bool() == Some(true)
         {
-            object.insert("handedness".into(), Value::String("left".into()));
+            object.insert("hand".into(), Value::String("left".into()));
         }
     }
     Ok(())
@@ -39,7 +40,7 @@ mod tests {
         assert_eq!(
             v["features"],
             json!([
-                {"type": "thread", "helical": true, "handedness": "left"},
+                {"type": "thread", "helical": true, "hand": "left"},
                 {"type": "thread", "helical": true},
                 {"type": "thread", "modeled": true},
                 {"type": "extrude", "left_handed": true}

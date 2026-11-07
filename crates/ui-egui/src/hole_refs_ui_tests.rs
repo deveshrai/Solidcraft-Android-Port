@@ -5,9 +5,10 @@
 //! A Cylinder standing on a picked face takes reference edges the same way (#6380).
 
 use serde_json::json;
+use solidcore_record::Vec3;
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::FeatureKind;
-use solidcraft_engine::geom::Vec3;
+use solidcraft_engine::geom::prelude::*;
 
 use crate::dialogs::Kind;
 use crate::scenario::Harness;
@@ -62,7 +63,7 @@ fn type_into(h: &mut Harness, handle: &str, text: &str) {
 
 /// Whether the model holds material at `p`.
 fn solid_at(h: &Harness, p: Vec3) -> bool {
-    h.app.session.model.state().bodies.iter().any(|b| b.body.contains(p))
+    h.app.session.model.state().bodies.iter().any(|b| b.body.classify_point(p).unwrap() == solidcraft_engine::kernel::PointClass::Inside)
 }
 
 #[test]

@@ -13,7 +13,8 @@
 //! x = centre distance.
 
 use serde_json::{Map, Value, json};
-use solidcraft_geom::{Vec2, Vec3};
+use solidcore_record::{Vec2, Vec3};
+use solidcraft_geom::prelude::*;
 use solidcraft_io::Geom2;
 use std::f64::consts::{PI, TAU};
 
@@ -814,7 +815,7 @@ fn build(s: &mut Session, sp: &Spec) -> Result<Plan> {
 
 /// `base`, or `base 2`, `base 3`… : a body name no body in the design has (or had).
 fn unique_body(s: &Session, base: &str) -> String {
-    let st = s.world_state();
+    let Ok(st) = s.world_state() else { return base.to_string() };
     let taken = |n: &str| st.bodies.iter().any(|b| b.name == n) || s.doc.reserved_body_names.contains(n);
     if !taken(base) {
         return base.to_string();

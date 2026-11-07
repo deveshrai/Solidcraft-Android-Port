@@ -479,6 +479,7 @@ fn offscreen(
         sky: [0.0; 4],
         hover_tint: [0.0; 3],
         selection_tint: [0.0; 3],
+        hatch: Default::default(),
     });
     let texture = |format, usage| {
         device.create_texture(&wgpu::TextureDescriptor {
@@ -722,7 +723,7 @@ mod tests {
             app.preferences.ambient_occlusion = false;
             app.cpu_meshing = true;
             app.cam.distance = 110.0;
-            app.cam.target = solidcraft_engine::geom::Vec3::new(20.0, 15.0, 12.5);
+            app.cam.target = solidcore_record::Vec3::new(20.0, 15.0, 12.5);
             let window = GpuTarget { format, depth: None, samples: 1, tess: false, oit: false };
             let scene = GpuTarget { depth: Some(solidcraft_gpu::depth_format(&device, true)), ..window };
             let view = Renderer::with_window_target(&device, scene, window, None);

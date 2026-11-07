@@ -1,6 +1,7 @@
 //! Dimension creation is an editable draft, accepted by the real focused value field.
 use crate::scenario::Harness;
 use serde_json::json;
+use solidcraft_engine::geom::prelude::*;
 
 fn line(end: [f64; 2]) -> Harness {
     crate::dim_view::cancel();
@@ -11,7 +12,7 @@ fn line(end: [f64; 2]) -> Harness {
     // Leave room around the measured shape while testing the draft itself. Separate Fit
     // tests exercise measured dock occlusion without changing the picking projection.
     h.app.cam.distance = 80.0;
-    h.app.cam.target = solidcraft_engine::geom::Vec3::new(end[0] * 0.5, end[1] * 0.5, 0.0);
+    h.app.cam.target = solidcore_record::Vec3::new(end[0] * 0.5, end[1] * 0.5, 0.0);
     h.settle();
     h
 }
@@ -236,7 +237,7 @@ fn edge_and_endpoint_creation_commit_once_and_undo_restores_exact_design() {
         h.step(&json!({"key":"Enter"})).unwrap();
         assert!(!crate::dim_view::editing());
         assert_eq!(h.app.session.undo.len(), undo + 1);
-        let state = h.app.session.world_state();
+        let state = h.app.session.world_state().unwrap();
         let sk = &state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
         assert!(
             (sk.point(sk.resolve_point("l1.start").unwrap()).unwrap().dist(sk.point(sk.resolve_point("l1.end").unwrap()).unwrap()) - 30.).abs()
@@ -310,7 +311,7 @@ fn rectangle_side_and_fixed_origin_line_dimensions_preserve_other_constraints() 
         place(&mut h, &picks, [10., 5.]);
         type_value(&mut h, "30 mm");
         h.step(&json!({"key":"Enter"})).unwrap();
-        let state = h.app.session.world_state();
+        let state = h.app.session.world_state().unwrap();
         let sk = &state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
         assert!(sk.point(sk.resolve_point("l1.start").unwrap()).unwrap().len() < 1e-8, "fixed origin remains fixed");
         assert!((sk.point(sk.resolve_point("l1.end").unwrap()).unwrap().x - 30.).abs() < 1e-6);
@@ -327,14 +328,14 @@ fn rectangle_side_and_fixed_origin_line_dimensions_preserve_other_constraints() 
         h.app.run("sketch.rectangle.two_point", json!({"p0":[0,0],"p1":[20,10]})).unwrap();
         h.call("ui.view", json!({"view":"top"}));
         h.app.cam.distance = 80.;
-        h.app.cam.target = solidcraft_engine::geom::Vec3::new(10., 5., 0.);
+        h.app.cam.target = solidcore_record::Vec3::new(10., 5., 0.);
         h.settle();
         let baseline = h.app.session.doc.to_json();
         let undo = h.app.session.undo.len();
         place(&mut h, &picks, at);
         type_value(&mut h, "12 mm");
         h.step(&json!({"key":"Enter"})).unwrap();
-        let state = h.app.session.world_state();
+        let state = h.app.session.world_state().unwrap();
         let solved = state.sketch(h.app.session.active_sketch.unwrap()).unwrap();
         // The sketch's first dimension scales it (#1365): 20 × 10 becomes 24 × 12.
         assert!((solved.profiles[0].area - 288.).abs() < 1e-5, "the first dimension scales the rectangle: {}", solved.profiles[0].area);
@@ -346,7 +347,7 @@ fn rectangle_side_and_fixed_origin_line_dimensions_preserve_other_constraints() 
 
 #[test]
 fn pending_second_nested_plane_uses_world_picks_but_one_local_dimension() {
-    use solidcraft_engine::geom::Vec2;
+    use solidcore_record::Vec2;
     crate::dim_view::cancel();
     let mut h = Harness::new();
     let parent = h.app.run("component.create", json!({"name":"Assembly"})).unwrap();
@@ -366,7 +367,7 @@ fn pending_second_nested_plane_uses_world_picks_but_one_local_dimension() {
     h.app.run("occurrence.move", json!({"occurrence":second,"translate":[25,32,40],"axis":[1,0,0],"angle":"35 deg","capture":false})).unwrap();
     h.call("ui.view", json!({"view":"top"}));
     h.app.cam.distance = 90.;
-    let plane = h.app.session.world_state().sketch(sid).unwrap().plane;
+    let plane = h.app.session.world_state().unwrap().sketch(sid).unwrap().plane;
     h.app.cam.target = plane.to_world(Vec2::new(10., 0.));
     h.settle();
     let baseline = h.app.session.doc.to_json();
@@ -438,7 +439,7 @@ fn dimension_to_fillet_virtual_sharp_keeps_the_arc_and_fixed_origin() {
     let corner = fillet["virtual_corners"][0].as_str().unwrap().to_string();
     h.call("ui.view", json!({"view":"top"}));
     h.app.cam.distance = 90.;
-    h.app.cam.target = solidcraft_engine::geom::Vec3::new(5., 10., 0.);
+    h.app.cam.target = solidcore_record::Vec3::new(5., 10., 0.);
     h.settle();
     let baseline = h.app.session.doc.to_json();
     let undo = h.app.session.undo.len();
@@ -447,7 +448,7 @@ fn dimension_to_fillet_virtual_sharp_keeps_the_arc_and_fixed_origin() {
     h.step(&json!({"key":"Enter"})).unwrap();
     assert!(!crate::dim_view::editing());
     assert_eq!(h.app.session.undo.len(), undo + 1);
-    let state = h.app.session.world_state();
+    let state = h.app.session.world_state().unwrap();
     let solved = state.sketch(h.app.session.active_sketch.unwrap()).unwrap();
     assert!(solved.report.ok());
     let sk = &solved.sketch;
@@ -467,7 +468,7 @@ fn draft_annotation_does_not_move_committed_dimension_hitboxes() {
     let width = h.app.run("sketch.dimension", json!({"entities":["l3"],"value":20})).unwrap()["param"].as_str().unwrap().to_string();
     h.call("ui.view", json!({"view":"top"}));
     h.app.cam.distance = 80.;
-    h.app.cam.target = solidcraft_engine::geom::Vec3::new(10., 5., 0.);
+    h.app.cam.target = solidcore_record::Vec3::new(10., 5., 0.);
     h.settle();
     let at = crate::dim_view::text_at(&width).unwrap();
     let drawn = crate::dim_view::drawn();
@@ -495,23 +496,23 @@ fn inch_dimension_entry_survives_unit_changes_undo_and_reopen() {
     h.settle();
     type_value(&mut h, "1.3456");
     h.step(&json!({"key":"Enter"})).unwrap();
-    let edited = h.app.session.world_state();
+    let edited = h.app.session.world_state().unwrap();
     let edited = &edited.sketch(sketch).unwrap().sketch;
     assert!(edited.constraints.iter().any(|c| c.kind.value().is_some_and(|v| (v - 1.3456 * 25.4).abs() < 1e-6)));
     h.app.run("edit.undo", json!({})).unwrap();
-    let before = h.app.session.world_state().sketch(sketch).unwrap().sketch.clone();
+    let before = h.app.session.world_state().unwrap().sketch(sketch).unwrap().sketch.clone();
     let c = before.constraints.iter().find(|c| c.param.is_some()).unwrap();
     let p = h.app.session.doc.param(c.param.as_deref().unwrap()).unwrap();
     assert_eq!(crate::dim_view::label(&c.kind, Some(&p.expr), false, "in", 2), "1.2345 in");
     assert!((c.kind.value().unwrap() - 31.3563).abs() < 1e-6);
     h.app.run("document.units", json!({"units":"mm"})).unwrap();
-    assert_eq!(h.app.session.world_state().sketch(sketch).unwrap().sketch, before);
+    assert_eq!(h.app.session.world_state().unwrap().sketch(sketch).unwrap().sketch, before);
     h.app.run("edit.undo", json!({})).unwrap();
     assert_eq!(h.app.session.doc.units, "in");
     let doc = solidcraft_engine::doc::Document::from_json(&h.app.session.doc.to_json()).unwrap();
     let reopened = solidcraft_engine::Session::new(doc);
     assert_eq!(reopened.doc.units, "in");
-    assert_eq!(reopened.world_state().sketch(sketch).unwrap().sketch, before);
+    assert_eq!(reopened.world_state().unwrap().sketch(sketch).unwrap().sketch, before);
     crate::dim_view::cancel();
 }
 
@@ -522,14 +523,14 @@ fn inch_dimension_entry_survives_unit_changes_undo_and_reopen() {
 #[test]
 fn placing_a_two_point_dimension_picks_horizontal_vertical_or_aligned() {
     // What each placement fixes at 10 mm: the X span, the Y span, or the length.
-    let spans = |a: solidcraft_engine::geom::Vec2, b: solidcraft_engine::geom::Vec2| [(b.x - a.x).abs(), (b.y - a.y).abs(), a.dist(b)];
+    let spans = |a: solidcore_record::Vec2, b: solidcore_record::Vec2| [(b.x - a.x).abs(), (b.y - a.y).abs(), a.dist(b)];
     for (at, measured) in [([6., 25.], 0), ([2., 20.], 0), ([-10., 1.], 1), ([15., 4.], 1), ([10., 4.], 2), ([-6., 22.], 2)] {
         let mut h = line([12., 16.]);
         place(&mut h, &[[0., 0.], [12., 16.]], at);
         type_value(&mut h, "10 mm");
         h.step(&json!({"key":"Enter"})).unwrap();
         assert!(!crate::dim_view::editing());
-        let state = h.app.session.world_state();
+        let state = h.app.session.world_state().unwrap();
         let sk = &state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
         let a = sk.point(sk.resolve_point("l1.start").unwrap()).unwrap();
         let b = sk.point(sk.resolve_point("l1.end").unwrap()).unwrap();
@@ -564,7 +565,7 @@ fn an_over_constraining_dimension_is_placed_as_a_driven_one() {
     assert!(!crate::dim_view::editing(), "a driven dimension has no value to edit");
     assert_eq!(h.app.session.undo.len(), undo + 1);
     assert_eq!(h.app.session.doc.params.len(), params, "a driven dimension adds no parameter");
-    let state = h.app.session.world_state();
+    let state = h.app.session.world_state().unwrap();
     let solved = state.sketch(h.app.session.active_sketch.unwrap()).unwrap();
     assert!(solved.report.ok());
     let dims: Vec<_> = solved.sketch.constraints.iter().filter(|c| c.kind.is_dimension()).collect();
@@ -588,7 +589,7 @@ fn a_driven_dimension_nothing_fixes_any_more_takes_a_value() {
     h.settle();
     let sketch = h.app.session.active_sketch.unwrap();
     let dim = |h: &Harness| {
-        let state = h.app.session.world_state();
+        let state = crate::open_meshing::session_world(&h.app.session);
         let sk = &state.sketch(sketch).unwrap().sketch;
         sk.constraints
             .iter()
@@ -641,7 +642,7 @@ fn a_driven_dimension_nothing_fixes_any_more_takes_a_value() {
     assert!(!driving.driven && driving.param.as_deref() == Some(name.as_str()), "{driving:?}");
     let value = driving.kind.value().unwrap();
     assert!((value - 30.0).abs() < 1e-6 && (measured - 30.0).abs() > 1.0, "{measured} → {value}");
-    assert!(h.app.session.world_state().sketch(sketch).unwrap().report.ok());
+    assert!(crate::open_meshing::session_world(&h.app.session).sketch(sketch).unwrap().report.ok());
 
     // One undo step puts the driven dimension back.
     assert_eq!(h.app.session.undo.len(), undo + 1);
@@ -662,7 +663,7 @@ fn sketch_with(setup: &[(&str, serde_json::Value)], centre: [f64; 2]) -> Harness
     }
     h.call("ui.view", json!({"view":"top"}));
     h.app.cam.distance = 80.0;
-    h.app.cam.target = solidcraft_engine::geom::Vec3::new(centre[0], centre[1], 0.0);
+    h.app.cam.target = solidcore_record::Vec3::new(centre[0], centre[1], 0.0);
     h.settle();
     h.step(&json!({"start":"sketch.dimension"})).unwrap();
     h
@@ -687,7 +688,7 @@ fn keys(h: &mut Harness, text: &str) {
 }
 
 fn solved(h: &Harness) -> solidcraft_engine::sketch::Sketch {
-    let state = h.app.session.world_state();
+    let state = h.app.session.world_state().unwrap();
     state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch.clone()
 }
 
@@ -864,6 +865,101 @@ fn type_first_keeps_the_place_first_flow() {
     crate::dim_view::cancel();
 }
 
+/// Put the value field's caret at `at` with nothing selected, as the field itself does when it
+/// misses the keyboard for a frame (a WebView2 showed the caret before the value, #11204).
+fn caret_without_the_person(h: &Harness, at: usize) {
+    let id = egui::Id::new("sc_dim_edit");
+    let mut state = egui::TextEdit::load_state(&h.ctx, id).unwrap_or_default();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(at))));
+    state.store(&h.ctx, id);
+}
+
+/// A primary click at sketch point `at`, the button held down for `frames` frames.
+fn held_click(h: &mut Harness, at: [f64; 2], frames: usize) {
+    h.step(&json!({"move":{"world":[at[0],at[1],0]}})).unwrap();
+    let [x, y] = h.at(&json!({"world":[at[0],at[1],0]})).unwrap();
+    let pos = egui::pos2(x as f32, y as f32);
+    let (button, modifiers) = (egui::PointerButton::Primary, egui::Modifiers::NONE);
+    h.app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers });
+    h.frames(frames);
+    h.app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: false, modifiers });
+    h.settle();
+}
+
+/// The value field's caret and selection end (characters).
+fn caret(h: &Harness) -> Option<(usize, usize)> {
+    egui::TextEdit::load_state(&h.ctx, egui::Id::new("sc_dim_edit"))
+        .and_then(|s| s.cursor.char_range())
+        .map(|r| (r.primary.index.0, r.secondary.index.0))
+}
+
+/// Until the person takes the proposed value over, the first digit they type replaces all of
+/// it (#11204): however long the click that placed it was held, frames later, and whatever moved
+/// the caret without them. Typed without Ctrl+A, as a person does.
+#[test]
+fn typed_digits_replace_the_proposed_value_whatever_moved_the_caret() {
+    for held in [1usize, 4, 12] {
+        let mut h = sketch_with(&[("sketch.line", json!({"points":[[0,0],[20,0]],"infer":false}))], [10., 0.]);
+        let dims = dimension_count(&h);
+        h.step(&json!({"click":{"world":[10,0,0]}})).unwrap();
+        assert_live(&h);
+        // A click held `held` frames: what a person's 60 to 150 ms click is at 60 Hz and beyond.
+        held_click(&mut h, [10., -7.], held);
+        assert_eq!(crate::dim_view::live(), None, "held {held}: the text is pinned");
+        h.frames(12);
+        caret_without_the_person(&h, 0);
+        h.frames(2);
+        assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::new("sc_dim_edit")), "held {held}");
+        keys(&mut h, "400");
+        assert_eq!(crate::dim_view::draft_preview().map(|d| d.0).as_deref(), Some("400"), "held {held}");
+        h.step(&json!({"key":"Enter"})).unwrap();
+        let new = added(&h, dims);
+        assert_eq!(new.len(), 1, "held {held}");
+        assert!((new[0].kind.value().unwrap() - 400.).abs() < 1e-6, "held {held}: {:?}", new[0].kind);
+        crate::dim_view::cancel();
+    }
+}
+
+/// A caret the person put somewhere stays there: Home then 1 writes in front of the value, and a
+/// click into the field types where it landed (#11204).
+#[test]
+fn a_caret_the_person_moved_stays_where_they_put_it() {
+    let mut h = sketch_with(&[("sketch.line", json!({"points":[[0,0],[20,0]],"infer":false}))], [10., 0.]);
+    let dims = dimension_count(&h);
+    h.step(&json!({"click":{"world":[10,0,0]}})).unwrap();
+    assert_live(&h);
+    h.step(&json!({"click":{"world":[10,-7,0]}})).unwrap();
+    h.frames(4);
+    h.step(&json!({"key":"Home"})).unwrap();
+    h.frames(4);
+    assert_eq!(caret(&h), Some((0, 0)), "Home put the caret before the value");
+    keys(&mut h, "1");
+    h.frames(4);
+    assert_eq!(caret(&h), Some((1, 1)), "the caret stays after what was typed");
+    assert_eq!(crate::dim_view::draft_preview().map(|d| d.0).as_deref(), Some("120 mm"));
+    h.step(&json!({"key":"Enter"})).unwrap();
+    let new = added(&h, dims);
+    assert_eq!(new.len(), 1);
+    assert!((new[0].kind.value().unwrap() - 120.).abs() < 1e-6, "{:?}", new[0].kind);
+    crate::dim_view::cancel();
+
+    // A click into the field puts the caret where it landed: typing goes there.
+    let mut h = sketch_with(&[("sketch.line", json!({"points":[[0,0],[20,0]],"infer":false}))], [10., 0.]);
+    h.step(&json!({"click":{"world":[10,0,0]}})).unwrap();
+    h.step(&json!({"click":{"world":[10,-7,0]}})).unwrap();
+    h.frames(4);
+    let [x, y] = h.widget("20 mm").expect("the value field");
+    h.step(&json!({"click":[x, y]})).unwrap();
+    h.frames(4);
+    assert!(crate::dim_view::editing(), "a click into the field keeps the value open");
+    let placed = caret(&h);
+    assert!(placed.is_some_and(|(a, b)| a == b), "the click placed a caret: {placed:?}");
+    keys(&mut h, "4");
+    let expr = crate::dim_view::draft_preview().map(|d| d.0).unwrap_or_default();
+    assert!(expr.len() == "20 mm4".len() && expr.contains('4') && expr != "4", "typing went in at the click, not over the value: {expr:?}");
+    crate::dim_view::cancel();
+}
+
 /// Type-first, the text follows the pointer: moving it from inside the box the picks span (the
 /// distance between them) to above or beside it switches to the horizontal or vertical distance and
 /// back. Until something is typed the value follows the dimension, so the preview measures the
@@ -905,7 +1001,7 @@ fn type_first_switching_between_aligned_horizontal_and_vertical_keeps_the_picked
                 let a = sk.point(sk.resolve_point("l1.start").unwrap()).unwrap();
                 let b = sk.point(sk.resolve_point("l1.end").unwrap()).unwrap();
                 assert!(
-                    a.dist(solidcraft_engine::geom::Vec2::new(0., 0.)) < 1e-6 && b.dist(solidcraft_engine::geom::Vec2::new(end[0], end[1])) < 1e-6,
+                    a.dist(solidcore_record::Vec2::new(0., 0.)) < 1e-6 && b.dist(solidcore_record::Vec2::new(end[0], end[1])) < 1e-6,
                     "{ctx}: the preview moved the points to {a:?} {b:?}"
                 );
             }
@@ -916,7 +1012,7 @@ fn type_first_switching_between_aligned_horizontal_and_vertical_keeps_the_picked
             let a = sk.point(sk.resolve_point("l1.start").unwrap()).unwrap();
             let b = sk.point(sk.resolve_point("l1.end").unwrap()).unwrap();
             assert!(
-                a.dist(solidcraft_engine::geom::Vec2::new(0., 0.)) < 1e-6 && b.dist(solidcraft_engine::geom::Vec2::new(end[0], end[1])) < 1e-6,
+                a.dist(solidcore_record::Vec2::new(0., 0.)) < 1e-6 && b.dist(solidcore_record::Vec2::new(end[0], end[1])) < 1e-6,
                 "{picks:?} at {commit_at:?}: {a:?} {b:?}"
             );
             let new = added(&h, 0);
@@ -959,7 +1055,7 @@ fn midpoint_then_edge_creates_a_distance_in_one_undo_step() {
         h.step(&json!({"key":"Enter"})).unwrap();
         assert!(!crate::dim_view::editing());
         assert_eq!(h.app.session.undo.len(), undo + 1);
-        let state = h.app.session.world_state();
+        let state = crate::open_meshing::session_world(&h.app.session);
         let solved = state.sketch(h.app.session.active_sketch.unwrap()).unwrap();
         assert!(solved.report.ok());
         let sk = &solved.sketch;
@@ -977,7 +1073,7 @@ fn midpoint_then_edge_creates_a_distance_in_one_undo_step() {
 
 /// The short sketch edge overlaps a face's automatically projected boundary.
 fn midpoint_face_sketch() -> Harness {
-    use solidcraft_engine::geom::Vec3;
+    use solidcore_record::Vec3;
     crate::dim_view::cancel();
     let mut h = Harness::new();
     h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
@@ -985,7 +1081,7 @@ fn midpoint_face_sketch() -> Harness {
     h.app.finish_sketch();
     h.app.run("solid.extrude", json!({"distance":10})).unwrap();
     h.app.run("sketch.create", json!({"plane":{"face":[0,5,10]}})).unwrap();
-    let state = h.app.session.world_state();
+    let state = crate::open_meshing::session_world(&h.app.session);
     let ss = state.sketch(h.app.session.active_sketch.unwrap()).unwrap();
     let plane = ss.plane;
     assert!(ss.sketch.curves.iter().any(|c| c.link.is_some()));
@@ -1063,7 +1159,7 @@ fn midpoint_pairs_dimension_sketch_and_projected_model_edges() {
         if crate::dim_view::editing() {
             h.step(&json!({"key":"Enter"})).unwrap();
         }
-        let state = h.app.session.world_state();
+        let state = crate::open_meshing::session_world(&h.app.session);
         let sk = &state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
         let c = sk.constraints.iter().rev().find(|c| c.kind.is_dimension()).expect("two MID picks commit a distance");
         let ConstraintKind::Distance { p, q, .. } = c.kind else { panic!("expected midpoint distance for {projected:?}: {:?}", c.kind) };
@@ -1118,7 +1214,7 @@ fn midpoint_dimension_orientation_follows_the_pointer_before_placement() {
             }
             let mut h = midpoint_face_sketch();
             if held_y {
-                let state = h.app.session.world_state();
+                let state = crate::open_meshing::session_world(&h.app.session);
                 let ss = state.sketch(h.app.session.active_sketch.unwrap()).unwrap();
                 let short = ss.sketch.curves.iter().find(|c| c.link.is_none()).unwrap().id.clone();
                 let bottom = ss
@@ -1140,7 +1236,7 @@ fn midpoint_dimension_orientation_follows_the_pointer_before_placement() {
                 h.settle();
             }
             if reused {
-                let state = h.app.session.world_state();
+                let state = crate::open_meshing::session_world(&h.app.session);
                 let ss = state.sketch(h.app.session.active_sketch.unwrap()).unwrap();
                 let mid_ref = |point: [f64; 2]| {
                     ss.sketch
@@ -1191,7 +1287,7 @@ fn midpoint_dimension_orientation_follows_the_pointer_before_placement() {
             if crate::dim_view::editing() {
                 h.step(&json!({"key":"Enter"})).unwrap();
             }
-            let state = h.app.session.world_state();
+            let state = crate::open_meshing::session_world(&h.app.session);
             let sk = &state.sketch(h.app.session.active_sketch.unwrap()).unwrap().sketch;
             let c = sk.constraints.iter().rev().find(|c| c.kind.is_dimension()).unwrap();
             assert!(if horizontal { matches!(c.kind, ConstraintKind::DistanceX { .. }) } else { matches!(c.kind, ConstraintKind::DistanceY { .. }) });
@@ -1228,7 +1324,7 @@ fn shown_dimensions() -> (Harness, u64) {
     h.app.session.visibility.shown_dimensions.push(sketch);
     h.call("ui.view", json!({"view":"top"}));
     h.app.cam.distance = 80.0;
-    h.app.cam.target = solidcraft_engine::geom::Vec3::new(10.0, 5.0, 0.0);
+    h.app.cam.target = solidcore_record::Vec3::new(10.0, 5.0, 0.0);
     h.settle();
     (h, sketch)
 }
@@ -1239,6 +1335,7 @@ fn model_text(h: &Harness, param: &str) -> [f32; 2] {
         .app
         .session
         .world_state()
+        .unwrap()
         .sketch(h.app.session.doc.features.iter().find(|f| f.name.starts_with("Sketch")).unwrap().id)
         .unwrap()
         .sketch
@@ -1250,7 +1347,7 @@ fn model_text(h: &Harness, param: &str) -> [f32; 2] {
 
 /// The extruded plate's width and depth (x, y), rounded to 0.001 mm.
 fn plate_max(h: &Harness) -> [f64; 2] {
-    let b = h.app.session.world_state().body("Plate").unwrap().mesh().bounds();
+    let b = h.app.session.world_state().unwrap().body("Plate").unwrap().mesh().bounds();
     [((b.max.x - b.min.x) * 1000.0).round() / 1000.0, ((b.max.y - b.min.y) * 1000.0).round() / 1000.0]
 }
 
@@ -1316,7 +1413,7 @@ fn a_driven_shown_dimension_is_read_only() {
     h.app.run("sketch.dimension", json!({"entities":["l3"],"driven":true,"text_at":[10,14]})).unwrap();
     h.app.run("sketch.finish", json!({})).unwrap();
     h.settle();
-    let id = h.app.session.world_state().sketch(sketch).unwrap().sketch.constraints.iter().find(|c| c.driven).unwrap().id.clone();
+    let id = h.app.session.world_state().unwrap().sketch(sketch).unwrap().sketch.constraints.iter().find(|c| c.driven).unwrap().id.clone();
     let (_, _, p) = crate::dim_view::model_drawn().into_iter().find(|(_, d, _)| *d == id).unwrap();
     let doc = h.app.session.doc.to_json();
     h.step(&json!({"click":[p.x, p.y],"double":true})).unwrap();
@@ -1325,15 +1422,17 @@ fn a_driven_shown_dimension_is_read_only() {
     assert_eq!(h.app.session.doc.to_json(), doc);
 }
 
-/// The value applies like any other change: the fillet it breaks reports its error on the
-/// timeline, and Undo brings back the value and the fillet.
+/// The value applies like any other change: the shell it breaks reports its error on the
+/// timeline, and Undo brings back the value and the shell. The plate's 10 width taken to 3 leaves
+/// no room inside two 2 thick walls. (A round wider than its face no longer breaks: a convex
+/// round runs over the face's far edge, cut as if the face went on.)
 #[test]
 fn a_shown_dimension_that_breaks_a_later_feature_reports_it_and_undoes() {
     let (mut h, _) = shown_dimensions();
-    h.app.run("solid.fillet", json!({"edges":[[10,10,5]],"radius":4,"name":"Round"})).unwrap();
+    h.app.run("solid.shell", json!({"faces":[[10,1,5]],"thickness":2,"name":"Hollow"})).unwrap();
     h.settle();
-    let round = h.app.session.doc.features.iter().find(|f| f.name == "Round").unwrap().id;
-    let failed = |h: &Harness| h.app.session.model.result(round).is_some_and(|r| r.error.is_some());
+    let hollow = h.app.session.doc.features.iter().find(|f| f.name == "Hollow").unwrap().id;
+    let failed = |h: &Harness| h.app.session.model.result(hollow).is_some_and(|r| r.error.is_some());
     assert!(!failed(&h));
     let before = h.app.session.doc.to_json();
     let at = model_text(&h, "d2");
@@ -1342,12 +1441,12 @@ fn a_shown_dimension_that_breaks_a_later_feature_reports_it_and_undoes() {
     h.step(&json!({"key":"Enter"})).unwrap();
     h.settle();
     assert_eq!(h.app.session.doc.param("d2").unwrap().expr, "3");
-    assert!(failed(&h), "the fillet no longer fits and says so");
+    assert!(failed(&h), "the shell no longer has room and says so");
     assert_eq!(h.app.session.active_sketch, None);
     h.app.run("edit.undo", json!({})).unwrap();
     h.settle();
     assert_eq!(h.app.session.doc.to_json(), before);
-    assert!(!failed(&h), "undo brings the fillet back");
+    assert!(!failed(&h), "undo brings the shell back");
 }
 
 /// Editing an existing dimension to `name = value` names its own parameter (#4071): `d1`

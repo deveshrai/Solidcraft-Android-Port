@@ -27,6 +27,18 @@ pub(crate) fn hint_field(ui: &mut Ui, value: &mut String, hint: &str) -> bool {
     editor(ui, value, hint, true).0
 }
 
+/// [`hint_field`] for a value the form checks before it runs: `flagged`, it is outlined in the
+/// warning colour (the caller says why in words under it, [`super::warning_caption`]). Returns
+/// accepted Enter and the editor's response. Tokens: `same as field, warning`.
+pub(crate) fn checked_field(ui: &mut Ui, value: &mut String, hint: &str, flagged: bool) -> (bool, Response) {
+    let (enter, _, response) = editor(ui, value, hint, true);
+    if flagged {
+        let t = Tokens::get();
+        ui.painter().rect_stroke(response.rect, t.control_radius, egui::Stroke::new(1.5, t.warning), egui::StrokeKind::Inside);
+    }
+    (enter, response)
+}
+
 /// The whole numbers a count field may hold, and how its text evaluates (parameters and
 /// expressions included). `eval` returns None for text that is not a value.
 pub(crate) struct Count<'a> {
@@ -122,6 +134,13 @@ pub(crate) fn text_field(ui: &mut Ui, value: &mut String, hint: &str) -> (bool, 
     (enter, changed)
 }
 
+/// [`text_field`] with a tooltip; returns (Enter, changed). Tokens: `same as field`.
+pub(crate) fn text_field_tip(ui: &mut Ui, value: &mut String, hint: &str, tip: &str) -> (bool, bool) {
+    let (enter, changed, response) = editor(ui, value, hint, false);
+    response.on_hover_text(tip);
+    (enter, changed)
+}
+
 /// Expression field for a single-value popup which keeps ownership of keyboard focus.
 /// Tokens: field tokens. Preserves the legacy Edit Dimension focus behavior.
 pub(crate) fn focused_field(ui: &mut Ui, value: &mut String) -> bool {
@@ -207,51 +226,53 @@ fn searchable_dropdown_with(
     } else {
         combo.icon(dropdown_arrow)
     };
-    let response = combo
-        .show_ui(ui, |ui| {
-            let search = ui.add(
-                text_input(egui::TextEdit::singleline(filter))
-                    .id_salt(format!("{id}_search"))
-                    .hint_text(crate::i18n::tr_label("Search"))
-                    .desired_width(f32::INFINITY),
-            );
-            // Preferences types into its own search only while no field has the keyboard.
-            if search.has_focus() {
-                crate::prefs_search::note_key_sink(ui.ctx());
+    let popup = combo.show_ui(ui, |ui| {
+        let search = ui.add(
+            text_input(egui::TextEdit::singleline(filter))
+                .id_salt(format!("{id}_search"))
+                .hint_text(crate::i18n::tr_label("Search"))
+                .desired_width(f32::INFINITY),
+        );
+        // Preferences types into its own search only while no field has the keyboard.
+        if search.has_focus() {
+            crate::prefs_search::note_key_sink(ui.ctx());
+        }
+        scenario::publish_handle(&format!("dialog:{row} search"), search.rect.center());
+        if let Some(custom) = custom {
+            let response = ui.selectable_label(false, custom);
+            scenario::publish_handle(&format!("dialog:{row} file"), response.rect.center());
+            if response.clicked() {
+                chosen = Some(filter.trim().to_owned());
+                ui.close();
             }
-            scenario::publish_handle(&format!("dialog:{row} search"), search.rect.center());
-            if let Some(custom) = custom {
-                let response = ui.selectable_label(false, custom);
-                scenario::publish_handle(&format!("dialog:{row} file"), response.rect.center());
-                if response.clicked() {
-                    chosen = Some(filter.trim().to_owned());
-                    ui.close();
+            return;
+        }
+        let query = filter.to_lowercase();
+        egui::ScrollArea::vertical()
+            .id_salt(format!("{id}_list"))
+            .max_height(Tokens::get().space_24 * 10.0)
+            .min_scrolled_height(Tokens::get().space_24 * 10.0)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for option in options.iter().filter(|o| o.label.to_lowercase().contains(&query)) {
+                    let response = ui.selectable_label(current == option.label, option.label);
+                    if let Some(handle) = option.handle {
+                        scenario::publish_handle(handle, response.rect.center());
+                    }
+                    if response.clicked() {
+                        chosen = Some(option.value.to_owned());
+                        ui.close();
+                    }
                 }
-                return;
-            }
-            let query = filter.to_lowercase();
-            egui::ScrollArea::vertical()
-                .id_salt(format!("{id}_list"))
-                .max_height(Tokens::get().space_24 * 10.0)
-                .min_scrolled_height(Tokens::get().space_24 * 10.0)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    for option in options.iter().filter(|o| o.label.to_lowercase().contains(&query)) {
-                        let response = ui.selectable_label(current == option.label, option.label);
-                        if let Some(handle) = option.handle {
-                            scenario::publish_handle(handle, response.rect.center());
-                        }
-                        if response.clicked() {
-                            chosen = Some(option.value.to_owned());
-                            ui.close();
-                        }
-                    }
-                    if let Some(pending) = pending {
-                        ui.label(pending);
-                    }
-                });
-        })
-        .response;
+                if let Some(pending) = pending {
+                    ui.label(pending);
+                }
+            });
+    });
+    let response = popup.response;
+    if popup.inner.is_some() && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        response.request_focus();
+    }
     publish(ui, &response, egui::WidgetType::ComboBox);
     chosen
 }
@@ -709,6 +730,44 @@ pub(crate) fn dropdown(ui: &mut Ui, id: &str, selected: &mut usize, options: &[&
     })
 }
 
+/// The standard dropdown with a leading application icon on the current value and each option.
+/// The text job reserves the icon's space; the native combo and selectable items own interaction.
+pub(crate) fn dropdown_icons(ui: &mut Ui, id: &str, selected: &mut usize, options: &[(&str, &str)]) -> Response {
+    let (text, icon) = options.get(*selected).copied().unwrap_or(("", ""));
+    let row = label(ui).to_owned();
+    dropdown_menu_width(ui, id, text, Some(icon), false, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+        for (index, (text, icon)) in options.iter().enumerate() {
+            let response = ui.selectable_label(*selected == index, dropdown_icon_text(text));
+            paint_dropdown_icon(ui, response.rect, icon);
+            scenario::publish_target(&format!("dialog:{row}:{text}"), response.rect);
+            if response.clicked() {
+                *selected = index;
+            }
+        }
+    })
+}
+
+fn dropdown_icon_text(text: &str) -> egui::text::LayoutJob {
+    let t = Tokens::get();
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        text,
+        t.space_16 + t.space_6,
+        egui::TextFormat { font_id: egui::FontId::proportional(t.font_label), color: t.form_ink, ..Default::default() },
+    );
+    job
+}
+
+fn paint_dropdown_icon(ui: &Ui, rect: egui::Rect, icon: &str) {
+    let t = Tokens::get();
+    let rect = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + ui.spacing().button_padding.x + t.space_8, rect.center().y),
+        vec2(t.space_16, t.space_16),
+    );
+    crate::icons::paint_ink(ui.painter(), rect, icon, t.form_ink);
+    scenario::publish_rect(&format!("dialog:dropdown_icon:{icon}"), rect);
+}
+
 /// [`dropdown`] whose options each show a picture beside them while hovered, painted by `preview`
 /// for that option's index, so a choice can be seen before it is picked. Tokens: dropdown tokens,
 /// the tooltip frame.
@@ -758,18 +817,19 @@ pub(crate) fn dropdown_menu_with_close_behavior(
     close_behavior: egui::PopupCloseBehavior,
     add: impl FnOnce(&mut Ui),
 ) -> Response {
-    dropdown_menu_width(ui, id, current, false, close_behavior, add)
+    dropdown_menu_width(ui, id, current, None, false, close_behavior, add)
 }
 
 /// Intrinsic-width variant for horizontal toolbars and bottom strips.
 pub(crate) fn compact_dropdown_menu(ui: &mut Ui, id: impl egui::AsIdSalt, current: &str, add: impl FnOnce(&mut Ui)) -> Response {
-    dropdown_menu_width(ui, id, current, true, egui::PopupCloseBehavior::CloseOnClick, add)
+    dropdown_menu_width(ui, id, current, None, true, egui::PopupCloseBehavior::CloseOnClick, add)
 }
 
 fn dropdown_menu_width(
     ui: &mut Ui,
     id: impl egui::AsIdSalt,
     current: &str,
+    leading_icon: Option<&str>,
     compact: bool,
     close_behavior: egui::PopupCloseBehavior,
     add: impl FnOnce(&mut Ui),
@@ -788,14 +848,23 @@ fn dropdown_menu_width(
     } else {
         dimension(ui.available_width())
     };
-    let response = egui::ComboBox::from_id_salt(id)
+    let selected_text = if leading_icon.is_some() { egui::WidgetText::from(dropdown_icon_text(current)) } else { current.into() };
+    let popup = egui::ComboBox::from_id_salt(id)
         .width(width)
         .height(Tokens::get().space_24 * 14.0)
-        .selected_text(current)
+        .selected_text(selected_text)
         .icon(dropdown_arrow)
         .close_behavior(close_behavior)
-        .show_ui(ui, add)
-        .response;
+        .show_ui(ui, add);
+    let response = popup.response;
+    // The native popup closes on Escape; keep the same key from reaching the enclosing window.
+    // Only this dropdown's shown popup owns the key, and its trigger regains keyboard focus.
+    if popup.inner.is_some() && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        response.request_focus();
+    }
+    if let Some(icon) = leading_icon {
+        paint_dropdown_icon(ui, response.rect, icon);
+    }
     publish(ui, &response, egui::WidgetType::ComboBox);
     response
 }
@@ -1055,23 +1124,35 @@ pub fn wide_cell_editor(ui: &mut Ui, id: egui::Id, value: &mut String, hint: &st
 
 /// Search input with native accessibility and a stable caller ID. Tokens: cell_editor tokens.
 pub(crate) fn search_field(ui: &mut Ui, id: egui::Id, value: &mut String, hint: &str) -> Response {
-    if !super::layout::in_catalog(ui) {
-        return cell_editor(ui, id, value, hint, false);
-    }
     let t = Tokens::get();
+    let catalog = super::layout::in_catalog(ui);
+    let height = if catalog { t.space_16 + t.space_2 } else { t.control_height };
+    let limit = if catalog { 128 } else { usize::MAX };
     let editor = text_input(egui::TextEdit::singleline(value))
         .id(id)
-        .char_limit(128)
+        .char_limit(limit)
         .hint_text(hint)
-        .min_size(vec2(0.0, t.space_16 + t.space_2))
+        .min_size(vec2(0.0, height))
         .margin(egui::Margin { left: t.space_24 as i8, right: t.space_8 as i8, top: 0, bottom: 0 })
         .font(egui::FontId::proportional(t.font_small))
+        .background_color(t.input_fill())
+        .clip_text(true)
         .text_color(t.form_ink);
-    let mut response = ui.add_sized(vec2(dimension(ui.available_width()), t.space_16 + t.space_2), editor);
-    super::text_menu::menu(ui, &mut response, value, super::text_menu::Field::LINE.limited(128));
+    let mut response = ui.add_sized(vec2(dimension(ui.available_width()), height), editor);
+    super::text_menu::menu(ui, &mut response, value, super::text_menu::Field::LINE.limited(limit));
     let icon = egui::Rect::from_center_size(egui::pos2(response.rect.left() + t.space_12, response.rect.center().y), vec2(t.space_12, t.space_12));
     crate::icons::paint_ink(ui.painter(), icon, "zoom", t.form_dim);
     super::layout::publish_geometry(ui, &response);
+    response.widget_info(|| {
+        let mut info = egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, ui.is_enabled(), hint);
+        info.current_text_value = Some(value.clone());
+        info
+    });
+    if response.has_focus() {
+        crate::prefs_search::note_key_sink(ui.ctx());
+    }
+    crate::theme::TabAccent::number_focus(ui, &response);
+    t.input_bevel(ui, &response);
     response
 }
 

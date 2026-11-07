@@ -52,6 +52,8 @@ pub struct DocSlot {
     edit_in_place: Option<crate::edit_in_place::PartContext>,
     /// The dialog or tool it had open and its toolbar tab, kept while another design is shown.
     work: DocWork,
+    /// What it has computing off the window thread or waiting its turn.
+    jobs: crate::deferred::DocJobs,
 }
 
 /// What a design was doing when its tab was left, with the "Keep dialogs and tools open when
@@ -143,6 +145,7 @@ impl DocSlot {
             link_stamps: Vec::new(),
             edit_in_place: None,
             work: DocWork::default(),
+            jobs: Default::default(),
         }
     }
 }
@@ -248,6 +251,7 @@ fn swap_in(app: &mut SolveApp, mut slot: DocSlot) -> DocSlot {
         link_stamps: std::mem::replace(&mut app.docs.link_stamps, slot.link_stamps),
         edit_in_place: std::mem::replace(&mut app.edit_in_place.active, slot.edit_in_place),
         work,
+        jobs: app.swap_jobs(slot.jobs),
     };
     // Only the displayed design owns the process-wide crash replay journal.
     app.session.crash_journal = out.session.crash_journal;
@@ -257,6 +261,9 @@ fn swap_in(app: &mut SolveApp, mut slot: DocSlot) -> DocSlot {
     app.tree.picked_components.clear();
     // Preferences the session holds go with the user, not the tab (#680).
     app.session.auto_project = out.session.auto_project;
+    app.session.set_validation(out.session.validation());
+    // So does the host's pre-command check: every tab is held to it.
+    app.session.set_command_check(out.session.command_check());
     app.session.set_single_surface_analysis(app.preferences.single_surface_analysis);
     // Views cache by revision: the incoming design must not look unchanged.
     let before = app.session.revision;
@@ -264,6 +271,7 @@ fn swap_in(app: &mut SolveApp, mut slot: DocSlot) -> DocSlot {
     if let Some(pending) = &mut app.pending_feature_edit {
         pending.view_changed(before, app.session.revision);
     }
+    app.jobs_view_changed(before, app.session.revision);
     put_work(app, slot.work, before);
     out
 }
@@ -541,6 +549,8 @@ pub fn close(app: &mut SolveApp, i: usize, force: bool) {
         if let Some(a) = app.autosave.as_mut().and_then(|a| a.active.take()) {
             a.discard();
         }
+        // What it had computing goes with it: the blank design waits for none of it.
+        app.cancel_computing();
         app.big_operation = false;
         crate::sketch_text_move::cancel_drag(app);
         let rev = app.session.revision;
@@ -1776,6 +1786,30 @@ mod tests {
         adopt(&mut a, Session::default());
         assert_eq!(a.docs.count(), 1);
         assert!(!a.session.auto_project, "a design adopted over a blank one");
+    }
+
+    /// The host's pre-command check holds in every tab: new ones, the one switched to, a design
+    /// adopted over a blank one and after the last tab closes.
+    #[test]
+    fn the_command_check_follows_the_host_across_tabs() {
+        let mut a = app();
+        a.session.set_command_check(Some(std::sync::Arc::new(
+            |id: &str, _: &Value, _: &Session| {
+                if id == "solid.box" { Err("no boxes".to_string()) } else { Ok(()) }
+            },
+        )));
+        assert_eq!(a.run("solid.box", json!({"length": 10, "width": 10, "height": 10})), Err("no boxes".to_string()));
+        a.run("solid.cylinder", json!({"radius": 5, "height": 10})).unwrap();
+        new_design(&mut a);
+        assert_eq!(a.docs.count(), 2);
+        assert!(a.run("solid.box", json!({"length": 5, "width": 5, "height": 5})).is_err(), "a new tab");
+        switch(&mut a, 0);
+        assert!(a.run("solid.box", json!({"length": 5, "width": 5, "height": 5})).is_err(), "the tab switched to");
+        close(&mut a, 1, true);
+        close(&mut a, 0, true);
+        assert!(a.run("solid.box", json!({"length": 5, "width": 5, "height": 5})).is_err(), "after the last tab closes");
+        adopt(&mut a, Session::default());
+        assert!(a.run("solid.box", json!({"length": 5, "width": 5, "height": 5})).is_err(), "a design adopted over a blank one");
     }
 
     /// Hide Origin by Default hides the Origin of designs that don't keep its eye; a design that

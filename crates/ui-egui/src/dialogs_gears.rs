@@ -185,7 +185,7 @@ pub fn selected_gear(app: &SolveApp) -> Option<u64> {
         let [id] = app.tree.picked_components.as_slice() else { return None };
         return gear(*id);
     }
-    let st = app.session.world_state();
+    let st = app.session.world_state().ok()?;
     let mut found = None;
     for sel in &app.session.selection {
         let id = match sel {

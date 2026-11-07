@@ -97,7 +97,7 @@ fn curves_that_share_an_id_are_picked_from_their_own_sketches() {
     h.app.run("sketch.arc.three_point", json!({"start": [-10, 0], "end": [-10, -40], "through": [-15, -20], "id": "out"})).unwrap();
     h.app.run("sketch.finish", json!({})).unwrap();
     let left = h.app.session.doc.find_feature("L").unwrap().id;
-    let hit = |sketch: u64, id: &str| Hit::SketchCurve { sketch, id: id.into(), straight: false, point: solidcraft_engine::geom::Vec3::ZERO };
+    let hit = |sketch: u64, id: &str| Hit::SketchCurve { sketch, id: id.into(), straight: false, point: solidcore_record::Vec3::ZERO };
     h.step(&json!({"call":"ui.start","params":{"command":"solid.loft"}})).unwrap();
     h.frames(3);
     let d = h.app.dialog.as_mut().unwrap();
@@ -209,7 +209,7 @@ fn loft_profiles_from_one_sketch_stay_apart() {
     let commands = crate::dialogs::apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
     assert_eq!(commands[0].1["sections"], expected);
     ok(&mut h);
-    assert_eq!(h.app.session.world_state().bodies.len(), 1, "{:?}", h.app.session.log);
+    assert_eq!(h.app.session.world_state().unwrap().bodies.len(), 1, "{:?}", h.app.session.log);
     let name = h.app.session.doc.features.last().unwrap().name.clone();
     h.step(&json!({"call":"ui.editFeature","params":{"feature":name}})).unwrap();
     h.frames(8);
