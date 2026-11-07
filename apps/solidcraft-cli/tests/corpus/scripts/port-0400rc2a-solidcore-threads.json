@@ -1,0 +1,10 @@
+{
+ "commands": [
+  {"command": "gear.create", "params": {"type": "spur", "module": 2, "teeth": 16, "face_width": 8, "bore": 6, "point": [-40, 0, 0]}},
+  {"command": "solid.cylinder", "params": {"diameter": 10, "height": 25, "base": [0, 0, 0], "operation": "new", "body_name": "Rod"}},
+  {"command": "solid.thread", "params": {"face": [5, 0, 12], "designation": "M10", "helical": true, "start_angle": "90 deg", "hand": "left"}},
+  {"command": "solid.box", "params": {"length": 18, "width": 18, "height": 10, "corner": [31, -9, 0], "body_name": "Nut"}},
+  {"command": "solid.cylinder", "params": {"diameter": 10.2, "height": 12, "base": [40, 0, -1], "operation": "cut", "targets": ["Nut"]}},
+  {"command": "solid.thread", "params": {"face": [34.9, 0, 5], "pitch": "2.2 mm", "clearance": "0.15 mm", "start_offset": "-2.2 mm", "end_offset": "-2.2 mm"}}
+ ]
+}
