@@ -131,7 +131,7 @@ pub(crate) fn button(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, edge: Ed
     let size = app.preferences.navigation_bar.size;
     ui_kit::navigation_surface(ui, rect, size, false);
     let inner = rect.shrink(ui_kit::NAV_BORDER);
-    let response = ui.interact(inner, ui.id().with("touch_pick_button"), Sense::click());
+    let response = ui.interact(inner, ui.scope_id().with("touch_pick_button"), Sense::click());
     let on = app.viewport.touch_pick.on;
     let finger = app.viewport.touch_pick.by_finger;
     let pressed = response.is_pointer_button_down_on() && finger;
@@ -144,7 +144,7 @@ pub(crate) fn button(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, edge: Ed
     ui.painter().circle_stroke(c, r, Stroke::new(1.5, ink));
     cross(ui.painter(), c, r * 0.4, r * 1.7, Stroke::new(1.5, ink));
     let label = app.tr("touch_pick.button").to_owned();
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, &label));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, &label));
     ui_kit::navigation_tooltip(&response, rect, edge, &label, None);
     crate::scenario::publish_target("nav:touch_pick", inner);
     if response.clicked() && finger {
