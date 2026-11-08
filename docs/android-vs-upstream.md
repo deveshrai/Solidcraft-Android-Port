@@ -6,7 +6,7 @@ built here first and kept up to date with every upstream release.
 
 ![The port and upstream](screenshots/android/hero-port-vs-upstream.png)
 
-Current: **port 0.40.0-rc.2a**, against **upstream 0.40.0-rc.2** (both pre-releases; the stable pair is 0.30.1a and 0.30.1) ([what's new](android-whats-new.md)). This page is kept up to date with each
+Current: **port 0.40.0-rc.3a**, against **upstream 0.40.0-rc.3** (both pre-releases; the stable pair is 0.30.1a and 0.30.1) ([what's new](android-whats-new.md)). This page is kept up to date with each
 port release ([keeping this page current](#keeping-this-page-current)).
 
 - [At a glance](#at-a-glance)
@@ -19,10 +19,10 @@ port release ([keeping this page current](#keeping-this-page-current)).
 
 ## At a glance
 
-| | Upstream 0.40.0-rc.2 | Port 0.40.0-rc.2a |
+| | Upstream 0.40.0-rc.3 | Port 0.40.0-rc.3a |
 |---|---|---|
 | Platforms | Windows, macOS, Linux, web | All of upstream's, **plus Android** (phones, tablets, foldables) |
-| Modelled threads | Exact helical sweeps on solidcore: ISO metric, trapezoidal, Acme, buttress and pipe forms, several starts, right, left or both hands, runouts, chamfered tips | All of upstream's, **plus the port's helical thread** (built the same way) for what upstream's doesn't take |
+| Modelled threads | Exact helical sweeps on solidcore: ISO metric, trapezoidal, Acme, buttress and pipe forms, several starts, right, left or both hands, runouts, chamfered tips; down to a shoulder (since rc.3) | All of upstream's, **plus the port's helical thread** (built the same way) for what upstream's doesn't take |
 | Thread sizes | The forms' standard sizes, on a face that size fits | Upstream's, **or any pitch on any diameter** (Form: Custom) |
 | Thread fit for printing | None | **Clearance**, thread depth, flank angle, start and end offsets, a **start angle** to phase mating threads |
 | Gears | None (requested upstream: [#6796](https://github.com/tangency-labs/solidcraft/issues/6796), [#4684](https://github.com/tangency-labs/solidcraft/issues/4684)) | **Ten involute types**: spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel, crossed helical; bore, DIN 6885 keyway and hub; editable after |
@@ -32,7 +32,7 @@ port release ([keeping this page current](#keeping-this-page-current)).
 | Files | Native file dialogs | Android's file picker: device, SD card, Google Drive, any storage app |
 | Graphics | Vulkan, Metal, DirectX, OpenGL; Windows retries other APIs | Vulkan or OpenGL ES; a launch that can't start makes the next one use OpenGL ES; the viewport shader compiles on OpenGL ES; bodies are built on the CPU on Adreno, whose compiler crashes on 0.40's GPU tessellation shader |
 | Crash reports | Kept, shown at the next start, Report… drafts an issue upstream | The same, plus **Save a copy** through Android's picker; Report… drafts it on the port's tracker |
-| Design file format | 50 | 51 (50 plus the helical threads) |
+| Design file format | 51 | 52 (51 plus the helical threads) |
 
 Everything else (sketching, the solver, every feature and workspace, Render, sheet metal,
 assemblies, import and export) is upstream's, unchanged, at the same version.
@@ -80,7 +80,8 @@ Upstream's MCP server runs over stdio on the same computer, which an Android app
 offer.
 
 Tested live on a Galaxy Z Fold over Wi-Fi, building a cassette housing with five threaded screws:
-[android-mcp-live-test.md](android-mcp-live-test.md).
+[android-mcp-live-test.md](android-mcp-live-test.md); and on a Galaxy Tab, a model locomotive and its
+track, 51 parts in 9 s: [android-0400rc3a-test.md](android-0400rc3a-test.md).
 
 Guide: [android-mcp.md](android-mcp.md). Code: `apps/solidcraft-android/src/mcp_http.rs`,
 `apps/solidcraft-android/src/mcp_host.rs`, `crates/ui-egui/src/prefs/mcp_server.rs`.
@@ -106,7 +107,7 @@ What it takes to run upstream's desktop app on Android
 
 - **The port opens every upstream design**, from any version.
 - **Upstream releases don't open port designs.** The helical thread fields are a design-format
-  change that upstream hasn't adopted, so the port saves format 51 where upstream 0.40.0-rc.2 saves 50,
+  change that upstream hasn't adopted, so the port saves format 52 where upstream 0.40.0-rc.3 saves 51,
   and upstream asks to be updated rather than silently dropping the helical threads' fields.
   This applies to every design the port saves, with or without threads.
 - **To share with upstream, export STEP.** Gears and threads arrive as exact solids.

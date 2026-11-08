@@ -1,6 +1,6 @@
 """The README's hero image: the port next to upstream, with a screenshot of the latest device test.
 
-    python3 scripts/android-hero.py SCREENSHOT.png docs/screenshots/android/hero-port-vs-upstream.png 0.30.1 0.30.1a
+    python3 scripts/android-hero.py SCREENSHOT.png docs/screenshots/android/hero-port-vs-upstream.png 0.40.0-rc.3 0.40.0-rc.3a
 
 Needs Pillow. Edit the call-out and caption text below for each release's test."""
 import sys
@@ -40,16 +40,16 @@ ImageDraw.Draw(mask).rounded_rectangle((0, 0, *shot.size), radius=12, fill=255)
 im.paste(shot, (fx + pad, fy + pad), mask)
 
 # Call-out over the screenshot: what the run did.
-cx, cy = fx + pad + 60, fy + pad + 440
+cx, cy = fx + pad + 190, fy + pad + 96
 box = (cx, cy, cx + 470, cy + 66)
 d.rounded_rectangle(box, radius=10, fill=(255, 236, 160), outline=YELLOW, width=3)
-d.text((cx + 14, cy + 6), "Helical gear + M10 helical thread: 2.2 s", font=font(20, "SemiBold"), fill=(30, 30, 30))
-d.text((cx + 14, cy + 34), "over MCP, on OpenGL ES (the fallback GPU path)", font=font(16), fill=(60, 60, 60))
+d.text((cx + 14, cy + 6), "Locomotive and track, 51 parts: 9.0 s", font=font(20, "SemiBold"), fill=(30, 30, 30))
+d.text((cx + 14, cy + 34), "95 MCP calls on a Galaxy Tab in DeX; no part overlaps", font=font(16), fill=(60, 60, 60))
 
 d.text((60, fy + shot.height + 2 * pad + 22),
-       "A helical gear and an M10 helical B-rep thread, built by an agent over the MCP server on OpenGL ES;",
+       "A 3D-printable G-scale locomotive mechanism on 400 mm of track, built by an agent over the MCP server.",
        font=font(20), fill=DIM)
-d.text((60, fy + shot.height + 2 * pad + 50), "New in 0.30.1a: a launch that can't start its graphics makes the next one use OpenGL ES.", font=font(20), fill=DIM)
+d.text((60, fy + shot.height + 2 * pad + 50), "New in 0.40.0-rc.3a: upstream's 0.40.0-rc.3 on the solidcore kernel, with the port's threads and gears.", font=font(20), fill=DIM)
 
 # The comparison table.
 tx, c1, c2 = 1060, 1530, 1670
@@ -70,7 +70,7 @@ def cross(x, y):
 
 rows = [
     ("Android app", "touch, crosshair picks, mouse, keyboard", None, True),
-    ("Helical B-rep threads", "exact, any pitch, long lead screws, phase", "faceted", True),
+    ("Helical B-rep threads", "any pitch, print clearance, phase, run-off ends", "standard", True),
     ("Involute gears", "ten types, bore, keyway, hub", None, True),
     ("MCP server on the network", "Claude Code from Termux or Wi-Fi", "stdio", True),
     ("Every upstream feature", "same commands, kept in step", True, True),

@@ -4,8 +4,8 @@ What is wrong or missing in the current port release, and what is planned for th
 entry says how to work around it today. Fixed entries move to [Fixed](#fixed) with the release that
 fixed them.
 
-Current: **port 0.40.0-rc.2a** (upstream's 0.40.0-rc.2 pre-release); the stable one is **0.30.1a**. Next:
-**0.40.0-rc.2b**, or the next upstream release's **a**, if upstream releases
+Current: **port 0.40.0-rc.3a** (upstream's 0.40.0-rc.3 pre-release); the stable one is **0.30.1a**. Next:
+**0.40.0-rc.3b**, or the next upstream release's **a**, if upstream releases
 first. See also [android-vs-upstream.md](android-vs-upstream.md) for what upstream has that the port
 doesn't, and the reverse.
 
@@ -22,7 +22,8 @@ doesn't, and the reverse.
 |---|---|---|---|
 | **On Adreno GPUs bodies are built on the CPU.** Upstream 0.40's GPU tessellation shader crashes Qualcomm's compiler, so the port skips it there. Showing a large design can take longer than it would on the GPU. | Galaxy Z Fold (Adreno 840), 0.40.0-rc.2a | None needed | Report the crash upstream with the shader; turn the GPU back on for Adreno once a driver or shader change avoids it |
 | **A launch that dies in the GPU's driver moves the app to OpenGL ES for good.** The startup guard from 0.30.1a can't tell a crash while compiling a shader from graphics that don't start, so after the Adreno crash above the next launch used OpenGL ES (MSAA 1x) and kept it. | Galaxy Z Fold, the first 0.40.0-rc.2a build | Stop the app in its first quarter-second once (it then goes back to Vulkan), or reinstall | Keep OpenGL ES only when Vulkan failed before the window drew |
-| **Going back to 0.30.1a needs an uninstall.** 0.40.0-rc.2a's version code is higher, and Android refuses a downgrade; uninstalling deletes the app's settings and crash reports. Designs saved by 0.40.0-rc.2a (format 51) don't open in 0.30.1a. | Any | Save designs to a device folder first, and keep 0.30.1a copies of anything important | By design for a pre-release |
+| **Going back to 0.30.1a needs an uninstall.** The 0.40 pre-releases' version codes are higher, and Android refuses a downgrade; uninstalling deletes the app's settings and crash reports. Designs saved by 0.40.0-rc.3a (format 52) don't open in 0.30.1a or 0.40.0-rc.2a. | Any | Save designs to a device folder first, and keep 0.30.1a copies of anything important | By design for a pre-release |
+| **The port's helical threads don't stop at a shoulder.** Since rc.3, upstream's modelled threads run down to a shoulder (a bolt's head) and are trimmed at its face, so a nut seats; the port's helical thread (Form: Custom, or Helical B-rep) still stops clear of it. | Mac command-line app, 0.40.0-rc.3a | Leave a short plain neck under the head, or use upstream's modelled thread for a standard size | Trim the port's groove at a shoulder the way upstream's is |
 | **A tap on a dialog's OK can also select in the view.** With the crosshair button on, tapping **OK** in the Extrude window (opened by Press Pull on a screw head) closed it and then selected the face of the body behind it, as if the tap went through. Enter in the value field instead did not. | Galaxy Tab, 0.28.0a | Confirm with Enter, or tap empty space after | Find whether the closing tap reaches the view, and stop it there |
 | **Preferences' page list once ignored taps.** Right after the first start on OpenGL ES, three taps (finger and mouse) on page names didn't change the page; after a minute and from then on, every tap did. | Pixel Tablet emulator, 0.30.1a | Tap again | Reproduce it; if it is the first seconds after start, find what the window is still busy with |
 | **The first crash report's title is cut short** ("Closed …") when it carries a count (×2): the row has one more button (Save a copy) than upstream's. | Pixel Tablet emulator, 0.30.1a | The message below the title says it in full | Wrap the buttons under the title on narrow rows |

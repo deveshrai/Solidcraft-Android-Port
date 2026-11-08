@@ -5,6 +5,7 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.40.0-rc.3a](#0400-rc3a): upstream's 0.40.0-rc.3 pre-release; a model locomotive built over MCP
 - [0.40.0-rc.2a](#0400-rc2a): upstream's 0.40.0-rc.2 pre-release and its new kernel, solidcore
 - [0.30.1a](#0301a): upstream 0.29.0 to 0.30.1, an OpenGL ES fallback, crash reports you can save
 - [0.28.0a](#0280a): upstream 0.28.0, a crosshair for picking by finger
@@ -16,6 +17,27 @@ missing: [android-known-issues.md](android-known-issues.md).
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.40.0-rc.3a
+
+**A pre-release, like upstream's** [0.40.0-rc.3](https://github.com/tangency-labs/solidcraft/releases/tag/v0.40.0-rc.3).
+Designs saved in it are format 52 (upstream's 51 plus the port's helical threads), which 0.30.1a and
+0.40.0-rc.2a can't open. It installs over 0.40.0-rc.2a and 0.30.1a; for work, stay on
+[0.30.1a](https://github.com/deveshrai/Solidcraft-Android-Port/releases/tag/v0.30.1a-android).
+
+**Upstream 0.40.0-rc.3** merged (395 commits). For threads: an external modelled thread now runs
+down to a shoulder and is trimmed at its face, so a nut seats on a bolt's head (it stopped up to a
+turn short), and a modelled thread on one hole no longer stops the next one taking a thread. Also:
+interference checks run in the background, Edit in Place for linked designs, an opt-in setting to
+remember dialog values, faster mesh export, and many fixes and translations.
+
+**The port's own changes:** none to its features. The merge keeps every port hook (touch, the
+crosshair, gears, helical threads, crash reports, the MCP server) beside upstream's changes; port
+strings upstream now has use upstream's text.
+
+**Tested** on a Galaxy Tab (Android 17, Mali-G1-Ultra, in DeX): an agent built a 3D-printable
+G-scale locomotive mechanism and 400 mm of track, 51 parts in 95 MCP calls, in 9.0 s, with no two
+parts overlapping ([the test](android-0400rc3a-test.md)). GPU tessellation works on the Mali GPU.
 
 ## 0.40.0-rc.2a
 

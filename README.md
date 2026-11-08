@@ -1,11 +1,11 @@
 # SolidCraft for Android
 
-![SolidCraft for Android: upstream SolidCraft plus an Android app, helical B-rep threads, gears and an MCP server on the network](docs/screenshots/android/hero-port-vs-upstream.png)
+![SolidCraft for Android: upstream SolidCraft plus an Android app, helical B-rep threads, gears and an MCP server on the network, with a model locomotive built over MCP](docs/screenshots/android/hero-port-vs-upstream.png)
 
 **This is the Android port of SolidCraft.** It is upstream
 [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with every
-upstream release (now 0.30.1, and the 0.40.0-rc.2 pre-release), plus an Android app and **features
-upstream doesn't have yet**. Current release: **0.30.1a**; pre-release: **0.40.0-rc.2a**
+upstream release (now 0.30.1, and the 0.40.0-rc.3 pre-release), plus an Android app and **features
+upstream doesn't have yet**. Current release: **0.30.1a**; pre-release: **0.40.0-rc.3a**
 ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
 
 | Added in this port | What it gives you | Guide |
@@ -15,15 +15,16 @@ upstream doesn't have yet**. Current release: **0.30.1a**; pre-release: **0.40.0
 | **Involute gears** | Ten types (spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel, crossed helical), bore, keyway and hub, editable after | [Gears](docs/android-gears.md) |
 | **MCP server on the network** | One switch in Settings: Claude Code in Termux on the device, or on a computer on the same Wi-Fi, models in the app while you watch | [MCP server](docs/android-mcp.md) |
 
-**New in 0.40.0-rc.2a (a pre-release):** upstream's 0.40.0-rc.2 and its new geometry kernel,
-solidcore. The port's helical threads (any pitch, clearance, start angle) and gears run on it, and
-Qualcomm Adreno phones no longer crash at launch. For work, stay on
-[0.30.1a](https://github.com/deveshrai/Solidcraft-Android-Port/releases/tag/v0.30.1a-android); designs
-saved in the pre-release don't open there.
+**New in 0.40.0-rc.3a (a pre-release):** upstream's 0.40.0-rc.3 on its new geometry kernel,
+solidcore. Upstream's modelled threads now run down to a shoulder, so a nut seats on a bolt's head;
+the port's helical threads (any pitch, clearance, start angle) and gears run on it as before. For
+work, stay on [0.30.1a](https://github.com/deveshrai/Solidcraft-Android-Port/releases/tag/v0.30.1a-android);
+designs saved in the pre-release don't open there.
 
-Gears and threads built over MCP on a Galaxy Z Fold ([the test](docs/android-0400rc2a-test.md)):
+A 3D-printable G-scale locomotive mechanism and its track, 51 parts, built by an agent over MCP on a
+Galaxy Tab in 9 seconds ([the test](docs/android-0400rc3a-test.md)):
 
-![The port's helical threads and upstream's new thread forms on solidcore](docs/screenshots/android/threads-solidcore-fold-0400rc2a.jpg)
+![A model locomotive and track built over MCP on a Galaxy Tab](docs/screenshots/android/locomotive-mcp-tab-0400rc3a.gif)
 
 [What's new](docs/android-whats-new.md) ·
 [port vs upstream](docs/android-vs-upstream.md) ·
