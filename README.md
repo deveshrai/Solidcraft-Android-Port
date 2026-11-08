@@ -5,7 +5,7 @@
 **This is the Android port of SolidCraft.** It is upstream
 [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with every
 upstream release (now 0.30.1, and the 0.40.0-rc.3 pre-release), plus an Android app and **features
-upstream doesn't have yet**. Current release: **0.30.1a**; pre-release: **0.40.0-rc.3a**
+upstream doesn't have yet**. Current release: **0.30.1a**; pre-release: **0.40.0-rc.3b**
 ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
 
 | Added in this port | What it gives you | Guide |
@@ -15,8 +15,9 @@ upstream doesn't have yet**. Current release: **0.30.1a**; pre-release: **0.40.0
 | **Involute gears** | Ten types (spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel, crossed helical), bore, keyway and hub, editable after | [Gears](docs/android-gears.md) |
 | **MCP server on the network** | One switch in Settings: Claude Code in Termux on the device, or on a computer on the same Wi-Fi, models in the app while you watch | [MCP server](docs/android-mcp.md) |
 
-**New in 0.40.0-rc.3a (a pre-release):** upstream's 0.40.0-rc.3 on its new geometry kernel,
-solidcore. Upstream's modelled threads now run down to a shoulder, so a nut seats on a bolt's head;
+**New in 0.40.0-rc.3a and b (pre-releases):** upstream's 0.40.0-rc.3 on its new geometry kernel,
+solidcore; in a Samsung DeX window the app's top bar (and Settings) now sits below the window's
+title bar. Upstream's modelled threads now run down to a shoulder, so a nut seats on a bolt's head;
 the port's helical threads (any pitch, clearance, start angle) and gears run on it as before. For
 work, stay on [0.30.1a](https://github.com/deveshrai/Solidcraft-Android-Port/releases/tag/v0.30.1a-android);
 designs saved in the pre-release don't open there.

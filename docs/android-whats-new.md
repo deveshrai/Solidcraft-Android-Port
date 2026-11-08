@@ -5,6 +5,7 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.40.0-rc.3b](#0400-rc3b): the app's top bar below a DeX window's title bar
 - [0.40.0-rc.3a](#0400-rc3a): upstream's 0.40.0-rc.3 pre-release; a model locomotive built over MCP
 - [0.40.0-rc.2a](#0400-rc2a): upstream's 0.40.0-rc.2 pre-release and its new kernel, solidcore
 - [0.30.1a](#0301a): upstream 0.29.0 to 0.30.1, an OpenGL ES fallback, crash reports you can save
@@ -17,6 +18,14 @@ missing: [android-known-issues.md](android-known-issues.md).
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.40.0-rc.3b
+
+A pre-release, like 0.40.0-rc.3a, with one fix: **in a Samsung DeX window the app's top bar (File,
+Settings, the design tabs, Report a bug) was hidden under the window's title bar**, so Settings
+couldn't be reached without going full screen. The app now keeps below a desktop window's title
+bar; full screen, phones and tablets out of DeX look as before
+([before and after](android-0400rc3a-test.md#4-0400-rc3b-settings-in-a-dex-window)).
 
 ## 0.40.0-rc.3a
 

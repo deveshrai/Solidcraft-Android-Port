@@ -70,6 +70,23 @@ public class SolidCraftActivity extends NativeActivity {
                     OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> results.add(new String[] {"back"}));
         }
         hideSystemBars();
+        if (Build.VERSION.SDK_INT >= 30) {
+            getWindow().getDecorView().setOnApplyWindowInsetsListener((v, insets) -> {
+                captionTop = insets.getInsets(WindowInsets.Type.captionBar()).top;
+                return v.onApplyWindowInsets(insets);
+            });
+        }
+    }
+
+    /**
+     * How far down the window a caption bar covers it, in pixels: in a desktop window (Samsung
+     * DeX, Android's desktop windowing) the system draws the window's title bar over the app,
+     * which Android 15+ lays out edge to edge, so the app's own top bar was hidden under it.
+     */
+    private volatile int captionTop;
+
+    public int captionTop() {
+        return captionTop;
     }
 
     /** Started: on screen, in split screen or a pop-up window too. */
@@ -118,7 +135,10 @@ public class SolidCraftActivity extends NativeActivity {
      * Fullscreen: the app draws over the whole screen (Android 15+ lays it out edge to edge), so
      * the navigation bar, or a tablet's taskbar, would cover the bottom of the window and take the
      * touches there (a tall dialog's OK). Hide them, immersively: a swipe in from the edge shows
-     * them for a moment.
+     * them for a moment. Not the caption bar (systemBars() includes it, and so does the theme's
+     * Fullscreen): hidden, a desktop window's title bar (Samsung DeX) still covers the app's top
+     * bar and reports no height, so the app can't move below it (captionTop). Full screen has no
+     * caption bar, so showing it changes nothing there.
      */
     @SuppressWarnings("deprecation")
     private void hideSystemBars() {
@@ -126,7 +146,8 @@ public class SolidCraftActivity extends NativeActivity {
             WindowInsetsController c = getWindow().getInsetsController();
             if (c != null) {
                 c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-                c.hide(WindowInsets.Type.systemBars());
+                c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                c.show(WindowInsets.Type.captionBar());
             }
         } else {
             getWindow().getDecorView().setSystemUiVisibility(

@@ -6,7 +6,7 @@ built here first and kept up to date with every upstream release.
 
 ![The port and upstream](screenshots/android/hero-port-vs-upstream.png)
 
-Current: **port 0.40.0-rc.3a**, against **upstream 0.40.0-rc.3** (both pre-releases; the stable pair is 0.30.1a and 0.30.1) ([what's new](android-whats-new.md)). This page is kept up to date with each
+Current: **port 0.40.0-rc.3b**, against **upstream 0.40.0-rc.3** (both pre-releases; the stable pair is 0.30.1a and 0.30.1) ([what's new](android-whats-new.md)). This page is kept up to date with each
 port release ([keeping this page current](#keeping-this-page-current)).
 
 - [At a glance](#at-a-glance)
@@ -19,7 +19,7 @@ port release ([keeping this page current](#keeping-this-page-current)).
 
 ## At a glance
 
-| | Upstream 0.40.0-rc.3 | Port 0.40.0-rc.3a |
+| | Upstream 0.40.0-rc.3 | Port 0.40.0-rc.3b |
 |---|---|---|
 | Platforms | Windows, macOS, Linux, web | All of upstream's, **plus Android** (phones, tablets, foldables) |
 | Modelled threads | Exact helical sweeps on solidcore: ISO metric, trapezoidal, Acme, buttress and pipe forms, several starts, right, left or both hands, runouts, chamfered tips; down to a shoulder (since rc.3) | All of upstream's, **plus the port's helical thread** (built the same way) for what upstream's doesn't take |
@@ -99,9 +99,9 @@ What it takes to run upstream's desktop app on Android
 - **Files** through Android's file picker, mirrored to local copies, so Ctrl+S on a design opened
   from Drive saves back to Drive.
 - **Android behaviour:** Back closes what is open; the on-screen keyboard for fields; the layout
-  follows rotation, folding and phone screens; the system bars are hidden so a tablet's taskbar
-  doesn't cover the app; OK runs long features off the window thread, so Android doesn't show
-  "not responding".
+  follows rotation, folding, phone screens and desktop windows (DeX); the system bars are hidden
+  so a tablet's taskbar doesn't cover the app; OK runs long features off the window thread, so
+  Android doesn't show "not responding".
 
 ## Design files and compatibility
 

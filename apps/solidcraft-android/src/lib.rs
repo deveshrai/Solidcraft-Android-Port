@@ -19,6 +19,8 @@ mod mcp_host;
 mod mcp_http;
 // Plain functions, built (and tested) on every system.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+mod insets;
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 mod names;
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 mod startup;
@@ -56,6 +58,8 @@ mod android {
         documents: Option<Rc<RefCell<Documents>>>,
         /// Back closes what is open: Escape goes into the next frame's input.
         escape: bool,
+        /// The caption-bar inset egui was last given, in points (a DeX window's title bar).
+        caption: Option<f32>,
         /// Settings › MCP server.
         mcp: McpHost,
         /// The app's folder, the graphics this launch started on, and whether that was a fallback:
@@ -106,7 +110,12 @@ mod android {
             self.mcp.tick(&mut self.app);
             self.app.logic(ctx);
         }
-        fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+            if let Some(d) = &self.documents
+                && let Some(top) = crate::insets::caption_inset(d.borrow().caption_top(), ctx.pixels_per_point(), &mut self.caption)
+            {
+                raw.safe_area_insets = Some(egui::SafeAreaInsets(egui::epaint::MarginF32 { top, ..Default::default() }));
+            }
             if std::mem::take(&mut self.escape) {
                 for pressed in [true, false] {
                     raw.events.push(egui::Event::Key {
@@ -121,7 +130,14 @@ mod android {
             self.app.raw_input_hook(raw);
         }
         fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-            self.app.ui(ui);
+            // Below a desktop window's caption bar (the safe-area inset set in raw_input_hook):
+            // egui's root Ui covers the whole window.
+            let content = ui.ctx().content_rect();
+            if content == ui.max_rect() {
+                self.app.ui(ui);
+            } else {
+                self.app.ui(&mut ui.new_child(egui::UiBuilder::new().max_rect(content)));
+            }
             // egui's Copy has no clipboard on Android: hand what it copied to the system's.
             if let Some(d) = &self.documents {
                 let copied: Vec<String> = ui.ctx().output(|o| {
@@ -284,7 +300,7 @@ mod android {
                 if fallback {
                     app.set_status("The last launch could not start its graphics, so this one uses OpenGL ES.", false);
                 }
-                Ok(Box::new(Shell { app, frames: 0, documents, escape: false, mcp, started }))
+                Ok(Box::new(Shell { app, frames: 0, documents, escape: false, caption: None, mcp, started }))
             }),
         );
         if let Err(e) = result {

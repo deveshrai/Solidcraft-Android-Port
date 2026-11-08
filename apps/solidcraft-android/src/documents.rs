@@ -386,6 +386,14 @@ impl Documents {
         }
     }
 
+    /// How far down the window a caption bar covers it, in pixels (0 without one).
+    pub fn caption_top(&self) -> i32 {
+        let activity = &self.activity;
+        let top = JavaVM::singleton()
+            .and_then(|vm| vm.attach_current_thread(|env| env.call_method(activity, jni_str!("captionTop"), jni_sig!("()I"), &[])?.i()));
+        top.unwrap_or(0)
+    }
+
     /// Put `text` on the system clipboard.
     pub fn copy_text(&self, text: &str) {
         let text = text.to_string();

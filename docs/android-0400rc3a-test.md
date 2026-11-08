@@ -9,6 +9,7 @@ scripts.
 - [1. The locomotive and its track](#1-the-locomotive-and-its-track)
 - [2. Upstream's threads since rc.2](#2-upstreams-threads-since-rc2)
 - [3. Not tested yet](#3-not-tested-yet)
+- [4. 0.40.0-rc.3b: Settings in a DeX window](#4-0400-rc3b-settings-in-a-dex-window)
 
 ## In short
 
@@ -77,3 +78,21 @@ shoulder yet.
   pins and axles), but none has been printed.
 - The DevTerm enclosure and the cassette housing (the long MCP tests) on solidcore.
 - The Galaxy Z Fold (Adreno) on rc.3a.
+
+## 4. 0.40.0-rc.3b: Settings in a DeX window
+
+In a DeX window (not full screen) the window's title bar covered the app's own top bar, so File,
+Settings, the design tabs and Report a bug couldn't be reached. Two causes: the app hid all system
+bars, which in a window includes the title bar (DeX then draws it over the app and reports no
+height for it), and egui's root `Ui` covers the whole window even when the app says part of it is
+covered. The app now hides only the status and navigation bars, reads the title bar's height
+(`captionTop` in `SolidCraftActivity.java`), gives it to egui as a safe-area inset, and lays itself
+out in the rest (`apps/solidcraft-android/src/insets.rs`, `lib.rs`). Full screen has no title bar,
+so it looks as before.
+
+On the Galaxy Tab in a DeX window, 0.40.0-rc.3a (above) and 0.40.0-rc.3b (below), where the gear
+opens Settings:
+
+![0.40.0-rc.3a in a DeX window: the top bar is under the window's title bar](screenshots/android/dex-window-before-0400rc3b.jpg)
+
+![0.40.0-rc.3b in a DeX window: File, Settings and Report a bug below the title bar](screenshots/android/dex-window-after-0400rc3b.jpg)

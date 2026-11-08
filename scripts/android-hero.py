@@ -1,6 +1,6 @@
 """The README's hero image: the port next to upstream, with a screenshot of the latest device test.
 
-    python3 scripts/android-hero.py SCREENSHOT.png docs/screenshots/android/hero-port-vs-upstream.png 0.40.0-rc.3 0.40.0-rc.3a
+    python3 scripts/android-hero.py SCREENSHOT.png docs/screenshots/android/hero-port-vs-upstream.png 0.40.0-rc.3 0.40.0-rc.3b
 
 Needs Pillow. Edit the call-out and caption text below for each release's test."""
 import sys
