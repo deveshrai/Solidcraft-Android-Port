@@ -19,7 +19,6 @@ pub mod crash;
 pub mod easyprint;
 pub mod frames;
 pub mod fuzz;
-pub mod gear_profile;
 pub mod licences;
 pub mod occurrences;
 pub mod panels;
@@ -51,8 +50,8 @@ use solidcraft_doc::{Document, Model, ModelState};
 
 pub use cmd::settings::{MAX_PROFILE_NAME, profile_name};
 pub use cmd::{
-    Addition, CommandInfo, CommandSpec, GEAR_KEY, GEAR_TYPES, OpenSteps, addition, auto_operation, command_specs, dimension_roles, extrude_reach,
-    find_command, resolve_design_links, shown_scope, standard_view, stored_gear,
+    Addition, CommandInfo, CommandSpec, OpenSteps, addition, auto_operation, command_specs, dimension_roles, extrude_reach, find_command,
+    resolve_design_links, shown_scope, standard_view,
 };
 pub use solidcraft_doc as doc;
 pub use solidcraft_doc::Visibility;

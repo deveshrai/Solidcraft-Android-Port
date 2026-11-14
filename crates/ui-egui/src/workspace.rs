@@ -431,8 +431,6 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("occurrence.move", "Move"),
     ("parameters.change", "Parameters"),
     ("parameters.graph", "Param. Graph"),
-    ("gear.create", "Gear"),
-    ("gear.edit", "Edit Gear"),
     ("parts.fastener", "Fastener"),
     ("parts.library", "Parts"),
     ("parts.resize", "Resize Part"),

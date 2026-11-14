@@ -7078,10 +7078,6 @@ pub(crate) mod frame_member;
 mod surface;
 #[path = "eval_thread.rs"]
 mod thread;
-// SolidCraft (Android port): helical threads of any pitch, depth, angle and clearance.
-#[path = "eval_helical.rs"]
-mod helical;
-pub use helical::{GrooveSection, HelicalInputs, HelicalThread, helical_grooves, helical_thread_on};
 use thread::thread_on;
 pub use thread::{ThreadInfo, metric_thread_sizes, parse_metric_thread, suggested_thread, suggested_thread_in};
 
@@ -7594,7 +7590,6 @@ fn eval_feature(
             }
             Ok(())
         }
-        FeatureKind::Thread { helical: true, .. } | FeatureKind::Thread { pitch: Some(_), .. } => helical::eval(vals, f, st),
         FeatureKind::Thread { .. } => thread::eval(doc, vals, f, st, warning),
         FeatureKind::Shell { faces, thickness, body, direction, tangent_chain } => {
             let t = val(vals, thickness, Kind::Length)?;

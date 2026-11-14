@@ -272,8 +272,6 @@ crate::dialog_descriptor::dialog_descriptors! {
                 /// The picks used for the suggestion, so an unchanged dialog does no geometry work.
                 of: Vec<Sel>,
                 options: crate::dialogs_thread::Options,
-                /// SolidCraft (Android port): the custom and helical options.
-                helix: crate::dialogs_thread::HelixDraft,
             },
             /// A rib (one wall along open curves) or a web (a wall per curve).
             Rib {
@@ -413,8 +411,6 @@ crate::dialog_descriptor::dialog_descriptors! {
             Appearance(crate::dialogs_appearance::Ap),
             /// Contact sets, motion studies, exploded views, configurations (`dialogs_motion`).
             Motion(crate::dialogs_motion::Mo),
-            /// Gear and Edit Gear (`dialogs_gears`).
-            Gear(crate::dialogs_gears::Gr),
             /// Insert Part from the standard parts library (`dialogs_parts`).
             Part(crate::dialogs_parts::Pt),
             PartSize(crate::dialogs_part_size::Resize),
@@ -985,14 +981,7 @@ impl Dialog {
                 vec![SelInput::new("Body to split", BODIES, false), SelInput::new("Splitting tool", PLANES | FACES | AXES, false)],
             ),
             "solid.thread" => Dialog::new(
-                Kind::Thread {
-                    designation: String::new(),
-                    length: String::new(),
-                    suggested: None,
-                    of: Vec::new(),
-                    options: Default::default(),
-                    helix: Default::default(),
-                },
+                Kind::Thread { designation: String::new(), length: String::new(), suggested: None, of: Vec::new(), options: Default::default() },
                 crate::dialogs_thread::inputs(),
             ),
             "material.assign" => {
@@ -1135,7 +1124,6 @@ impl Dialog {
                     .or_else(|| crate::dialogs_frame::start(app, id))
                     .or_else(|| crate::dialogs_appearance::start(app, id))
                     .or_else(|| crate::dialogs_motion::start(app, id))
-                    .or_else(|| crate::dialogs_gears::start(app, id))
                     .or_else(|| crate::dialogs_parts::start(app, id))
                     .or_else(|| crate::dialogs_part_size::start(app, id))
                     .or_else(|| crate::sketch_text::start(app, id))
@@ -1382,13 +1370,8 @@ impl Dialog {
             Kind::Plastic(k) => return k.previews(),
             Kind::Frame(_) => return true,
             Kind::Part(_) | Kind::PartSize(_) | Kind::InsertDrawing(_) => return true,
-            // Web previews run synchronously; a helical gear's sweep can take seconds.
-            Kind::Gear(_) => return !cfg!(target_arch = "wasm32"),
             // Web previews run synchronously; a modelled thread can take seconds.
-            // SolidCraft (Android port): a custom thread is always modelled.
-            Kind::Thread { helix, .. } => {
-                return !cfg!(target_arch = "wasm32") && (helix.custom || self.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false));
-            }
+            Kind::Thread { .. } => return !cfg!(target_arch = "wasm32") && self.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false),
             _ => {}
         }
         matches!(
@@ -2637,13 +2620,6 @@ fn title(k: &Kind) -> &'static str {
         Kind::Frame(_) => "FRAME MEMBER",
         Kind::Appearance(_) => "APPEARANCE",
         Kind::Motion(k) => k.title(),
-        Kind::Gear(k) => {
-            if k.component.is_some() {
-                "EDIT GEAR"
-            } else {
-                "GEAR"
-            }
-        }
         Kind::Part(_) => "INSERT PART",
         Kind::PartSize(_) => "Change Part Size",
         Kind::Text(_) => "EDIT TEXT",
@@ -5755,30 +5731,13 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             need(0, "faces")?;
             ("solid.offset_face", with_single_body(json!({"faces": face_points(0)}), sels(d, 0)))
         }
-        Kind::Thread { designation, length, suggested, options, helix, .. } => {
+        Kind::Thread { designation, length, suggested, options, .. } => {
             need(0, "a cylindrical face")?;
             let mut p = json!({"face": face_points(0).into_iter().next().unwrap_or(Value::Null)});
-            if !helix.custom && !designation.trim().is_empty() && suggested.as_deref() != Some(designation.as_str()) {
+            if !designation.trim().is_empty() && suggested.as_deref() != Some(designation.as_str()) {
                 p["designation"] = json!(designation.trim());
             }
-            // SolidCraft (Android port): a custom or helical thread takes the port's parameters.
-            let modeled = d.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false);
-            if helix.is_helical(modeled, options.form) {
-                if helix.custom && helix.pitch.trim().is_empty() {
-                    return Err("enter the custom thread's pitch".into());
-                }
-                // The readouts' refusal holds OK back at once, before any preview has run.
-                if let Some((_, Err(why))) = &helix.summary {
-                    return Err(why.clone());
-                }
-                put(&mut p, &[("length", length)]);
-                if options.hand != solidcraft_engine::doc::thread_forms::ThreadHand::Right {
-                    p["hand"] = json!(options.hand);
-                }
-                helix.params(modeled, options.form, &mut p);
-            } else {
-                crate::dialogs_thread::put_params(&mut p, length, options, &d.inputs);
-            }
+            crate::dialogs_thread::put_params(&mut p, length, options, &d.inputs);
             ("solid.thread", p)
         }
         Kind::Material { index, editor } => {
@@ -6044,7 +6003,6 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
         Kind::Frame(k) => return crate::dialogs_frame::commands(app, k, &d.inputs, &d.extra),
         Kind::Appearance(k) => return Ok(crate::dialogs_appearance::commands(k, &d.inputs)),
         Kind::Motion(k) => return crate::dialogs_motion::commands(app, k, &d.inputs),
-        Kind::Gear(k) => return crate::dialogs_gears::commands(k),
         Kind::Part(k) => return crate::dialogs_parts::commands(app, k, &d.inputs),
         Kind::PartSize(k) => return crate::dialogs_part_size::commands(app, k),
         Kind::Text(k) => return crate::sketch_text::commands(app, k),

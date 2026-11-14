@@ -142,7 +142,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("solid.thread", "Thread", thread)
         .at("SOLID", "CREATE")
         .icon("thread")
-        .params("face: [x,y,z] on a cylindrical face; form?: metric|trapezoidal|acme|buttress|buttress_asme|bspp|rp|bspt|npt (default: the one `designation` names, else metric; square is refused: no current standard defines it); designation?: the size, as its standard writes it: metric \"M8\", \"M8x1\", \"M16xPh3P1.5\" (ISO 68-1, ISO 261, ISO 965-1); trapezoidal \"Tr20x4\", \"Tr40x14(P7)\" (ISO 2904, ISO 2903); buttress \"S20x4\", \"S40x14(P7)\" (DIN 513, 3°/30°); acme \"1/2-10 ACME\" (ASME B1.5); buttress_asme \"2.5-8 BUTT\" (ASME B1.9, 7°/45°, basic profile; no size table); bspp \"G 1/2\" (ISO 228-1, 55° parallel); rp \"Rp 1/2\" (ISO 7-1's parallel internal thread, 55°, an R screws into it; internal only); bspt \"R 1/2\" external, \"Rc 1/2\" internal (ISO 7-1, 55°, taper 1 in 16); npt \"1/2-14 NPT\" (ASME B1.20.1, 60°, taper 1 in 16) — a taper thread starts at a free end (the pipe end or the hole mouth) with its standard diameter there, and an external one runs its standard length unless `length` or `up_to` says otherwise (default: the standard size that fits the face, a shaft its major diameter, a hole its nominal diameter (a 12 mm hole is M12) or else the size whose tap drill it is); hand?: right|left|both (default right; both: a right- and a left-handed groove crossing); old_auto_size?: bool (an automatic size keeps the rule of designs saved before a hole was sized by its nominal diameter: a 12 mm hole is M14; set on those threads, keeps them as they were when edited); steep_flank?: start|end (buttress only, default end: the steep flank of the screw's teeth faces the thread's end, the way its axis points); starts?: 1..8 (lead = starts x pitch: that many grooves, each a turn's starts-th further round; a designation that gives the lead gives the starts); ease_out?: expr|standard|short (modelled threads: the inner end, away from where the thread starts, fades out over this length (shorter than a turn too), its section moving out of the material as it turns; standard 2.5 P, short 1.25 P per ISO 3508; it lies past the full-form length, up to a shoulder's clearance; at a free end, inside the face; without it the groove stops square there, ending in its own profile; the start never fades: it runs off its free end, plain or chamfered (`tip`)); tip?: none|start|both (modelled external threads: start chamfers the end the thread starts from, which must be free, both each free end the thread reaches, after the groove is cut, ISO 4753's chamfered end, the last teeth tapering into the cone; chamfer_angle?: angle expr to the axis, default 45 deg; chamfer_depth?: expr, radial from the major diameter, default for a metric thread down to the external minor diameter d3 = d - 1.226869 P (ISO 724), the largest ISO 4753 allows; other forms give it); extent?: full|length|up_to (default: length when `length` is given, up_to when `up_to` is, else full: the whole face); length?: expr (from the end the thread starts at); up_to?: [x,y,z] (a point, such as on a shoulder face: the thread runs to its place along the axis) | plane name or {origin, normal} (to where the plane crosses the axis); from?: [x,y,z] near the end of the face the thread starts at (default: the face's only free end, the one with no material past it; else the end the `face` point lies within a third of the face of; a pick in the middle of a face whose ends are alike is refused); modeled?: bool (default false). Cosmetic: the model is unchanged, model.threads lists it. Modeled: cuts the thread profile into the body: past a free end the groove runs out a pitch into the air (or through a chamfer); at a shoulder, a head or a blind hole's bottom it stops with its section clear of it, never cutting into it; a hole as wide as the thread or wider is narrowed to the thread's minor diameter first, and the reply's warning says so; a shaft thicker than the thread is refused with the size to make it, never turned down helical?: bool: cut the port's helical thread instead, a groove of any pitch, depth, flank angle and clearance between two offsets from the face's ends (an exact screw sweep; the face must be the ISO major diameter for a shaft, any hole up to it; with helical: designation is ISO metric, hand right|left|both, and form, starts, ease_out, tip, from, up_to and steep_flank are not taken). pitch?: expr: a custom helical thread of this pitch on the face as it is, whatever its diameter (no designation). Helical only: depth?: expr (default: the basic depth, 5/16 pitch / tan(angle/2)); angle?: expr (included flank angle, default 60 deg); clearance?: expr (flanks and root moved this far into the material, default 0); start_offset?, end_offset?: expr (the groove starts this far after the threaded length's start, nearest the picked point, and ends this far before its end; default half a pitch; negative, to minus one pitch, runs the groove off a free end into the air, so a nut or a bolt's tip has no partial turn; not 0); start_angle?: expr (the groove turned about the face's axis, default 0 deg: sets its phase against a mating thread; turning by θ moves its crests θ/360 of a pitch along the axis); left_handed: true or handedness: left (the port's older names) mean hand: left"),
+        .params("face: [x,y,z] on a cylindrical face; form?: metric|trapezoidal|acme|buttress|buttress_asme|bspp|rp|bspt|npt (default: the one `designation` names, else metric; square is refused: no current standard defines it); designation?: the size, as its standard writes it: metric \"M8\", \"M8x1\", \"M16xPh3P1.5\" (ISO 68-1, ISO 261, ISO 965-1); trapezoidal \"Tr20x4\", \"Tr40x14(P7)\" (ISO 2904, ISO 2903); buttress \"S20x4\", \"S40x14(P7)\" (DIN 513, 3°/30°); acme \"1/2-10 ACME\" (ASME B1.5); buttress_asme \"2.5-8 BUTT\" (ASME B1.9, 7°/45°, basic profile; no size table); bspp \"G 1/2\" (ISO 228-1, 55° parallel); rp \"Rp 1/2\" (ISO 7-1's parallel internal thread, 55°, an R screws into it; internal only); bspt \"R 1/2\" external, \"Rc 1/2\" internal (ISO 7-1, 55°, taper 1 in 16); npt \"1/2-14 NPT\" (ASME B1.20.1, 60°, taper 1 in 16) — a taper thread starts at a free end (the pipe end or the hole mouth) with its standard diameter there, and an external one runs its standard length unless `length` or `up_to` says otherwise (default: the standard size that fits the face, a shaft its major diameter, a hole its nominal diameter (a 12 mm hole is M12) or else the size whose tap drill it is); hand?: right|left|both (default right; both: a right- and a left-handed groove crossing); old_auto_size?: bool (an automatic size keeps the rule of designs saved before a hole was sized by its nominal diameter: a 12 mm hole is M14; set on those threads, keeps them as they were when edited); steep_flank?: start|end (buttress only, default end: the steep flank of the screw's teeth faces the thread's end, the way its axis points); starts?: 1..8 (lead = starts x pitch: that many grooves, each a turn's starts-th further round; a designation that gives the lead gives the starts); ease_out?: expr|standard|short (modelled threads: the inner end, away from where the thread starts, fades out over this length (shorter than a turn too), its section moving out of the material as it turns; standard 2.5 P, short 1.25 P per ISO 3508; it lies past the full-form length, up to a shoulder's clearance; at a free end, inside the face; without it the groove stops square there, ending in its own profile; the start never fades: it runs off its free end, plain or chamfered (`tip`)); tip?: none|start|both (modelled external threads: start chamfers the end the thread starts from, which must be free, both each free end the thread reaches, after the groove is cut, ISO 4753's chamfered end, the last teeth tapering into the cone; chamfer_angle?: angle expr to the axis, default 45 deg; chamfer_depth?: expr, radial from the major diameter, default for a metric thread down to the external minor diameter d3 = d - 1.226869 P (ISO 724), the largest ISO 4753 allows; other forms give it); extent?: full|length|up_to (default: length when `length` is given, up_to when `up_to` is, else full: the whole face); length?: expr (from the end the thread starts at); up_to?: [x,y,z] (a point, such as on a shoulder face: the thread runs to its place along the axis) | plane name or {origin, normal} (to where the plane crosses the axis); from?: [x,y,z] near the end of the face the thread starts at (default: the face's only free end, the one with no material past it; else the end the `face` point lies within a third of the face of; a pick in the middle of a face whose ends are alike is refused); modeled?: bool (default false). Cosmetic: the model is unchanged, model.threads lists it. Modeled: cuts the thread profile into the body: past a free end the groove runs out a pitch into the air (or through a chamfer); at a shoulder, a head or a blind hole's bottom it stops with its section clear of it, never cutting into it; a hole as wide as the thread or wider is narrowed to the thread's minor diameter first, and the reply's warning says so; a shaft thicker than the thread is refused with the size to make it, never turned down"),
     CommandSpec::new("solid.shell", "Shell", shell)
         .at("SOLID", "MODIFY")
         .icon("shell")
@@ -3451,46 +3451,8 @@ fn thread(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => Some(Position(vec3(v).ok_or_else(|| bad(cmd, "`from` must be a point [x, y, z] near the end the thread starts at"))?)),
     };
     let modeled = p.get("modeled").and_then(Value::as_bool).unwrap_or(false);
-    // SolidCraft (Android port): the helical thread's own parameters (`eval_helical.rs`).
-    let pitch = angled("pitch", Kind::Length)?;
-    let depth = angled("depth", Kind::Length)?;
-    let angle = angled("angle", Kind::Angle)?;
-    let clearance = angled("clearance", Kind::Length)?;
-    let start_offset = angled("start_offset", Kind::Length)?;
-    let end_offset = angled("end_offset", Kind::Length)?;
-    let start_angle = angled("start_angle", Kind::Angle)?;
-    // `left_handed: true` and `handedness: left`, the port's names before upstream's `hand`.
-    let older = p.get("left_handed").and_then(Value::as_bool).unwrap_or(false) || str_(p, "handedness") == Some("left");
-    if older && p.get("hand").is_some() && hand != ThreadHand::Left {
-        return Err(bad(cmd, "`left_handed: true` or `handedness: left` and `hand` disagree: give `hand`"));
-    }
-    let hand = if older { ThreadHand::Left } else { hand };
-    // A custom pitch is always helical, and helical is always modelled.
-    let helical = p.get("helical").and_then(Value::as_bool).unwrap_or(false) || pitch.is_some();
-    let modeled = helical || modeled;
-    if !helical
-        && (depth.is_some() || angle.is_some() || clearance.is_some() || start_offset.is_some() || end_offset.is_some() || start_angle.is_some())
-    {
-        return Err(bad(cmd, "depth, angle, clearance, offsets and the start angle are for helical threads: set `helical: true` or a `pitch`"));
-    }
-    if helical
-        && (form != ThreadForm::Metric
-            || starts != 1
-            || ease_out.is_some()
-            || tip != ThreadTip::None
-            || from.is_some()
-            || up_to.is_some()
-            || p.get("steep_flank").is_some())
-    {
-        return Err(bad(
-            cmd,
-            "a helical thread is ISO metric or a custom pitch, one start: form, starts, ease_out, tip, from, up_to and steep_flank are for the standard modelled thread (leave out `helical` and `pitch`)",
-        ));
-    }
-    // The coarse metric range bounds only a metric thread with no designation given; a custom
-    // pitch threads any diameter.
+    // The coarse metric range bounds only a metric thread with no designation given.
     if designation.is_none()
-        && pitch.is_none()
         && form == ThreadForm::Metric
         && let Some(msg) = beyond_coarse_range(&s.model.state(), face)
     {
@@ -3499,7 +3461,7 @@ fn thread(s: &mut Session, p: &Value) -> Result<Value> {
     let designation_is_none = designation.is_none();
     let kind = FeatureKind::Thread {
         face: FacePick(face),
-        designation: if pitch.is_some() { None } else { designation },
+        designation,
         length,
         modeled,
         from,
@@ -3514,14 +3476,6 @@ fn thread(s: &mut Session, p: &Value) -> Result<Value> {
         steep_flank,
         // Only a thread saved before holes were sized by nominal diameter, edited by `timeline.redefine`.
         old_auto_size: designation_is_none && bool_(p, "old_auto_size").unwrap_or(false),
-        helical,
-        pitch,
-        depth,
-        angle,
-        clearance,
-        start_offset,
-        end_offset,
-        start_angle,
     };
     let v = add_feature(s, p, kind)?;
     let st = s.model.state();

@@ -1793,8 +1793,6 @@ fn component_rows_inner(
     if r.double {
         if app.session.doc.parts.contains_key(&id) {
             crate::dialogs_part_size::open(app, id);
-        } else if crate::dialogs_gears::is_gear(app, id) {
-            crate::dialogs_gears::open(app, id);
         } else {
             crate::edit_in_place::double_click_component(app, json!({ "component": id }));
         }
@@ -1961,19 +1959,15 @@ fn occurrence_rows_inner(
     if r.eye {
         let _ = app.run("browser.visibility", json!({"visible": app.session.occurrence_hidden(path), "paths": [path]}));
     }
-    let gear = crate::dialogs_gears::is_gear(app, placement.component);
     let takes_components = app.dialog.as_ref().is_some_and(|d| d.takes_components());
     let params = json!({"component": placement.component, "occurrence": placement.occurrence, "path": path});
     if r.radio {
         let _ = app.run("component.activate", params);
-    } else if r.double && !takes_components && !app.session.doc.parts.contains_key(&placement.component) && !gear {
+    } else if r.double && !takes_components && !app.session.doc.parts.contains_key(&placement.component) {
         crate::edit_in_place::double_click_component(app, params);
     }
     if r.double && !takes_components && app.session.doc.parts.contains_key(&placement.component) {
         crate::dialogs_part_size::open(app, placement.component);
-    }
-    if r.double && !takes_components && gear {
-        crate::dialogs_gears::open(app, placement.component);
     }
     if r.clicked && (takes_components || crate::dialogs_move::picks_components(app)) {
         if let Some(mut d) = app.dialog.take() {

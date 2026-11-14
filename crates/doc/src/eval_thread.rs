@@ -775,8 +775,6 @@ pub(super) fn eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, 
         chamfer_depth,
         steep_flank,
         old_auto_size,
-        // SolidCraft (Android port): the helical thread's fields (`eval_helical.rs`).
-        ..
     } = &f.kind
     else {
         return Err(DocError::Invalid("not a thread".into()));

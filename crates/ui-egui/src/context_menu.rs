@@ -807,9 +807,6 @@ fn viewport_items(app: &SolveApp) -> Vec<Item> {
         {
             v.push(cmd(app, "parts.resize", "Change Part Size").with(json!({"component":component})));
         }
-        if let Some(component) = crate::dialogs_gears::selected_gear(app) {
-            v.push(cmd(app, "gear.edit", "Edit Gear").with(json!({"component":component})));
-        }
         v.push(Item::sep());
         v.push(act("ui.clear", "Clear Selection", "close").key("Esc"));
     }
@@ -850,16 +847,6 @@ fn body_items(app: &SolveApp, bodies: &[String], browser: bool) -> Vec<Item> {
         let b = bodies.first().cloned().unwrap_or_default();
         if let Some(component) = crate::dialogs_part_size::component_for_bodies(app, bodies) {
             v.push(cmd(app, "parts.resize", "Change Part Size").with(json!({"component":component})));
-        }
-        let st = app.session.world_state().ok();
-        if let Some(component) = st
-            .iter()
-            .flat_map(|st| st.bodies.iter())
-            .find(|x| x.name == b)
-            .map(|x| app.session.doc.model_body_component(x))
-            .filter(|c| crate::dialogs_gears::is_gear(app, *c))
-        {
-            v.push(cmd(app, "gear.edit", "Edit Gear").with(json!({"component":component})));
         }
         v.push(Item::sep());
         if !browser {
@@ -1130,9 +1117,6 @@ fn component_items(app: &SolveApp, id: u64) -> Vec<Item> {
     let mut v = Vec::new();
     if doc.parts.contains_key(&id) {
         v.push(cmd(app, "parts.resize", "Edit").with(json!({"component":id})));
-    }
-    if crate::dialogs_gears::is_gear(app, id) {
-        v.push(cmd(app, "gear.edit", "Edit Gear").with(json!({"component":id})));
     }
     // What a double-click on the row does comes first.
     let activate = act("ui.activate", "Activate", "component").with(json!({ "component": id })).on(!active);
@@ -1560,13 +1544,6 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
     let p = item.params.clone().unwrap_or(Value::Null);
     let bodies = strs(&p, "bodies");
     match item.id.as_str() {
-        "gear.edit" => {
-            if let Some(component) = id_of(&p, "component") {
-                crate::dialogs_gears::open(app, component);
-            } else {
-                app.start("gear.edit");
-            }
-        }
         "appearance.library" if crate::render_workspace::active(app) => {
             app.start("appearance.library");
         }

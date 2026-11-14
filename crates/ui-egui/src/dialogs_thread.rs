@@ -397,221 +397,6 @@ fn pick<T: Copy + PartialEq>(ui: &mut egui::Ui, label: &str, id: &str, value: &m
     }
 }
 
-/// SolidCraft (Android port): the custom and helical options of a Thread dialog: a custom
-/// thread (any diameter, its own pitch), or the helical options of a modelled ISO metric one
-/// (clearance, offsets, start angle), and the groove's dimensions as typed. Empty fields take
-/// the engine's defaults (shown as hints).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct HelixDraft {
-    /// Form: Custom rather than a standard form. Always helical.
-    pub custom: bool,
-    /// A modelled ISO metric thread cut as the port's helical thread.
-    pub helical: bool,
-    pub pitch: String,
-    pub depth: String,
-    pub angle: String,
-    pub clearance: String,
-    pub start_offset: String,
-    pub end_offset: String,
-    /// The groove turned about the axis, to phase it against a mating thread.
-    pub start_angle: String,
-    /// The last summary worked out, and what it was worked out from.
-    pub summary: Option<(String, Result<[String; 3], String>)>,
-}
-
-impl HelixDraft {
-    /// Whether the thread is the port's helical thread.
-    pub fn is_helical(&self, modeled: bool, form: ThreadForm) -> bool {
-        self.custom || (modeled && self.helical && form == ThreadForm::Metric)
-    }
-
-    /// The command parameters these options add (none for a standard thread).
-    pub fn params(&self, modeled: bool, form: ThreadForm, p: &mut Value) {
-        if !self.is_helical(modeled, form) {
-            return;
-        }
-        if self.custom
-            && let Some(o) = p.as_object_mut()
-        {
-            o.remove("designation");
-        }
-        p["helical"] = json!(true);
-        let fields = [
-            ("pitch", &self.pitch, self.custom),
-            ("depth", &self.depth, true),
-            ("angle", &self.angle, self.custom),
-            ("clearance", &self.clearance, true),
-            ("start_offset", &self.start_offset, true),
-            ("end_offset", &self.end_offset, true),
-            ("start_angle", &self.start_angle, true),
-        ];
-        for (key, value, used) in fields {
-            if used && !value.trim().is_empty() {
-                p[key] = json!(value.trim());
-            }
-        }
-    }
-
-    /// The draft of a saved feature's options.
-    fn restore(kind: &FeatureKind) -> Self {
-        let FeatureKind::Thread { helical, pitch, depth, angle, clearance, start_offset, end_offset, start_angle, .. } = kind else {
-            return HelixDraft::default();
-        };
-        let s = |v: &Option<Expr>| v.as_ref().map(expr).unwrap_or_default();
-        HelixDraft {
-            custom: pitch.is_some(),
-            helical: *helical || pitch.is_some(),
-            pitch: s(pitch),
-            depth: s(depth),
-            angle: s(angle),
-            clearance: s(clearance),
-            start_offset: s(start_offset),
-            end_offset: s(end_offset),
-            start_angle: s(start_angle),
-            summary: None,
-        }
-    }
-
-    /// What the thread comes to on the picked face: turns and groove size, or why it won't fit.
-    /// Worked out again only when an input changes.
-    fn summary(
-        &mut self,
-        app: &crate::SolveApp,
-        at: Option<solidcore_record::Vec3>,
-        designation: &str,
-        length: &str,
-        hand: ThreadHand,
-    ) -> Option<Result<[String; 3], String>> {
-        let at = at?;
-        let key = format!(
-            "{at:?}|{designation}|{length}|{hand:?}|{self:?}",
-            self = (&self.pitch, &self.depth, &self.angle, &self.clearance, &self.start_offset, &self.end_offset, &self.start_angle, self.custom)
-        );
-        if let Some((k, v)) = &self.summary
-            && *k == key
-        {
-            return Some(v.clone());
-        }
-        let doc = &app.session.doc;
-        let length_kind = solidcraft_engine::doc::expr::Kind::Length;
-        let value = |text: &str, kind| -> Result<Option<f64>, String> {
-            let text = text.trim();
-            if text.is_empty() { Ok(None) } else { doc.eval(text, kind).map(Some).map_err(|e| e.to_string()) }
-        };
-        let result = (|| -> Result<[String; 3], String> {
-            let h = solidcraft_engine::doc::HelicalInputs {
-                designation: (!self.custom && !designation.trim().is_empty()).then_some(designation.trim()),
-                length: value(length, length_kind)?,
-                pitch: if self.custom { Some(value(&self.pitch, length_kind)?.ok_or("enter a pitch")?) } else { None },
-                depth: value(&self.depth, length_kind)?,
-                angle: if self.custom { value(&self.angle, solidcraft_engine::doc::expr::Kind::Angle)? } else { None },
-                clearance: value(&self.clearance, length_kind)?,
-                start_offset: value(&self.start_offset, length_kind)?,
-                end_offset: value(&self.end_offset, length_kind)?,
-                left_handed: hand == ThreadHand::Left,
-                start_angle: value(&self.start_angle, solidcraft_engine::doc::expr::Kind::Angle)?,
-            };
-            let st = app.session.world_state().map_err(|e| e.to_string())?;
-            let (_, cyl, t) = solidcraft_engine::doc::helical_thread_on(&st, at, &h).map_err(|e| e.to_string())?;
-            let g = t.section().map_err(|e| e.to_string())?;
-            let turns = t.turns().map_err(|e| e.to_string())?;
-            if turns < 0.25 {
-                return Err("too short for a thread at this pitch: shorten the offsets or use a finer pitch".into());
-            }
-            let side = if cyl.internal { "internal" } else { "external" };
-            Ok([format!("{turns:.1} ({side})"), format!("{:.2} × {:.2} mm", g.mouth, g.deep), format!("{:.2} mm", t.pitch - g.mouth)])
-        })();
-        self.summary = Some((key, result.clone()));
-        Some(result)
-    }
-}
-
-/// SolidCraft (Android port): the helical thread's section: clearance, where the thread starts
-/// and ends, and what it comes to. Returns Enter pressed.
-pub(crate) fn helical_rows(
-    ui: &mut egui::Ui,
-    app: &crate::SolveApp,
-    helix: &mut HelixDraft,
-    at: Option<solidcore_record::Vec3>,
-    designation: &str,
-    length: &str,
-    hand: ThreadHand,
-) -> bool {
-    let mut enter = false;
-    crate::ui_kit::section(ui, "thread_helical", "Helical B-rep", true, |ui| {
-        if !helix.custom {
-            enter |= hint_row(ui, "Thread depth", &mut helix.depth, tr("auto"));
-        }
-        enter |= hint_row(ui, "Clearance", &mut helix.clearance, "0 mm");
-        enter |= hint_row(ui, "Start offset", &mut helix.start_offset, tr("half a pitch"));
-        enter |= hint_row(ui, "End offset", &mut helix.end_offset, tr("half a pitch"));
-        // The phase against a mating thread.
-        enter |= hint_row(ui, "Start angle", &mut helix.start_angle, "0°");
-        match helix.summary(app, at, designation, length, hand) {
-            Some(Ok([turns, groove, crest])) => {
-                form_row(ui, "Turns", |ui| ui.label(turns));
-                form_row(ui, "Groove", |ui| ui.label(groove).on_hover_text(tr("width at the face × depth")));
-                form_row(ui, "Crest", |ui| ui.label(crest).on_hover_text(tr("the flat left on the face between turns")));
-            }
-            Some(Err(why)) => {
-                // The whole reason, wrapped: a touch screen has no hover to show a cut-off one.
-                let why = why.strip_prefix("invalid input: ").unwrap_or(&why).to_string();
-                let t = crate::theme::Tokens::get();
-                ui.add(egui::Label::new(egui::RichText::new(why).size(t.font_small).color(t.warning)).wrap());
-            }
-            None => {}
-        }
-    });
-    enter
-}
-
-/// SolidCraft (Android port): the Form choice with Custom after the standard forms. True when
-/// the form changed.
-fn form_or_custom(ui: &mut egui::Ui, form: &mut ThreadForm, custom: &mut bool) -> bool {
-    let mut labels: Vec<&str> = FORMS.iter().map(|c| c.0).collect();
-    labels.push("Custom");
-    let before = if *custom { FORMS.len() } else { FORMS.iter().position(|c| c.1 == *form).unwrap_or(0) };
-    let mut index = before;
-    choice_row(ui, "Form", "thread_form", &mut index, &labels);
-    *custom = index == FORMS.len();
-    if let Some(c) = FORMS.get(index) {
-        *form = c.1;
-    }
-    index != before
-}
-
-/// SolidCraft (Android port): a custom thread's rows: its hand, length and groove. Returns
-/// Enter pressed.
-fn custom_rows(ui: &mut egui::Ui, length: &mut String, o: &mut Options, helix: &mut HelixDraft) -> bool {
-    pick(ui, "Hand", "thread_hand", &mut o.hand, HANDS);
-    length_rows(ui, length) | groove_rows(ui, helix)
-}
-
-/// SolidCraft (Android port): the whole face, or a length from the end nearest the pick.
-fn length_rows(ui: &mut egui::Ui, length: &mut String) -> bool {
-    let mut full = length.trim().is_empty();
-    let was = full;
-    crate::ui_kit::section(ui, "thread_options", "Options", true, |ui| {
-        crate::ui_kit::checkbox_grid(ui, &mut [("Full Length", &mut full)], 2);
-    });
-    if full {
-        length.clear();
-        return false;
-    }
-    if was {
-        *length = "10 mm".into();
-    }
-    expr_row(ui, "Length", length)
-}
-
-fn groove_rows(ui: &mut egui::Ui, helix: &mut HelixDraft) -> bool {
-    let mut enter = false;
-    enter |= hint_row(ui, "Pitch", &mut helix.pitch, "e.g. 1.25 mm");
-    enter |= hint_row(ui, "Thread depth", &mut helix.depth, tr("auto"));
-    enter |= hint_row(ui, "Thread angle", &mut helix.angle, "60 deg");
-    enter
-}
-
 /// The thread's rows. Returns (Enter pressed, automatic sizing requested). The picks are the
 /// caller's: [`sync_inputs`] adds or removes them by the options.
 pub(crate) fn rows(
@@ -621,16 +406,11 @@ pub(crate) fn rows(
     length: &mut String,
     o: &mut Options,
     modeled: &mut bool,
-    helix: &mut HelixDraft,
 ) -> (bool, bool) {
     let mut enter = false;
     let mut reset = false;
     let mut form = o.form;
-    // SolidCraft (Android port): Custom ends the Form list; its rows are the port's own.
-    form_or_custom(ui, &mut form, &mut helix.custom);
-    if helix.custom {
-        return (custom_rows(ui, length, o, helix), false);
-    }
+    pick(ui, "Form", "thread_form", &mut form, FORMS);
     if form != o.form {
         reset |= change_form(designation, suggested, o.form, form);
         o.form = form;
@@ -642,10 +422,6 @@ pub(crate) fn rows(
     crate::ui_kit::section(ui, "thread_options", "Options", true, |ui| {
         crate::ui_kit::checkbox_grid(ui, &mut [("Modeled", modeled)], 2);
         ui.add_enabled_ui(!designation.trim().is_empty(), |ui| crate::ui_kit::checkbox_grid(ui, &mut [("Automatic size", &mut automatic)], 2));
-        // SolidCraft (Android port): a modelled ISO metric thread cut as the port's helical one.
-        if *modeled && f == ThreadForm::Metric {
-            crate::ui_kit::checkbox_grid(ui, &mut [("Helical B-rep", &mut helix.helical)], 2);
-        }
     });
     reset |= automatic && !before;
     if automatic != before {
@@ -668,13 +444,6 @@ pub(crate) fn rows(
         *suggested = None;
     }
 
-    // SolidCraft (Android port): the helical thread's hand and length; it takes no starts,
-    // extent or ends.
-    if helix.is_helical(*modeled, f) {
-        pick(ui, "Hand", "thread_hand", &mut o.hand, HANDS);
-        enter |= length_rows(ui, length);
-        return (enter, reset);
-    }
     if is_pipe(f) {
         // A pipe thread has one start and turns one way.
         o.starts = 1;
@@ -884,9 +653,8 @@ pub(crate) fn reopen(d: &mut Dialog, s: &Session, kind: &FeatureKind) {
         chamfer_angle,
         chamfer_depth,
         steep_flank,
-        // Kept by the edit itself (`timeline.redefine`), not a dialog option; the helical
-        // thread's (SolidCraft, Android port) in `HelixDraft::restore`.
-        ..
+        // Kept by the edit itself (`timeline.redefine`), not a dialog option.
+        old_auto_size: _,
     } = kind
     else {
         return;
@@ -941,7 +709,6 @@ pub(crate) fn reopen(d: &mut Dialog, s: &Session, kind: &FeatureKind) {
         suggested: None,
         of: Vec::new(),
         options,
-        helix: HelixDraft::restore(kind),
     };
 }
 
@@ -1469,64 +1236,5 @@ mod contribution_tests {
                 }
             }
         }
-    }
-
-    /// SolidCraft (Android port): the Custom form: a pitch on the shaft as it is, with clearance and offsets, reaches the
-    /// engine as a helical thread, shows what it comes to, and reopens from the timeline with
-    /// the same options.
-    #[test]
-    fn custom_helical_thread_from_the_dialog_and_back() {
-        let mut h = crate::scenario::Harness::new();
-        h.app.home.open = false;
-        h.app.run("solid.cylinder", json!({"radius": 5.5, "height": 20, "body_name": "Shaft"})).unwrap();
-        h.app.session.selection = vec![solidcraft_engine::Sel::Face { body: "Shaft".into(), index: 1, point: Vec3::new(5.5, 0.0, 10.0) }];
-        let mut d = Dialog::for_command(&h.app, "solid.thread").unwrap();
-        if let Some(i) = d.inputs.first_mut() {
-            i.items = h.app.session.selection.clone();
-        }
-        h.app.dialog = Some(d);
-        h.frames(3);
-        {
-            let Some(Kind::Thread { helix, .. }) = h.app.dialog.as_mut().map(|d| &mut d.kind) else { panic!("thread") };
-            helix.custom = true;
-            helix.pitch = "1.5 mm".into();
-            helix.clearance = "0.1 mm".into();
-            helix.end_offset = "3 mm".into();
-            helix.start_angle = "45 deg".into();
-        }
-        h.frames(3);
-        for label in ["Pitch", "Thread depth", "Thread angle", "Clearance", "Start offset", "End offset", "Start angle"] {
-            assert!(crate::scenario::rect_of(&format!("dialog:row:{label}")).is_some(), "{label}");
-        }
-        let Some(Kind::Thread { helix, .. }) = h.app.dialog.as_ref().map(|d| &d.kind) else { panic!("thread") };
-        let summary = helix.summary.as_ref().map(|(_, r)| r.clone());
-        assert!(
-            matches!(&summary, Some(Ok([turns, groove, crest])) if turns.contains("external") && groove.contains('×') && crest.ends_with("mm")),
-            "{summary:?}"
-        );
-        // Too deep for the pitch: the reason is shown in full, and the dialog cannot apply.
-        if let Some(Kind::Thread { helix, .. }) = h.app.dialog.as_mut().map(|d| &mut d.kind) {
-            helix.depth = "3 mm".into();
-        }
-        h.frames(3);
-        let Some(Kind::Thread { helix, .. }) = h.app.dialog.as_ref().map(|d| &d.kind) else { panic!("thread") };
-        assert!(matches!(&helix.summary, Some((_, Err(why))) if why.contains("deep")), "{:?}", helix.summary);
-        assert_eq!(crate::scenario::count_of("dialog:ok:enabled"), Some(0.0));
-        if let Some(Kind::Thread { helix, .. }) = h.app.dialog.as_mut().map(|d| &mut d.kind) {
-            helix.depth.clear();
-        }
-        h.frames(3);
-        let commands = apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
-        let p = &commands[0].1;
-        assert_eq!((p["pitch"].as_str(), p["helical"].as_bool(), p.get("designation")), (Some("1.5 mm"), Some(true), None), "{p}");
-        assert_eq!(p["start_angle"].as_str(), Some("45 deg"), "{p}");
-        let id = h.app.run(&commands[0].0, p.clone()).unwrap()["feature"].as_u64().unwrap();
-        h.app.dialog = None;
-        let d = crate::dialogs::for_feature(&h.app, id, None).unwrap();
-        let Kind::Thread { helix, .. } = &d.kind else { panic!("thread") };
-        assert!(
-            helix.custom && helix.pitch == "1.5 mm" && helix.clearance == "0.1 mm" && helix.end_offset == "3 mm" && helix.start_angle == "45 deg",
-            "{helix:?}"
-        );
     }
 }

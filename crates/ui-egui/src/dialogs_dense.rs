@@ -14,7 +14,6 @@ pub(super) fn command(kind: &Kind) -> Option<&'static str> {
             crate::dialogs_motion::Mo::Explode { .. } => "explode.create",
             crate::dialogs_motion::Mo::Configurations { .. } => "config.table",
         }),
-        Kind::Gear(k) => Some(if k.component.is_some() { "gear.edit" } else { "gear.create" }),
         Kind::Part(_) => Some("parts.insert"),
         Kind::PartSize(_) => Some("parts.resize"),
         Kind::SaveMesh(k) => Some(crate::dialogs_save_mesh::command_id(k)),
@@ -391,7 +390,6 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
         Kind::Material { index, editor } => crate::material_editor::rows(app, ui, index, editor),
         Kind::Appearance(k) => enter |= crate::dialogs_appearance::rows(app, ui, k, &mut d.inputs),
         Kind::Motion(k) => enter |= crate::dialogs_motion::rows(app, ui, k, &mut d.inputs),
-        Kind::Gear(k) => enter |= crate::dialogs_gears::rows(app, ui, k),
         Kind::Part(k) => enter |= crate::dialogs_parts::rows(app, ui, k, &d.inputs),
         Kind::PartSize(k) => enter |= crate::dialogs_part_size::rows(app, ui, k),
         Kind::SaveMesh(k) => enter |= crate::dialogs_save_mesh::rows(app, ui, k, &mut d.inputs),
@@ -1018,10 +1016,10 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
         Kind::OffsetFaces { distance } => {
             enter |= expr_row(ui, "Distance", distance);
         }
-        Kind::Thread { designation, length, suggested, of, options, helix } => {
+        Kind::Thread { designation, length, suggested, of, options } => {
             let mut modeled = d.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false);
             let before = modeled;
-            let (submitted, reset) = crate::dialogs_thread::rows(ui, designation, suggested, length, options, &mut modeled, helix);
+            let (submitted, reset) = crate::dialogs_thread::rows(ui, designation, suggested, length, options, &mut modeled);
             if modeled != before {
                 d.extra.insert("modeled".into(), json!(modeled));
             }
@@ -1030,14 +1028,6 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
                 of.clear();
             }
             crate::dialogs_thread::sync_inputs(&mut d.inputs, &mut d.active, options);
-            // SolidCraft (Android port): the helical thread's section, and what it comes to.
-            if helix.is_helical(modeled, options.form) {
-                let at = d.inputs.first().and_then(|i| i.items.first()).and_then(|sel| match sel {
-                    solidcraft_engine::Sel::Face { point, .. } => Some(*point),
-                    _ => None,
-                });
-                enter |= crate::dialogs_thread::helical_rows(ui, app, helix, at, designation, length, options.hand);
-            }
         }
         Kind::Loft { operation, rail_fit } => {
             crate::op_auto::op_row(ui, "lf_op", operation);

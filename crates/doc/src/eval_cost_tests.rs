@@ -1410,15 +1410,6 @@ fn marking(p: Vec3) -> FeatureKind {
         chamfer_depth: None,
         steep_flank: Default::default(),
         old_auto_size: false,
-        // SolidCraft Android port: the helical thread's fields, all off.
-        helical: false,
-        pitch: None,
-        depth: None,
-        angle: None,
-        clearance: None,
-        start_offset: None,
-        end_offset: None,
-        start_angle: None,
     }
 }
 
