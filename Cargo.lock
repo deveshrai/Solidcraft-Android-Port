@@ -4880,9 +4880,11 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "solidcraft-control",
  "solidcraft-engine",
  "solidcraft-mcp",
  "solidcraft-ui-egui",
+ "solidcraft-ui-text",
  "solidcraft-viewport-gpu",
  "winit",
 ]
