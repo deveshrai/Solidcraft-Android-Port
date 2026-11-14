@@ -160,7 +160,8 @@
         "docs/building.md",
         "README.md",
         "AGENTS.md",
-        "crates/ui-egui/src/ui_kit/text_menu.rs"
+        "crates/ui-kit/src/text_menu.rs",
+        "crates/ui-kit/Cargo.toml"
       ],
       "tests": []
     },

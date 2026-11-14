@@ -33,8 +33,9 @@ web-time = { workspace = true }
 tiny-skia = { workspace = true }
 image = { workspace = true, optional = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Text fields' context menu reads the system clipboard.
+# Text fields' context menu reads the system clipboard. arboard has no Android backend (SolidCraft
+# Android port): there the menu pastes nothing from it.
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

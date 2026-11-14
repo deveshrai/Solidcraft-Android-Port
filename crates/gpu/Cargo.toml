@@ -41,6 +41,5 @@ solidcraft-kernel = { workspace = true }
 solidcraft-engine = { workspace = true, features = ["bundled-render-library"] }
 solidcraft-io = { workspace = true }
 serde_json = { workspace = true }
-# The HLSL the D3D12 backend compiles (tests check it suits FXC), and the GLSL ES the GL backend
-# compiles (SolidCraft Android port: no `invariant` on a fragment input).
-naga = { workspace = true, features = ["wgsl-in", "hlsl-out", "glsl-out"] }
+# The HLSL the D3D12 backend compiles (tests check it suits FXC).
+naga = { workspace = true, features = ["wgsl-in", "hlsl-out"] }
