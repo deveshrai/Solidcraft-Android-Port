@@ -1,7 +1,7 @@
 # MCP cassette test
 
 A live design test of the Android port's MCP server: it builds a compact-cassette housing with five
-threaded M2 screws on a device, only through the server, times every call and checks that the screws
+M2 screws with upstream's modelled threads on a device, only through the server, times every call and checks that the screws
 fit. Results and recordings: [docs/android-mcp-live-test.md](../../docs/android-mcp-live-test.md).
 
 | File | What it does |
@@ -17,7 +17,8 @@ fit. Results and recordings: [docs/android-mcp-live-test.md](../../docs/android-
 1. On the device: **Settings › MCP server**, tick **Turn on the MCP server**, choose **Another computer**,
    and note the address and the token (Advanced › Show).
 2. On a computer on the same Wi-Fi, with adb connected to the device (the fit check copies the exported
-   meshes from it) and numpy installed:
+   meshes from it) and numpy installed (`python3 -m venv v && v/bin/pip install numpy pillow`, then run
+   with `v/bin/python`):
 
    ```sh
    cd tools/mcp-cassette-test

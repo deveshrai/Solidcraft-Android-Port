@@ -5,6 +5,9 @@ A real part, built from nothing by an agent driving SolidCraft on Android only t
 M2 screws with real (helical B-rep) threads, checked to fit. Run on a **Galaxy Z Fold over Wi-Fi** and on
 the **Android emulator**, twice each, with port 0.24.0a.
 
+Since 0.41.0a the test uses upstream's modelled threads; its run on a Galaxy Tab (121 calls, 41.8 s):
+[android-0410a-test.md](android-0410a-test.md#4-the-cassette-test-on-a-galaxy-tab).
+
 ![The cassette housing being built over MCP on a Galaxy Z Fold](screenshots/android/mcp-cassette-fold.gif)
 
 *The Fold's screen during the run (sped up about 4×; the long checks shortened). The caption is the

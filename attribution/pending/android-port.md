@@ -132,3 +132,6 @@
 | docs/screenshots/android/dex-window-before-0400rc3b.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, a DeX window, 0.40.0-rc.3a): the app's top bar under the window's title bar | MIT OR Apache-2.0 |
 | docs/screenshots/android/dex-window-after-0400rc3b.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, a DeX window, 0.40.0-rc.3b): the app's top bar below the window's title bar | MIT OR Apache-2.0 |
 | docs/screenshots/android/locomotive-emulator-0410a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (the Android emulator, 0.41.0a): the model locomotive on its track built over MCP | MIT OR Apache-2.0 |
+| docs/screenshots/android/cassette-tab-0410a-section.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.41.0a): a section through an M2 screw in its modelled tapped thread | MIT OR Apache-2.0 |
+| docs/screenshots/android/cassette-tab-0410a.gif | SolidCraft contributors | screen recording of SolidCraft itself on Android (Galaxy Tab, 0.41.0a): the cassette housing built over MCP | MIT OR Apache-2.0 |
+| docs/screenshots/android/cassette-tab-0410a.mp4 | SolidCraft contributors | screen recording of SolidCraft itself on Android (Galaxy Tab, 0.41.0a): the cassette housing built over MCP | MIT OR Apache-2.0 |

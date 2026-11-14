@@ -1,5 +1,5 @@
 """A compact-cassette housing built over SolidCraft's MCP server: two halves, five M2 screws with
-helical B-rep threads, and the checks that they fit. Every call is timed (see README.md).
+modelled (exact B-rep) threads, and the checks that they fit. Every call is timed (see README.md).
 
     MCP_URL=http://PHONE:27880/mcp MCP_TOKEN=... ADB_SERIAL=... python3 cassette.py NAME
 """
@@ -72,9 +72,9 @@ stage("4 screw holes and tapped threads")
 for i, (x, y) in enumerate(SCREWS):
     mcp.ex("solid.hole", {"position": [x, y, 0], "direction": [0, 0, 1], "diameter": 2.4, "type": "counterbore", "cb_diameter": 4.0, "cb_depth": 1.4, "targets": [B]}, label=f"B: counterbored hole {i+1}")
 for i, (x, y) in enumerate(SCREWS):
-    mcp.ex("solid.hole", {"position": [x, y, S], "direction": [0, 0, 1], "diameter": 1.85, "depth": 2.9, "targets": [A]}, label=f"A: M2 tap drill {i+1} (1.85 for 0.05 clearance)")
+    mcp.ex("solid.hole", {"position": [x, y, S], "direction": [0, 0, 1], "diameter": 1.6, "depth": 2.9, "targets": [A]}, label=f"A: M2 tap drill {i+1} (1.6)")
 for i, (x, y) in enumerate(SCREWS):
-    mcp.ex("solid.thread", {"face": [x + 0.925, y, 5.8], "designation": "M2", "helical": True, "clearance": "0.05 mm"}, label=f"A: helical M2 internal thread {i+1}")
+    mcp.ex("solid.thread", {"face": [x + 0.8, y, 5.8], "designation": "M2", "modeled": True}, label=f"A: modelled M2 internal thread {i+1}")
 
 stage("5 screw")
 x0, y0 = SCREWS[0]
@@ -87,7 +87,7 @@ mcp.ex("solid.cylinder", {"diameter": 2.0, "height": 5.5, "base": [sx, sy, 1.4],
 mcp.ex("solid.box", {"length": 2.4, "width": 0.5, "height": 0.9, "center": [sx, sy, 0.45], "operation": "cut", "targets": [s1]}, label="screw: cross recess 1")
 mcp.ex("solid.box", {"length": 0.5, "width": 2.4, "height": 0.9, "center": [sx, sy, 0.45], "operation": "cut", "targets": [s1]}, label="screw: cross recess 2")
 mcp.ex("solid.chamfer", {"edges": [[sx + 1.0, sy, 6.9]], "distance": 0.2}, label="screw: tip chamfer 0.2")
-mcp.ex("solid.thread", {"face": [sx + 1.0, sy, 6.0], "designation": "M2", "helical": True, "length": 3.5}, label="screw: helical M2 thread 3.5 long")
+mcp.ex("solid.thread", {"face": [sx + 1.0, sy, 6.0], "designation": "M2", "modeled": True, "length": 3.5}, label="screw: modelled M2 thread 3.5 long")
 mcp.ex("solid.move", {"bodies": [s1], "translate": [x0 - sx, y0 - sy, 0]}, label="screw: into hole 1")
 
 stage("6 fit: turn the screw until the threads mesh (checked on the meshes)")
