@@ -2,7 +2,9 @@
 # Build the Android APK and publish it as a GitHub release of this port.
 #
 #   scripts/android-release.sh                 release SolidCraft's version (Cargo.toml): tag
-#                                              v<version>-android, APK SolidCraft-<version>-android-arm64.apk
+#                                              v<version>-android, APKs SolidCraft-<version>-android-arm64.apk
+#                                              (phones, tablets, Arm Googlebooks) and -x86_64.apk (Intel
+#                                              Googlebooks)
 #   scripts/android-release.sh --revision a    a port-only release of the same SolidCraft version
 #                                              (fixes to the port): 0.21.0a, then b, c…; tag
 #                                              v<version><letter>-android
@@ -45,6 +47,7 @@ letter=""
 name="$version$letter"
 tag="v$name-android"
 apk_name="SolidCraft-$name-android-arm64.apk"
+apk_x86="SolidCraft-$name-android-x86_64.apk"
 out="target/android-release"
 
 if [ "$dry" = 0 ]; then
@@ -57,15 +60,19 @@ if [ "$dry" = 0 ]; then
         || fail "HEAD is not pushed (git push origin HEAD), or the branch tracks no origin branch"
 fi
 
-step "Building SolidCraft $name (arm64 release APK)"
-(cd apps/solidcraft-android/android && ./gradlew -q assembleRelease -Psolidcraft.abis=arm64-v8a -Psolidcraft.portRevision="$revision") \
-    || fail "gradle assembleRelease"
+# One APK per ABI, so neither carries the other's libraries: arm64 for phones, tablets and Arm
+# Googlebooks, x86_64 for Intel Googlebooks (which would otherwise translate the arm64 code).
 mkdir -p "$out"
-cp "apps/solidcraft-android/android/app/build/outputs/apk/release/SolidCraft-$name-release.apk" "$out/$apk_name"
-badging=$("$ANDROID_HOME"/build-tools/*/aapt2 dump badging "$out/$apk_name" 2>/dev/null | head -1 || true)
-echo "$badging"
-grep -q "versionName='$name'" <<<"$badging" || fail "the APK's versionName is not $name"
-ls -l "$out/$apk_name"
+for abi in arm64-v8a:"$apk_name" x86_64:"$apk_x86"; do
+    step "Building SolidCraft $name (${abi%%:*} release APK)"
+    (cd apps/solidcraft-android/android && ./gradlew -q assembleRelease -Psolidcraft.abis="${abi%%:*}" -Psolidcraft.portRevision="$revision") \
+        || fail "gradle assembleRelease (${abi%%:*})"
+    cp "apps/solidcraft-android/android/app/build/outputs/apk/release/SolidCraft-$name-release.apk" "$out/${abi#*:}"
+    badging=$("$ANDROID_HOME"/build-tools/*/aapt2 dump badging "$out/${abi#*:}" 2>/dev/null | head -2 || true)
+    echo "$badging"
+    grep -q "versionName='$name'" <<<"$badging" || fail "the APK's versionName is not $name"
+    ls -l "$out/${abi#*:}"
+done
 
 # The upstream commit this is built on: upstream's own release tag when it is merged (releases
 # are cut on their own line, off main), else the newest commit shared with upstream/main.
@@ -78,13 +85,13 @@ else
 fi
 notes="$out/notes-$name.md"
 cat > "$notes" <<EOF
-SolidCraft $name for Android$( [ "$revision" -gt 0 ] && echo " (SolidCraft $version, port release $letter)").
+SolidCraft $name for Android and Googlebook OS$( [ "$revision" -gt 0 ] && echo " (SolidCraft $version, port release $letter)").
 
 Built from upstream [SolidCraft](https://github.com/tangency-labs/solidcraft) ${base_line:-$version} with the Android port on top.
 
-**Install:** download \`$apk_name\` on an Android 8.0+ phone or tablet (arm64) and open it, allowing installs from that source; or \`adb install -r $apk_name\`. Signed with a development key: uninstall a build from elsewhere first if Android refuses to update it.
+**Install:** on an Android 8.0+ phone or tablet, or a Googlebook with a Snapdragon (Arm) chip, download \`$apk_name\`; on a Googlebook with an Intel chip, \`$apk_x86\`. Open it, allowing installs from that source, or \`adb install -r\` it. Signed with a development key: uninstall a build from elsewhere first if Android refuses to update it.
 
-**Works:** the full SolidCraft app (sketches, features, the timeline, the Render workspace) on Vulkan or GLES; mouse and keyboard as on the desktop (hover, selection, navigation buttons, wheel, right-click menu, shortcuts); touch (one finger orbits, tap selects, two fingers pan, pinch zooms, a finger drags a dialog's arrows); Back closes what is open; open, save, import and export through Android's file picker (STEP, STL, 3MF and OBJ tested); the on-screen keyboard for typing. Port-only: helical B-rep, custom and clearance threads ([docs/android-threads.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/$tag/docs/android-threads.md)) and involute gears: spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel, crossed helical ([docs/android-gears.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/$tag/docs/android-gears.md)). The port saves designs one file format past upstream's release, so upstream's releases ask to be updated instead of opening them; export STEP to share.
+**Works:** the full SolidCraft app (sketches, features, the timeline, the Render workspace) on Vulkan or GLES; mouse and keyboard as on the desktop (hover, selection, navigation buttons, wheel, right-click menu, shortcuts); touch (one finger orbits, tap selects, two fingers pan, pinch zooms, a finger drags a dialog's arrows); Back closes what is open; open, save, import and export through Android's file picker (STEP, STL, 3MF and OBJ tested); the on-screen keyboard for typing. Desktop windows (Samsung DeX, Googlebook OS) with the app's own bar below the window's title bar; an MCP server on the network for AI agents (Settings › MCP server). Designs are upstream's own format: they open in upstream SolidCraft of the same version, and plugins (Preferences › Plugins) install as upstream's do.
 
 **Not yet:** the on-screen keyboard covers the lower half of the screen (the app doesn't move above it), the phone layout is usable but cramped (best on a tablet or a foldable's inner screen), autosave recovery. Known issues, with work-arounds: [docs/android-known-issues.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/$tag/docs/android-known-issues.md). How to use it: [docs/android-touch.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/$tag/docs/android-touch.md); details: [docs/android.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/$tag/docs/android.md).
 EOF
@@ -96,12 +103,12 @@ if [ "$dry" = 1 ]; then
 fi
 
 step "Tagging $tag and publishing the release"
-git tag -a "$tag" -m "SolidCraft $name for Android"
+git tag -a "$tag" -m "SolidCraft $name for Android and Googlebook OS"
 git push origin "$tag"
 # The port's own repository (origin), not upstream's: OWNER/REPO from the remote's URL.
 repo=$(git remote get-url origin | sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##')
 # An upstream pre-release (x.y.z-rc.n) is published as one here too.
 prerelease=()
 [[ "$version" == *-rc.* ]] && prerelease=(--prerelease)
-gh release create "$tag" "$out/$apk_name" --repo "$repo" "${prerelease[@]}" \
-    --title "SolidCraft $name for Android" --notes-file "$notes"
+gh release create "$tag" "$out/$apk_name" "$out/$apk_x86" --repo "$repo" "${prerelease[@]}" \
+    --title "SolidCraft $name for Android and Googlebook OS" --notes-file "$notes"

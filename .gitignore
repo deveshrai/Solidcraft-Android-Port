@@ -17,3 +17,5 @@ mutants.out*/
 /corpus/
 # Local scripts that resume a Claude Code session.
 continue-*.sh
+
+# Separately compiled original plugin example.

@@ -148,7 +148,7 @@ step "Every upstream file the port changes is registered"
 $PORT touchpoints || fail "register the file in scripts/android-port-areas.json, with the test that proves it"
 
 step "The port's marked fixes are in place"
-$PORT markers || fail "a merge dropped a port fix (docs/android-sync.md, 'The port's speed fixes')"
+$PORT markers || fail "a merge dropped a port fix (docs/android-sync.md, 'The port's marked fixes')"
 
 step "Port strings against upstream's"
 $PORT strings || fail "port strings collide with upstream's: scripts/android-port.py strings --fix"
@@ -167,8 +167,8 @@ rustup target list --installed | grep -q wasm32-unknown-unknown || rustup target
 cargo check -p solidcraft-ui-egui --target wasm32-unknown-unknown || fail "wasm build"
 
 step "Each port area's tests"
-# Gears, helical threads, design files (old port designs still open), the MCP server, agents off
-# the window thread, touch input and the kernel's speed fixes; a filter that matches no test fails.
+# Design files (old port designs still open), the MCP server, agents off the window thread,
+# touch input, crash reports and the GPU fixes; a filter that matches no test fails.
 $PORT tests || fail "a port area's tests fail: the area's files are in scripts/android-port-areas.json"
 
 # ---- APK ---------------------------------------------------------------------------------------

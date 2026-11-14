@@ -185,28 +185,32 @@ Upstream caps AGENTS.md and each skill (`cargo xtask skills`); the port's lines 
 cap, so when upstream grows a file the port adds to, shorten the port's lines. 0.25.1 grew
 `skills/solidcraft-crash-safety/SKILL.md` past it with the port's Android `unsafe` line. 0.40.0-rc.2's AGENTS.md
 left 6 characters for the port's row, so the port also drops two upstream phrases there: "only
-`crates/kernel` uses truck" (truck is gone) and "Local `plan/` notes are optional."
+`crates/kernel` uses truck" (truck is gone) and "Local `plan/` notes are optional." 0.41.0's
+left 6 again: the port drops "only `crates/kernel` uses truck" (0.41 has no truck dependency) and
+"; see `docs/layers.md`" from the Layering rule, and its row says "Android".
 
-### The port's speed fixes
+### The port's marked fixes
 
-Four port changes make gears, threads and agents' long calls quick on a phone. A merge can drop
-one without breaking the build, so `scripts/android-sync.sh` checks each after the tests and
-stops naming it. Take upstream's change when it does the same job better (the gear and timing
-tests still pass and the times don't get worse), else keep the port's:
+A merge can drop a port fix without breaking the build, so each one carries a marker that
+`scripts/android-port.py markers` looks for, and a test in its area (`scripts/android-port-areas.json`).
+Take upstream's change when it does the same job better (the area's tests still pass), else keep
+the port's:
 
 | Fix | Where | Checked by |
 |---|---|---|
-| B-spline surfaces skip zero basis terms | `vendor/truck-geometry/src/nurbs/bspsurface.rs`, six places marked `SolidCraft:` | the markers; re-apply them from `git show <the port's commit> -- vendor/truck-geometry` if upstream re-vendors truck |
-| A gear flank is one to three Béziers, not a spline of many faces | `crates/engine/src/gear_profile.rs` (`flank_plan`, `flank_curves`) | `gear_profile` tests, `a_flank_is_one_face_a_curve` |
 | Agents' commands, timed batches too, compute off the window thread | `apps/solidcraft-android/src/lib.rs` (`agent_off_thread = true`), `crates/ui-egui/src/control_job.rs` (`Steps::ms`), `control.rs` (`ahead_timings`) | `a_timed_batch_computes_off_the_window_thread`, `an_agent_design_change_computes_off_the_window_thread` |
 | One MCP session's long call doesn't hold up another | `apps/solidcraft-android/src/mcp_http.rs` (port-only) | `a_long_call_holds_up_only_its_own_session` |
+| A finger scrolls a tall drop-down | `crates/ui-kit/src/ribbon.rs` (`menu_row`, `grid_cell`) | `a_finger_scrolls_a_tall_drop_down` |
+| The viewport shader compiles on OpenGL ES; bodies on the CPU where the driver dies compiling the evaluation | `crates/viewport-gpu/src/view.rs`, `tess_guard.rs` | `the_gl_viewport_shader_has_no_invariant_fragment_input`, `tess_guard` |
+| Designs saved by port releases up to 0.40.0-rc.3b open | `crates/doc/src/format.rs` (`port_retired::take`), `port_retired.rs` | `port_retired`, `design_corpus` |
 
 After merging an upstream release, or landing a port-only feature, update
 [android-vs-upstream.md](android-vs-upstream.md) (its last section says what to check).
 
-Upstream's releases fold their pending design-format changes into a new `v<N>/` folder. The
-port's `crates/doc/src/format/pending/helical-threads.rs` stays pending (never fold it here):
-it is what makes upstream refuse a port design instead of losing its helical threads.
+Since 0.41.0a the port writes upstream's own design format, with no pending changes of its own:
+designs it saves open in upstream's releases of the same version. The port's retired
+helical-thread changes are known to `crates/doc/src/port_retired.rs`, so designs earlier port
+releases saved still open (their helical threads become upstream's modelled threads).
 
 ### winit
 

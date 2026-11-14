@@ -28,6 +28,11 @@ it.
 | `port-0301a-gear-thread-start-angle` | Android port 0.30.1a, CLI (plain JSON: `--save` to a `.json` name, as that CLI writes `.solidcraft` as a package) | format 49 with `format_pending` [`helical-thread-handedness`, `helical-thread-start-angle`, `helical-threads`]: a helical gear (m2, 24 teeth, 20°, Ø8 bore) and a Ø10 rod with an M10 helical B-rep thread started at 90° |
 | `port-0400rc2a-solidcore-threads` | Android port 0.40.0-rc.2a (upstream 0.40.0-rc.2, solidcore), CLI (plain JSON) | format 51 with `format_pending` [`helical-thread-handedness`, `helical-thread-start-angle`, `helical-threads`]: a spur gear (m2, 16 teeth, Ø6 bore), a Ø10 rod with a left-handed M10 helical thread started at 90°, and a nut block whose custom 2.2 mm pitch thread (clearance 0.15) runs off both faces (negative offsets), all as solidcore screw sweeps |
 
+The `port-*` designs were saved by Android port releases with the port's own helical-thread
+changes pending. Since 0.41.0a the port has retired them: these designs open with their helical
+threads as upstream's modelled threads, the threads' own values kept in the design's metadata
+(`crates/doc/src/port_retired.rs`; `port_designs_open_with_their_helical_threads_as_modelled_threads`).
+
 The scripts that made them are in `scripts/` (`issue-489-stacked-join` was drawn in the desktop
 app and has none; `issue-616-lid-ribs` is made by its regression script). Every flat face of every final body must also take an attached sketch and an
 offset plane; the faces that can't yet are listed with their issues in `design_corpus.rs`.

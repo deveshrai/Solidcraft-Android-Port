@@ -1,6 +1,6 @@
 """The README's hero image: the port next to upstream, with a screenshot of the latest device test.
 
-    python3 scripts/android-hero.py SCREENSHOT.png docs/screenshots/android/hero-port-vs-upstream.png 0.40.0-rc.3 0.40.0-rc.3b
+    python3 scripts/android-hero.py SCREENSHOT.png docs/screenshots/android/hero-port-vs-upstream.png 0.41.0 0.41.0a
 
 Needs Pillow. Edit the call-out and caption text below for each release's test."""
 import sys
@@ -25,8 +25,8 @@ def font(size, weight="Regular"):
 
 im = Image.new("RGB", (W, H), BG)
 d = ImageDraw.Draw(im)
-d.text((60, 42), "SolidCraft for Android", font=font(60, "Bold"), fill=FG)
-d.text((62, 116), "Upstream SolidCraft, on phones, tablets and foldables, plus what upstream doesn't have yet.", font=font(22), fill=DIM)
+d.text((60, 42), "SolidCraft for Android and Googlebook OS", font=font(56, "Bold"), fill=FG)
+d.text((62, 116), "Upstream SolidCraft on phones, tablets, foldables, Samsung DeX and Googlebooks.", font=font(22), fill=DIM)
 
 # The device screenshot in a dark rounded frame.
 shot = Image.open(SHOT).convert("RGB")
@@ -49,7 +49,7 @@ d.text((cx + 14, cy + 34), "95 MCP calls on a Galaxy Tab in DeX; no part overlap
 d.text((60, fy + shot.height + 2 * pad + 22),
        "A 3D-printable G-scale locomotive mechanism on 400 mm of track, built by an agent over the MCP server.",
        font=font(20), fill=DIM)
-d.text((60, fy + shot.height + 2 * pad + 50), "New in 0.40.0-rc.3a: upstream's 0.40.0-rc.3 on the solidcore kernel, with the port's threads and gears.", font=font(20), fill=DIM)
+d.text((60, fy + shot.height + 2 * pad + 50), "New in 0.41.0a: upstream's 0.41.0 with plugins, as an app for Android and Googlebook OS.", font=font(20), fill=DIM)
 
 # The comparison table.
 tx, c1, c2 = 1060, 1530, 1670
@@ -70,10 +70,10 @@ def cross(x, y):
 
 rows = [
     ("Android app", "touch, crosshair picks, mouse, keyboard", None, True),
-    ("Helical B-rep threads", "any pitch, print clearance, phase, run-off ends", "standard", True),
-    ("Involute gears", "ten types, bore, keyway, hub", None, True),
+    ("Googlebook OS and DeX", "desktop windows; Arm and Intel APKs", None, True),
     ("MCP server on the network", "Claude Code from Termux or Wi-Fi", "stdio", True),
-    ("Every upstream feature", "same commands, kept in step", True, True),
+    ("Plugins", "SolidCraft Gears and more, as upstream", True, True),
+    ("Every upstream feature", "same commands, same design files", True, True),
 ]
 y = 232
 for name, sub, up, port in rows:

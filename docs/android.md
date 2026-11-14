@@ -1,12 +1,12 @@
-# SolidCraft on Android
+# SolidCraft on Android and Googlebook OS
 
-An Android port of SolidCraft: the same application as the desktop and browser builds
-(`SolveApp` in `crates/ui-egui`), on Android phones and tablets, with mouse and keyboard,
-touch, and opening, saving, importing and exporting through Android's document pickers.
+SolidCraft for Android and Googlebook OS: the same application as the desktop and browser builds
+(`SolveApp` in `crates/ui-egui`), on Android phones, tablets and foldables, in Samsung DeX, and on
+Googlebooks (Google's laptops, whose Googlebook OS is Android-based), with mouse and keyboard,
+touch, and opening, saving, importing and exporting through Android's document pickers. Two APKs:
+arm64 (phones, tablets, Snapdragon Googlebooks) and x86_64 (Intel Googlebooks).
 
 **Using the app** (touch, mouse and keyboard, files, foldables): [android-touch.md](android-touch.md).
-
-**Threads** (helical B-rep, custom threads, clearance): [android-threads.md](android-threads.md).
 
 **Claude Code and other AI agents** (Settings › MCP server, from Termux or a computer):
 [android-mcp.md](android-mcp.md), and a live test on a Galaxy Z Fold: [android-mcp-live-test.md](android-mcp-live-test.md).
@@ -38,11 +38,9 @@ Tested on an Android 16 tablet emulator (Pixel Tablet, arm64, Vulkan through Mol
 | Mouse | Hover highlighting, click to select, the navigation preset's buttons (default Fusion: middle drag pans, Shift+middle and right drag orbit), the wheel zooms to the cursor, the right-click menu |
 | Keyboard | Shortcuts with and without modifiers (tested: Ctrl+Z, Ctrl+S, Ctrl+O, E, Esc, S to search), typing into fields |
 | Touch | One finger orbits, a tap selects, two fingers pan, a pinch zooms about the fingers; a finger drags a dialog's arrows (Extrude distance, Fillet radius…) |
-| Gears | Port-only: spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel and crossed helical gears, editable after ([android-gears.md](android-gears.md)) |
-| Threads | Port-only: modelled threads as exact helical B-rep, custom pitch on any diameter, clearance, offsets; left-handed through upstream's Thread direction ([android-threads.md](android-threads.md)); the faceted and cosmetic ISO threads are unchanged |
 | Rendering (0.22) | The Render workspace's live preview and CPU render work on the Fold (the GPU path tracer finds the Adreno 840) |
 | Back | Closes the open dialog, menu, tool, sketch or keyboard, as Escape; with nothing open, the app goes to the background as Home does, designs kept |
-| Tested devices | Pixel Tablet emulator (Android 16); Galaxy Z Fold (SM-F971B, Android 17, Adreno 840): inner screen, landscape and portrait; 0.23.0b gears, helical threads, STEP and STL; 0.24.0a the MCP server over Wi-Fi ([a cassette housing built through it](android-mcp-live-test.md)); Galaxy Tab (SM-X840, Android 17, Mali-G1-Ultra): gears; 0.24.0b a worm gearbox built over MCP ([android-speed.md](android-speed.md)); Pixel 9 (Android 17, portrait): 0.23.0a gears, helical threads, Save As and Open |
+| Tested devices | Pixel Tablet emulator (Android 16); Galaxy Z Fold (SM-F971B, Android 17, Adreno 840): inner screen, landscape and portrait; 0.23.0b gears, helical threads, STEP and STL; 0.24.0a the MCP server over Wi-Fi ([a cassette housing built through it](android-mcp-live-test.md)); Galaxy Tab (SM-X840, Android 17, Mali-G1-Ultra): gears; 0.24.0b a worm gearbox built over MCP ([android-speed.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/v0.40.0-rc.3b-android/docs/android-speed.md)); Pixel 9 (Android 17, portrait): 0.23.0a gears, helical threads, Save As and Open |
 | AI agents | Port-only: Settings › MCP server lets Claude Code in Termux on the device, or on a computer on the same Wi-Fi, drive the app through upstream's MCP tools ([android-mcp.md](android-mcp.md)); tested on the emulator with Claude Code from a Mac (0.24.0a) |
 | Files | Open, Open Recent, Save, Save As, Insert STEP/Mesh/Design, Save as mesh (STL, 3MF…), Export STEP/OBJ/DXF/URDF/JSON, from and to any documents provider (device, SD card, Drive…) |
 
@@ -237,30 +235,22 @@ with the tests that prove each, is [`scripts/android-port-areas.json`](../script
 | `crates/ui-egui/src/fonts.rs` | Android's system fonts as fallbacks: the CJK search also looks in `/system/fonts`, and Noto Sans CJK and Noto Sans Thai are candidates for the Chinese, Hangul and Thai fallbacks |
 | `crates/ui-egui/src/navigation.rs` | Touch: one finger orbits, two pan, pinch zooms; a lifted finger's click picks where it was |
 | `crates/ui-egui/src/viewport.rs` | `touch_gesture` state; tests for the touch gestures and the tap |
-| `crates/kernel/src/thread_brep.rs` (new), `crates/kernel/src/lib.rs` | Port-only feature: the helical B-rep thread (`helical_thread`, `HelicalThread`) |
-| `crates/doc/src/document.rs`, `eval.rs`, `lib.rs` | The Thread feature's helical fields; `helical_thread_on`; `thread_face`/`thread_span` split out of the thread lookup |
-| `crates/doc/src/format/pending/helical-threads.rs` (new) | The helical fields as a pending design-format change (below) |
-| `crates/engine/src/cmd/features.rs` | `solid.thread`'s helical parameters |
-| `crates/ui-egui/src/dialogs_thread.rs`, `dialogs.rs`, `dialogs_dense.rs` | The Thread dialog's Type, Geometry and Helical B-rep section |
-| `crates/*/src/thread_tests.rs`, `dialogs_all_tests.rs` | Tests for the helical threads; the Thread dialog's first row is now Type |
-| `crates/engine/src/gear_profile.rs`, `cmd/gears.rs`, `cmd/gears_tests.rs` (new), `cmd/mod.rs`, `lib.rs` | Port-only feature: the Gear commands `gear.create`, `gear.info`, `gear.edit` ([android-gears.md](android-gears.md)) |
-| `crates/engine/src/gear_profile.rs` (0.24.0b) | A gear flank is one exact Bézier (two or three where the root fillet meets the involute), not a spline through points: each span of that spline was a face, and every boolean on a gear paid for them |
-| `vendor/truck-geometry/src/nurbs/bspsurface.rs` | B-spline surface evaluation skips the basis functions that are zero (`vendor/README.md`) |
 | `crates/ui-egui/src/control_job.rs`, `control.rs`, `lib.rs` | A timed agent batch (`"timings": true`) computes off the window thread and times each step there |
 | `apps/solidcraft-android/src/lib.rs` (0.24.0b) | Agents' commands compute off the window thread (`agent_off_thread`), so a long one never trips Android's not-responding dialog |
-| `crates/engine/src/cmd/sketch_import.rs` | `add_to_active`, which the gears use to sketch their outlines |
-| `crates/kernel/src/sweep_path.rs` | Straight sweeps that twist or scale keep smooth walls with any number of segments and holes (before: ruled strips past 64 segments or with a hole) |
 | `apps/solidcraft-android/android/app/src/main/java/io/solidcraft/android/SolidCraftActivity.java` | `hideSystemBars`: the navigation bar and a tablet's taskbar hidden immersively (a swipe shows them), so they don't cover the History bar or a tall dialog's OK |
 | `apps/solidcraft-android/src/lib.rs` | OK evaluates off the window thread (`apply_off_thread`, as the desktop app does), so a long feature doesn't trip Android's not-responding dialog |
-| `crates/ui-egui/src/dialogs_gears.rs` (new), `dialogs.rs`, `dialogs_dense.rs`, `browser.rs`, `context_menu.rs`, `workspace.rs`, `lib.rs` | The Gear / Edit Gear dialog and where it opens from |
-| `assets/icons/ui/design/svg/model/spur_gear.svg` (new), `assets/locales/pending/android-port.json` (new) | The Gear icon, and the port's labels (gears and threads) in upstream's folder for unfolded strings |
+| `assets/locales/pending/android-port.json` (new) | The port's labels (the MCP server page, crash reports) in upstream's folder for unfolded strings |
+| `crates/doc/src/format.rs`, `port_retired.rs` (new) | Designs saved by port releases up to 0.40.0-rc.3b open: their retired helical-thread changes are known, and the threads become upstream's modelled threads, their values kept in the design's metadata |
+| `crates/ui-kit/src/ribbon.rs` | A finger's drag scrolls a tall drop-down instead of picking a row up to pin |
+| `crates/ui-egui/src/navigation_bar_view.rs`, `touch_pick.rs` (new) | The view bar's crosshair button: a finger picks small edges and faces |
+| `crates/ui-egui/src/toolbar.rs` | The title bar shows the port's version with its letter |
+| `crates/viewport-gpu/src/view.rs`, `Cargo.toml`, `lib.rs`, `tess_guard.rs` (new) | The viewport shader without `@invariant` on OpenGL ES; bodies built on the CPU where the driver dies compiling the evaluation shader (Adreno) |
 | `attribution/pending/android-port.md` (new) | Attribution rows for the port's screenshots and icon, kept out of `ATTRIBUTION.md`'s table so it merges cleanly |
 | `xtask/src/layers.rs` | `solidcraft-android` registered as an app (exempt from layering, like the web app) |
 | `xtask/src/assets.rs` | The asset check skips Gradle's `build/` output |
 | `apps/solidcraft-android/src/mcp_http.rs`, `mcp_host.rs` (new) | Port-only feature: the MCP server on the network and the host that runs it ([android-mcp.md](android-mcp.md)) |
 | `crates/ui-egui/src/prefs/mcp_server.rs` (new), `prefs.rs`, `lib.rs` | Settings › MCP server, shown only where the host sets `SolveApp::mcp_server` |
 | `apps/solidcraft-android/android/app/src/main/AndroidManifest.xml` | `INTERNET`, for the MCP server |
-| `crates/doc/src/format/pending/helical-thread-handedness.rs` (new) | Older port designs' `left_handed` rewritten as upstream's `handedness` (0.24.0a) |
 | `skills/solidcraft-crash-safety/SKILL.md` | The Android crate's two `unsafe` exceptions added to the list (upstream moved it there from `AGENTS.md` in 0.24.0) |
 | `ATTRIBUTION.md`, `vendor/README.md` | The vendored winit and its patch |
 | `docs/building.md` | How to build the APK |
@@ -270,19 +260,20 @@ with the tests that prove each, is [`scripts/android-port-areas.json`](../script
 | `apps/solidcraft-android/Cargo.toml` | `serde`, for the desktop app's control server it builds from (0.25.1) |
 
 The Android changes keep the desktop and browser builds as they were: the Android code paths are
-behind `cfg(target_os = "android")`, and the touch changes act only on touch input. The thread
-changes are a feature in the shared crates, so they are in every build made from this repository;
-the faceted and cosmetic threads behave as upstream's. So are the gears; they keep their
-parameters in component metadata, so they need no design-format change of their own (but see
-Design files below).
+behind `cfg(target_os = "android")`, and the touch changes act only on touch input.
+Everything else in the shared crates is upstream's, command for command, and so are threads
+(exact modelled threads) and gears (upstream's plugins, such as SolidCraft Gears).
 
-**Design files.** The helical thread fields are a pending design-format change, so the port
-writes one format number past upstream's release (42 while upstream's 0.25.1 is 41) with
-`"format_pending": ["helical-thread-handedness", "helical-threads"]`. The port opens every upstream design. Upstream's
-releases refuse a design saved by the port ("saved by a newer SolidCraft") rather than opening
-it and quietly rebuilding its helical threads as faceted ones; designs to share with desktop
-SolidCraft are best exported as STEP. Deleting that one file would make the port's designs open
-upstream again, at the cost of that silent change.
+**Design files.** Since 0.41.0a the port writes upstream's own design format, with no pending
+changes of its own: a design saved on Android opens in upstream SolidCraft of the same version,
+and the reverse. Port releases up to 0.40.0-rc.3b saved their helical B-rep threads as pending
+format changes (`helical-thread-handedness`, `helical-thread-start-angle`, `helical-threads`);
+those names are known to `crates/doc/src/port_retired.rs`, so such designs still open, each
+helical thread becoming upstream's modelled thread on the same face (an ISO designation keeps its
+size and pitch; a custom pitch gives way to the size the face takes) and its own values (pitch,
+clearance, offsets, start angle) kept in the design's metadata under
+`io.github.deveshrai.solidcraft-android`. Upstream's own releases still read those older port
+designs as a newer build's and ask to be updated: open them in the port and save again.
 
 ## Testing
 

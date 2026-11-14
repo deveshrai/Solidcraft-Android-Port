@@ -1,5 +1,14 @@
 # Building and running
 
+Use Rust and Cargo 1.95 or newer, as declared in the workspace manifest. Check
+which tools your shell will run with `rustc --version` and `cargo --version`.
+If Cargo reports that resolver `3` is invalid, it is too old to read the
+workspace manifest. When using rustup on Linux or macOS, check that
+`$HOME/.cargo/bin` comes before the system Cargo directory in `PATH`.
+
+For a headless build, run `cargo build --locked --release -p solidcraft-cli`
+from the repository root.
+
 ```sh
 cargo run --release -p solidcraft -- --sample          # desktop app with a sample part
 cargo run --release -p solidcraft-cli -- commands      # the command registry
@@ -12,8 +21,8 @@ cargo run --release -p solidcraft-cli -- eval part.step # measure an imported ST
 cargo xtask ci                                          # fmt, clippy, tests, icons, assets, layers, wasm
 ```
 
-UI artwork changes follow the [icon specification](../assets/icons/ui/STYLE_GUIDE.md).
-The [included review tool](../assets/icons/ui/README.md) discovers new icons and keeps
+UI artwork changes follow the [icon specification](../crates/look/icons/STYLE_GUIDE.md).
+The [included review tool](../crates/look/icons/README.md) discovers new icons and keeps
 unaccepted artwork Open; run `cargo xtask icons` to check the collection.
 
 Windows builds: `cargo xwin build --release --target x86_64-pc-windows-msvc -p solidcraft`.
@@ -26,6 +35,11 @@ On Android (experimental): `cd apps/solidcraft-android/android && ./gradlew asse
 `adb install -r app/build/outputs/apk/debug/SolidCraft-*-debug.apk`. Needs the Android SDK and NDK,
 `cargo install cargo-ndk` and `rustup target add aarch64-linux-android x86_64-linux-android`; see
 [android.md](android.md).
+
+To build the documentation, put `mdbook` on `PATH` and run `cargo xtask book`
+from the repository root. This command generates the command reference and
+screenshots before building the book into `target/book`. A fresh checkout needs
+this generation step before `mdbook build docs/book` can read every chapter.
 
 Agents can control the document open in a browser tab through `window.solidcraft.execute(...)`
 and `window.solidcraft.request(...)`; see the [browser command API](browser-api.md).

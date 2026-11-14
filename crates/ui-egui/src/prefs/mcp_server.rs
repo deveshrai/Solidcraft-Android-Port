@@ -10,7 +10,7 @@ use web_time::Instant;
 use serde::{Deserialize, Serialize};
 
 use super::*;
-use crate::i18n::tr;
+use solidcraft_ui_text::tr;
 
 /// The port the server listens on unless the user picks another.
 pub const DEFAULT_PORT: u16 = 27880;
@@ -187,7 +187,7 @@ fn draw(page: &mut McpServerPage, ui: &mut egui::Ui) {
             tr("mcp.waiting").to_string()
         } else {
             let last = page.status.last_request.map(ago).unwrap_or_default();
-            crate::i18n::format("mcp.connected", &[("n", &page.status.sessions.to_string()), ("ago", &last)])
+            solidcraft_ui_text::format("mcp.connected", &[("n", &page.status.sessions.to_string()), ("ago", &last)])
         };
         if !status.is_empty() {
             ui_kit::text(ui, &status, ui_kit::Text::Note("mcp_status"));
@@ -196,7 +196,7 @@ fn draw(page: &mut McpServerPage, ui: &mut egui::Ui) {
             }
         }
         if page.status.refused > 0 {
-            let refused = crate::i18n::format("mcp.refused", &[("n", &page.status.refused.to_string())]);
+            let refused = solidcraft_ui_text::format("mcp.refused", &[("n", &page.status.refused.to_string())]);
             ui_kit::text(ui, &refused, ui_kit::Text::Report("mcp_refused", true));
         }
     });

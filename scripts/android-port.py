@@ -126,7 +126,7 @@ def cmd_markers(_args):
             bad += not ok
             print(f"  {'ok ' if ok else red('MISSING')} {a['name']}: {m['file']} ({n} of {m['count']})")
     if bad:
-        print(red("A port fix is gone from its file: a merge took upstream's version. Re-apply it (docs/android-sync.md, 'The port's speed fixes')."))
+        print(red("A port fix is gone from its file: a merge took upstream's version. Re-apply it (docs/android-sync.md, 'The port's marked fixes')."))
     return 1 if bad else 0
 
 

@@ -1,17 +1,18 @@
-# Using SolidCraft on Android
+# Using SolidCraft on Android and Googlebook OS
 
 A guide to the Android app with touch, a mouse and keyboard, and files. The app is the full
 desktop SolidCraft; this covers what is different on a phone or tablet. Building and how the port
 works: [android.md](android.md).
 
 Screenshots are from a Galaxy Z Fold (inner screen, landscape, unless noted) running
-SolidCraft 0.21.0a; the Threads and Render screenshots are from 0.22.0a, the Gears ones from a
-Galaxy Tab running 0.22.0 with the gears.
+SolidCraft 0.21.0a; the Render screenshots are from 0.22.0a. Everything here applies to a
+Googlebook too (Googlebook OS is Android-based): there the app runs in a desktop window, with a
+trackpad, mouse and keyboard as on a computer.
 
 - [Touch](#touch)
 - [Modelling by touch](#modelling-by-touch)
 - [Threads](#threads)
-- [Gears](#gears)
+- [Plugins (gears)](#plugins-gears)
 - [Rendering](#rendering)
 - [Claude Code (MCP server)](#claude-code-mcp-server)
 - [Mouse and keyboard](#mouse-and-keyboard)
@@ -104,52 +105,24 @@ Commands not on the ribbon are a search away: tap **Search commands** (top right
 
 **Create ▾ › Thread**, then tap the cylindrical face (a shaft, or the inside of a hole). The size
 that fits is filled in (M20 on a 20 mm shaft). Off **Modeled** it is a cosmetic thread, drawn
-but not cut; with **Modeled** on, **Geometry** chooses how the groove is made:
+but not cut; with **Modeled** on it is upstream's exact helical thread: ISO metric, trapezoidal,
+Acme, buttress or pipe forms, any `M<diameter>x<pitch>` designation, several starts, either hand,
+a runout and a chamfered tip. To change a thread later, double-tap it in the **History** bar.
 
-- **Faceted**: the original method, a groove of flat triangles; the body's curved faces become
-  facets too.
-- **Helical B-rep** (this port): a few exact, smooth helical faces; the rest of the body stays
-  exact, so fillets, a second thread and STEP export all keep working. It starts and ends half a
-  pitch in from the face's ends. An M20 × 20 mm took under two seconds on the Fold.
+The port's own helical B-rep threads (a custom pitch on any diameter, print clearance, a start
+angle) were retired in 0.41.0a for upstream's modelled threads; designs that have them open with
+upstream's thread on the same face, the old values kept in the design's metadata
+([android-whats-new.md](android-whats-new.md#0410a)).
 
-![A helical B-rep M20 thread](screenshots/android/19-helical-thread.jpg)
+## Plugins (gears)
 
-**Type: Custom** threads any shaft or hole as it is, whatever its diameter: type a **Pitch** (and
-optionally a **Thread depth** or **Thread angle**; **Thread direction** makes it left-handed). For parts that screw
-together, **Clearance** moves the flanks and root into the material, typically 0.1–0.2 mm for a
-3D print. Tap OK rather than pressing Enter in a field: Enter applies the dialog straight away.
-To change a thread later, double-tap it in the **History** bar.
-
-| Custom thread, clearance being set | The result |
-|---|---|
-| ![Editing a custom thread's clearance](screenshots/android/20-custom-thread-clearance.jpg) | ![A custom thread with clearance](screenshots/android/21-custom-thread-result.jpg) |
-
-Everything about threads (each field, the groove's shape, the readouts, refusals and the
-`solid.thread` script parameters): [android-threads.md](android-threads.md).
-
-A design with a helical thread is saved in a newer file format than upstream SolidCraft's
-release reads; desktop SolidCraft asks to be updated instead of opening it. Export STEP to take
-such a part to other software.
-
-## Gears
-
-**Create ▾ › Gear** (or search *gear*) makes an involute gear as its own component: spur,
-helical, herringbone, internal, rack, bevel, miter, worm, worm wheel or crossed helical (this
-port). Pick a **Type**, a **Module** and **Teeth**; the view previews every change, and the
-readouts show the diameters, the mate's centre distance and any undercut. **Bore and hub** adds a
-bore, a DIN 6885 keyway and a hub. **OK** inserts it at the origin, axis up Z.
-
-| The Gear dialog | Bore, hub and keyway |
-|---|---|
-| ![The Gear dialog and its readouts](screenshots/android/gears-tab-02-dialog.jpg) | ![A helical gear's bore, hub and keyway previewed](screenshots/android/gears-tab-03-bore-hub-keyway.jpg) |
-
-To change a gear, double-tap it in the browser, or long-press it there (or hold a finger on it in the view and lift) and choose **Edit Gear**; OK
-rebuilds it in place, in one undo step. The values are saved with the design.
-
-![The ten gear types](screenshots/android/gears-tab-08-all-types.jpg)
-
-Everything about gears (each type, making pairs that mesh, the readouts and warnings, the
-`gear.create` parameters and how it is built): [android-gears.md](android-gears.md).
+Upstream SolidCraft runs plugins since 0.41.0 (an experimental first version), and the port
+builds them in. The first is [SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears),
+an involute spur gear generator: download its `.zip` from its releases page, then **Settings ›
+Plugins › Install plugin…** and pick the file in Android's file picker. Installed plugins run from
+the **Plugins** menu, each with a dialog built from its parameters. Plugins haven't been tried on
+an Android device yet ([known issues](android-known-issues.md)). The port's own Gear command was
+retired in 0.41.0a; gears made with it stay in their designs as ordinary sketches and features.
 
 ## Rendering
 
@@ -235,13 +208,6 @@ unfolding keeps the app and the design.
 | ![The app on a cover screen](screenshots/android/16-cover-screen.jpg) | ![The Create menu on the cover screen](screenshots/android/17-cover-create-menu.jpg) |
 
 ## Limits
-
-- **Faceted threads** (Geometry: Faceted) cut a groove of flat triangles (within 0.5% of the
-  pitch), as on the desktop, and the threaded body's curved faces become facets too; on the Fold
-  an M20 × 20 mm took under a second. Choose **Helical B-rep** ([Threads](#threads)) to keep the
-  body exact.
-
-  ![A modelled thread close up](screenshots/android/18-modelled-thread.jpg)
 
 - Autosave recovery is not available on Android yet: save your work.
 - Ribbon labels are shortened at high screen densities ("Cham…" for Chamfer); the tooltip and

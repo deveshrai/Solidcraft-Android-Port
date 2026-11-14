@@ -1,29 +1,34 @@
-# SolidCraft for Android
+# SolidCraft for Android and Googlebook OS
 
-![SolidCraft for Android: upstream SolidCraft plus an Android app, helical B-rep threads, gears and an MCP server on the network, with a model locomotive built over MCP](docs/screenshots/android/hero-port-vs-upstream.png)
+![SolidCraft for Android and Googlebook OS: upstream SolidCraft on phones, tablets, foldables, Samsung DeX and Googlebooks, with a model locomotive built over MCP](docs/screenshots/android/hero-port-vs-upstream.png)
 
-**This is the Android port of SolidCraft.** It is upstream
+**This is SolidCraft for Android and Googlebook OS.** It is upstream
 [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with every
-upstream release (now 0.30.1, and the 0.40.0-rc.3 pre-release), plus an Android app and **features
-upstream doesn't have yet**. Current release: **0.30.1a**; pre-release: **0.40.0-rc.3b**
-([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases)).
+upstream release (now **0.41.0**), as an app for Android phones, tablets and foldables, Samsung DeX,
+and Googlebooks, Google's laptops whose Googlebook OS is Android-based. Current release:
+**0.41.0a** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases/latest): arm64 for
+phones, tablets and Snapdragon Googlebooks; x86_64 for Intel Googlebooks).
 
 | Added in this port | What it gives you | Guide |
 |---|---|---|
-| **Android app** | Phones, tablets and foldables: one finger orbits, two pan, a pinch zooms, and a **crosshair** picks small edges and faces by finger; a mouse and keyboard work as on a desktop; files through Android's picker (device, SD card, Drive) | [Using it](docs/android-touch.md) |
-| **Helical B-rep threads** | Exact, smooth threads; any pitch on any diameter; clearance for printed parts that screw together; a start angle to phase mating threads | [Threads](docs/android-threads.md) |
-| **Involute gears** | Ten types (spur, helical, herringbone, internal, rack, bevel, miter, worm, worm wheel, crossed helical), bore, keyway and hub, editable after | [Gears](docs/android-gears.md) |
+| **Touch** | One finger orbits, two pan, a pinch zooms, and a **crosshair** picks small edges and faces by finger; dialog arrows and long menus follow a finger | [Using it](docs/android-touch.md) |
+| **Desktop windows** | In Samsung DeX and on Googlebook OS the app runs in a window, with a mouse, trackpad and keyboard as on a computer | [Using it](docs/android-touch.md#mouse-and-keyboard) |
+| **Files** | Open, save, import and export through Android's picker: device, SD card, Google Drive | [Files](docs/android-touch.md#files) |
 | **MCP server on the network** | One switch in Settings: Claude Code in Termux on the device, or on a computer on the same Wi-Fi, models in the app while you watch | [MCP server](docs/android-mcp.md) |
 
-**New in 0.40.0-rc.3a and b (pre-releases):** upstream's 0.40.0-rc.3 on its new geometry kernel,
-solidcore; in a Samsung DeX window the app's top bar (and Settings) now sits below the window's
-title bar. Upstream's modelled threads now run down to a shoulder, so a nut seats on a bolt's head;
-the port's helical threads (any pitch, clearance, start angle) and gears run on it as before. For
-work, stay on [0.30.1a](https://github.com/deveshrai/Solidcraft-Android-Port/releases/tag/v0.30.1a-android);
-designs saved in the pre-release don't open there.
+Everything else is upstream's, unchanged: the sketcher and solver, every feature and workspace,
+exact modelled threads, and since 0.41 **plugins**, the first of them
+[SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears), an involute gear generator.
+
+**New in 0.41.0a:** upstream's 0.41.0 with plugins, a Constrain dialog for assemblies and sturdier
+fillets and STEP imports; the new name and an x86_64 APK for Intel Googlebooks. The port's own gears
+and helical threads are retired in favour of upstream's plugins and modelled threads: designs saved
+by earlier port releases still open, their helical threads as upstream's modelled threads with the
+old values kept in the design, and designs are now upstream's own format
+([what changed](docs/android-whats-new.md#0410a)).
 
 A 3D-printable G-scale locomotive mechanism and its track, 51 parts, built by an agent over MCP on a
-Galaxy Tab in 9 seconds ([the test](docs/android-0400rc3a-test.md)):
+Galaxy Tab in DeX in 9 seconds ([the test](docs/android-0400rc3a-test.md)):
 
 ![A model locomotive and track built over MCP on a Galaxy Tab](docs/screenshots/android/locomotive-mcp-tab-0400rc3a.gif)
 
@@ -67,7 +72,7 @@ Galaxy Tab in 9 seconds ([the test](docs/android-0400rc3a-test.md)):
   <a href="https://docs.solidcraft.io/">Documentation</a> ·
   <a href="https://www.blacksmith.sh"><img src="https://img.shields.io/badge/CI-Blacksmith-000000?logo=githubactions&logoColor=white" alt="CI powered by Blacksmith" /></a>
   <a href="https://discord.gg/FtU4NQNVDH">Discord</a> ·
-  <a href="https://github.com/bherbruck/solidcore">SolidCore</a>
+  <a href="https://github.com/tangency-labs/solidcore">SolidCore</a>
 </p>
 
 <p align="center">
@@ -98,8 +103,9 @@ Galaxy Tab in 9 seconds ([the test](docs/android-0400rc3a-test.md)):
 
 ARM64 and 32-bit builds, portable zip, .deb, .rpm, Flatpak and the other packages are on the
 [downloads page](docs/downloads.md). The macOS app is signed with a Developer ID and notarized by
-Apple. The Windows downloads aren't signed yet: choose **More info**, then **Run anyway** in
-SmartScreen. On SolidCraft 0.11 to 0.14, download once by hand; see
+Apple. Windows signing: free code signing provided by SignPath.io, certificate by SignPath
+Foundation ([code signing policy](https://docs.solidcraft.io/code-signing-policy.html)). Until the
+production certificate is in place, SmartScreen may warn: choose **More info**, then **Run anyway**. On SolidCraft 0.11 to 0.14, download once by hand; see
 [updating](https://docs.solidcraft.io/guide/updates.html#updating-from-011-to-014).
 
 ## What works
@@ -146,6 +152,153 @@ A script is a JSON list of the same commands the UI runs, executed with `solidcr
 Format and example: [docs/scripts.md](docs/scripts.md). Pages can also be driven through the
 [browser command API](docs/browser-api.md).
 
+## Plugins (experimental desktop runtime)
+
+Plugins add separately distributed behaviour without compiling that behaviour into SolidCraft.
+The initial runtime loads **WebAssembly components**, explicitly requested by the user. Merely
+installing a folder, enabling it in Preferences, or opening a design never executes plugin code.
+The interface is experimental: WIT package `craft:plugin@0.1.0`, capability `commands@0.1`. While
+it is 0.x a minor version may break the one before it; the host refuses a plugin that needs a
+capability it does not have, in plain words. Review a plugin again after an update. The desktop app and headless CLI use the same commands. Browser
+execution, automatic downloads and updates, custom panels, and plugin-defined parametric feature
+types are future work.
+
+### Install and inspect
+
+A package is a folder named after its id, containing `plugin.json` and a `.wasm` component.
+Preferences > Plugins lists packages under the per-user data folder: `%LOCALAPPDATA%/SolidCraft/plugins`
+on Windows, `~/Library/Application Support/SolidCraft/plugins` on macOS, and
+`${XDG_DATA_HOME:-~/.local/share}/solidcraft/plugins` on Linux. **Show in folder** opens this location.
+You can also inspect and explicitly run a package in another folder. Nothing is downloaded by the host.
+
+A minimal manifest looks like this. Plugin packages and examples are maintained outside this
+repository, as specified in [the plugin RFC](docs/rfcs/0002-plugins.md).
+
+```json
+{
+  "id": "example-box",
+  "name": "Example box",
+  "version": "0.1.0",
+  "description": "Create an ordinary editable box from dimensions.",
+  "capabilities": ["commands@0.1"],
+  "runtime": {
+    "module": "plugin.wasm",
+    "entries": ["make"],
+    "commands": ["solid.box"],
+    "limits": {"fuel": 10000000, "memory_mib": 64, "deadline_ms": 5000}
+  }
+}
+```
+
+Run `plugin.inspect` with `{"path":"/path/to/example-box"}` through the CLI's JSON scripts, MCP
+`execute`, or the desktop control channel's `engine.execute`. It reads the manifest and component
+without executing them, returning the declared commands, limits and an `approval` SHA-256 hash.
+Review the author, code and declared rights before using that hash. Inspection does not approve a
+package. Existing metadata-only packages remain listable but cannot run until they declare a runtime.
+
+### Run explicitly
+
+After reviewing the inspected package, execute:
+
+```json
+{
+  "command": "plugin.run",
+  "params": {
+    "path": "/path/to/example-box",
+    "approval": "<exact approval hash returned by plugin.inspect>",
+    "entry": "make",
+    "params": {"length": 20, "width": 10, "height": 3}
+  }
+}
+```
+
+For example, save that command in a JSON array and use `solidcraft-cli run commands.json`.
+For the running desktop app, send it as the `command` and `params` of a standalone
+`engine.execute` request (see [control protocol](docs/control-protocol.md)). The native host runs
+it on a worker and keeps the window responsive. Stop or a design change discards the pending
+result; the host does not automatically rerun external code. Desktop batches and scripts must send
+`plugin.run` separately. Headless CLI scripts may include it as a normal command.
+
+The hash binds **both the exact manifest bytes and the component bytes**, so an updated package
+requires a fresh inspection and permission review. It is a content identity, not a signature or an
+author's reputation. Agent chat asks before executing external plugin code. MCP and the control
+channel keep their existing file scopes: allow the package folder explicitly where needed. Naming
+a package never grants access to another folder.
+
+### User resource ceilings
+
+The invocation defaults remain **10,000,000 fuel, 64 MiB of guest memory and 5000 ms**.
+The default host ceilings remain **100,000,000,000 fuel and 128 MiB**. A package can declare
+larger fuel or memory budgets, but execution is refused until you explicitly raise the host
+ceilings and approve that exact package content. `plugin.inspect` is inert and reports the
+requested limits, current `host_limits`, `within_host_limits` and any `limits_error` even when
+a request is too large.
+
+In the native GUI, open **Preferences > Plugins**, enter **Max plugin fuel** and
+**Max plugin memory (MiB)**, then choose **Apply** or **OK**. Enter also accepts both values;
+**Cancel** reverts changes since the last Apply and **Restore defaults** resets this page.
+The settings persist in your user preferences and do not travel with saved designs.
+
+For standalone CLI or headless MCP sessions, create a UTF-8 JSON file, for example
+`plugin-limits.json` containing:
+
+```json
+{"max_fuel": 200000000000, "max_memory_mib": 512}
+```
+
+Pass it explicitly when starting the process:
+
+```text
+solidcraft-cli --plugin-limits plugin-limits.json run inspect-plugin.json --results
+solidcraft-cli --plugin-limits plugin-limits.json mcp --headless --allow-path /path/to/plugins
+```
+
+Missing fields use the original host ceilings. Connected desktop sessions use the GUI's
+preferences; CLI settings cannot override them. Positive integer fuel values up to `u64::MAX`
+are accepted without rounding. Guest memory is limited to 4096 MiB by the current Wasm32 ABI;
+that technical boundary requires a different runtime ABI to change. Neither setting changes
+a package's declared budget, executes it, adds permissions, or retries a failed invocation.
+Review its manifest and component, obtain the content approval hash, and explicitly invoke it.
+A changed manifest budget requires a fresh approval hash. Keep the selected ceilings within your
+machine's available resources; they are limits on guest execution, not total SolidCraft memory
+or native CAD work. The independent maximum execution deadline stays 30 seconds.
+
+### Permissions, results and saved designs
+
+A plugin can call any command in the MCP catalog whose exact id its manifest lists. Commands that
+reach past the open design are grouped: `file` (saving, exporting, importing, inserting from files,
+libraries), `doc` (opening or switching designs), `app` (settings, window, diagnostics) and `plugin`
+(inspecting or running plugins). Each group is refused unless the manifest requests it in
+`runtime.permissions.command_groups` and the user grants it; this version has no grant UI yet.
+Filesystem calls require matching manifest permissions and approved folder grants. The clock
+requires its manifest permission; otherwise it returns a fixed epoch. No WASI, socket or process
+API is linked. A design container reserves `plugins/<plugin-id>/` for a plugin's own data, kept
+and saved back untouched when the plugin is missing; plugins cannot read or write it until the
+`storage` capability arrives.
+Inspection commands can disclose model data, so review them as permissions too. In particular, the optional
+`model.mesh` permission exposes the requested body's evaluated vertices and triangles in its owning
+component's coordinates (millimetres), with explicit transfer limits. It performs no conversion.
+
+Edits run against an isolated copy of the design. Only a successful call is adopted, as **one Undo
+step**. A trap, exhausted fuel, memory limit, invalid result or refused host call discards the
+transaction, preserving the previous design and undo/redo history. The host validates produced
+native features before accepting them. A plugin that catches a refused host call cannot commit an
+earlier partial edit. CPU-heavy guest loops are bounded by fuel and a deadline; the guide explains
+the separate cost of compiling a component and executing a granted native command.
+
+The result is ordinary native features: they save, undo, redo and rebuild without the plugin.
+Removing the package disables future invocations; it does not remove the features already created.
+Changing the plugin's own parameters means another invocation in this first version; there is no
+plugin-owned timeline evaluation hook yet. Turn an installed plugin off in Preferences > Plugins
+to refuse subsequent desktop calls. Disabling it or changing resource ceilings during a pending
+call prevents adoption. CLI
+processes have their own session policy and do not read the desktop app's preferences.
+
+See the [runtime and author guide](docs/plugin-runtime.md) for the complete manifest, supported
+command boundary, limits, build options, tests and current restrictions.
+For step-by-step package checks and expected results, see the [English test guide](docs/plugin-test-guide.md). The existing
+[parametric plugin design](docs/plugins.md) remains a separate future phase.
+
 ## Contributing
 
 Help is welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers how to build and test, the code map,
@@ -171,6 +324,12 @@ them: read [DISCLAIMER.md](DISCLAIMER.md).
 MIT OR Apache-2.0, at your option. Developed under the
 [clean-room contribution rules](AGENTS.md); third-party code and assets retain their
 documented licences and attribution.
+
+SolidCraft's brand and interface are licensed separately, under
+[LICENSE-BRAND](LICENSE-BRAND): the UI kit, the look (interface icons, glyphs, built-in themes),
+the theme's design tokens and palettes, and the SolidCraft name, logo and app icon. Use them freely
+as part of SolidCraft. Using them in another program or product needs the maintainers' written
+permission first.
 
 SolidCraft is independent. Behaviour is designed from public documentation, general CAD
 conventions and user feedback. Reference tests use analytic values and open-source tools.

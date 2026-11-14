@@ -5,12 +5,13 @@ description: "Use when working in the Android port (deveshrai/Solidcraft-Android
 
 # The Android port: upstream moves freely, the port never breaks
 
-The port is upstream SolidCraft plus an Android app and port-only features (gears, helical threads,
-the MCP server on the network). Upstream changes anything it likes; the port's job is to notice what
-that touches and prove its own features still work. The long form is `docs/android-sync.md`.
+The port is upstream SolidCraft as an app for Android and Googlebook OS (touch, desktop windows, the
+MCP server on the network); its modelling is upstream's. Upstream changes anything it likes; the
+port's job is to notice what that touches and prove its own changes still work. The long form is
+`docs/android-sync.md`.
 
 ## Rules
-- Prefer files upstream doesn't have (`apps/solidcraft-android/`, `crates/engine/src/gear_profile.rs`, `docs/android-*.md`, pending files). Change an upstream file only where a hook is needed, as few lines as possible.
+- Prefer files upstream doesn't have (`apps/solidcraft-android/`, `crates/ui-egui/src/touch_pick.rs`, `docs/android-*.md`, pending files). Change an upstream file only where a hook is needed, as few lines as possible.
 - Every upstream file the port changes is listed in an area of `scripts/android-port-areas.json`, with the tests that prove it; `scripts/android-port.py touchpoints` fails otherwise.
 - A port fix in an upstream file gets a regression test in the area's existing test file, and, where a merge could quietly take upstream's version (vendored crates), a `SolidCraft` comment the area lists under `markers`.
 - Strings go in `assets/locales/pending/android-port.json`, attribution rows in `attribution/pending/android-port.md`, design-format changes in `crates/doc/src/format/pending/`. Never run `cargo xtask fold-pending` in the port.

@@ -5,6 +5,7 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.41.0a](#0410a): upstream 0.41.0 with plugins; SolidCraft for Android and Googlebook OS; the port's gears and helical threads retired
 - [0.40.0-rc.3b](#0400-rc3b): the app's top bar below a DeX window's title bar
 - [0.40.0-rc.3a](#0400-rc3a): upstream's 0.40.0-rc.3 pre-release; a model locomotive built over MCP
 - [0.40.0-rc.2a](#0400-rc2a): upstream's 0.40.0-rc.2 pre-release and its new kernel, solidcore
@@ -18,6 +19,42 @@ missing: [android-known-issues.md](android-known-issues.md).
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.41.0a
+
+**SolidCraft for Android and Googlebook OS.** The port is now named for both: Googlebook OS, on
+Google's Googlebook laptops, is Android-based, and the app runs there in a desktop window as it
+does in Samsung DeX. Two APKs: **arm64** for phones, tablets and Googlebooks with a Snapdragon
+chip, and **x86_64** for Googlebooks with an Intel chip (which would otherwise translate the arm64
+code). Neither has been tried on a Googlebook yet.
+
+**Upstream 0.41.0** merged (a stable release, after the 0.40 pre-releases). Its headline:
+**plugins**, sandboxed WebAssembly that works through SolidCraft's own commands, installed from a
+`.zip` in Settings › Plugins; the first is [SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears),
+an involute spur gear generator. Also: a Constrain dialog for assemblies, fillets and chamfers that
+hold up on real parts, STEP import that keeps faces it used to drop, sheet-metal folds that no
+longer shatter into strips, snap points everywhere, and much more
+([upstream's notes](https://github.com/tangency-labs/solidcraft/releases/tag/v0.41.0)).
+
+**The port's gears and helical threads are retired.** With plugins upstream (gears among them)
+and upstream's exact modelled threads, the port's own Gear command and helical B-rep threads were
+taken out; they may come back as plugins. What it means for your designs:
+
+- **Designs saved by earlier port releases open.** Each helical thread becomes upstream's modelled
+  thread on the same face: an ISO designation (M10) keeps its size and pitch; a custom pitch gives
+  way to the size the face takes. Clearance, offsets and the start angle are gone from the model,
+  but every value is kept in the design's metadata (`io.github.deveshrai.solidcraft-android`), so
+  nothing saved is lost. For the exact old geometry, export STEP from 0.40.0-rc.3b first.
+- **Gears stay** as ordinary sketches and features; only Edit Gear is gone.
+- **Designs are upstream's own format now** (55): what you save on Android opens in upstream
+  SolidCraft 0.41.0 on a computer, and the reverse.
+
+**Kept:** touch (orbit, pan, pinch, the crosshair picker, finger-scrolled menus), the MCP server on
+the network, desktop windows in DeX, crash reports you can save, and the OpenGL ES and Adreno
+fallbacks, all carried over to upstream's reorganised code (its new `ui-kit` and `viewport-gpu`
+crates).
+
+**Not tested yet:** plugins on a device, and Googlebooks ([known issues](android-known-issues.md)).
 
 ## 0.40.0-rc.3b
 
@@ -159,7 +196,7 @@ German, Danish, Polish, Ukrainian and others; DXF export strict readers accept.
   instead of intersecting them: clearance 551 s → 4 s, and the right distance (it said 0 mm).
 - **Start angle** on a helical thread (Thread › Helical B-rep, or `start_angle`): turns the groove to
   phase it against a mating thread. A modelled screw through a modelled nut still meets it at the nut's
-  ends; why, and what's next: [android-thread-mating.md](android-thread-mating.md). Saved as a pending
+  ends; why, and what's next: [android-thread-mating.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/v0.40.0-rc.3b-android/docs/android-thread-mating.md). Saved as a pending
   design-format change (`helical-thread-start-angle`): the port now writes format 45.
 - **The title bar shows the port's version**, with its letter: *v0.27.1a*.
 - **Android:** upstream's new clipboard reads (theme paste, the text-field Paste) are left out on
@@ -168,7 +205,7 @@ German, Danish, Polish, Ukrainian and others; DXF export strict readers accept.
 
 Tested on the emulator and a Galaxy Tab: a linear stage (guide rods, bearing blocks, lead screw, nut,
 coupling, motor) built over MCP in 68 s on the tablet; a design saved by 0.24.0b opens with the same
-volumes ([the run](android-thread-mating.md#5-the-test-run)).
+volumes ([the run](https://github.com/deveshrai/Solidcraft-Android-Port/blob/v0.40.0-rc.3b-android/docs/android-thread-mating.md#5-the-test-run)).
 
 ## 0.25.1a
 
@@ -216,7 +253,7 @@ greyed out, as Android has no slicer to send to. Upstream's *Reopen designs* doe
 Still upstream 0.24.0. This release fixes a live session that went wrong: Claude Code in Termux on a
 Galaxy Tab, designing a worm gearbox, saw its calls time out, a hub join run for over 25 minutes, and the
 app closed as "not responding". The whole story, with before and after numbers:
-[android-speed.md](android-speed.md).
+[android-speed.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/v0.40.0-rc.3b-android/docs/android-speed.md).
 
 ![A worm gearbox built over MCP on a Galaxy Tab](screenshots/android/mcp-worm-gearbox-tab.gif)
 
@@ -291,14 +328,14 @@ port designs; export STEP to share.
 ## 0.23.0a
 
 - **Gears**: ten involute types with bore, DIN 6885 keyway and hub, previewed and editable after
-  ([android-gears.md](android-gears.md)); smooth twisted and scaled sweeps.
+  ([android-gears.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/v0.40.0-rc.3b-android/docs/android-gears.md)); smooth twisted and scaled sweeps.
 - **Upstream 0.23.0**, merged.
 - **Save As** names the tab after what was typed in the picker.
 
 ## 0.22.0a
 
 - **Helical B-rep threads**: exact threads, custom pitch on any diameter, clearance, offsets
-  ([android-threads.md](android-threads.md)).
+  ([android-threads.md](https://github.com/deveshrai/Solidcraft-Android-Port/blob/v0.40.0-rc.3b-android/docs/android-threads.md)).
 - **Upstream 0.22.0**, merged, with its Render workspace working on the device.
 
 ## 0.21.0a

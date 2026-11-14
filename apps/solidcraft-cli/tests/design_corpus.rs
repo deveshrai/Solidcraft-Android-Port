@@ -52,6 +52,41 @@ fn old_designs_open_upgrade_and_evaluate() {
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
+/// Android port: designs earlier port releases saved with helical B-rep threads (pending format
+/// changes the port has since retired) open as upstream's: every helical thread is a modelled
+/// thread, and its own values (pitch, clearance, start angle…) are kept in the design's metadata.
+#[test]
+fn port_designs_open_with_their_helical_threads_as_modelled_threads() {
+    let mut seen = 0;
+    for p in corpus().into_iter().filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("port-"))) {
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        let helical: Vec<u64> = saved["features"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|f| f["type"] == "thread" && (f["helical"] == true || f.get("pitch").is_some()))
+            .filter_map(|f| f["id"].as_u64())
+            .collect();
+        if helical.is_empty() {
+            continue;
+        }
+        seen += 1;
+        let s = open(&p);
+        let name = p.display();
+        let doc: Value = serde_json::from_str(&s.doc.to_json()).unwrap();
+        assert!(doc.get("format_pending").is_none_or(|v| v.as_array().is_some_and(Vec::is_empty)), "{name}: {doc:?}");
+        for id in &helical {
+            let f = doc["features"].as_array().unwrap().iter().find(|f| f["id"] == *id).unwrap_or_else(|| panic!("{name}: thread {id}"));
+            assert_eq!(f["modeled"], true, "{name}: {f}");
+            assert!(f.get("helical").is_none() && f.get("pitch").is_none(), "{name}: {f}");
+        }
+        let kept = doc["metadata"]["io.github.deveshrai.solidcraft-android"]["retired_helical_threads"].as_array().cloned().unwrap_or_default();
+        let kept_ids: Vec<u64> = kept.iter().filter_map(|k| k["id"].as_u64()).collect();
+        assert_eq!(kept_ids, helical, "{name}: every helical thread's values are kept");
+    }
+    assert!(seen >= 4, "port designs with helical threads in the corpus: {seen}");
+}
+
 /// Names saved before format 14 were worked out from geometry, pieces of a split face numbered by
 /// where their centres lay (`F2:top#2`). They open marked as such and find no face or edge today:
 /// each feature holding one fails, asking for its reference to be picked again, and the rest of
@@ -106,8 +141,9 @@ fn body_names_saved_before_exact_history_open_marked_and_evaluate() {
 type Planes = &'static [([f64; 3], f64)];
 const NO_ATTACHMENT_YET: [(&str, &str, Option<Planes>, u32); 6] = [
     ("issue-616-lid-ribs", "Lid", None, 628),
-    // Android port (no upstream issue: 0): a helical thread's groove ends are both named as made
-    // from the threaded face, so neither can be told apart from the other.
+    // Android port (no upstream issue: 0): a thread's groove ends are both named as made from the
+    // threaded face, so neither can be told apart from the other (the port's helical threads, and
+    // since 0.41.0a upstream's modelled threads they open as).
     ("port-0240b-gear-helical-thread", "Bolt", Some(&[([1.0, 0.0, 0.0], 30.0), ([-0.3826834323629895, 0.9238795325121567, 0.0], -11.480503)]), 0),
     ("port-0271a-long-thread-start-angle", "Lead screw", Some(&[([0.0, -1.0, 0.0], 0.0), ([-0.9238795325102824, 0.3826834323675143, 0.0], 0.0)]), 0),
     // Android port (no upstream issue: 0): faces cut by one extrude of a sketch with many profiles
@@ -249,7 +285,7 @@ fn faces_of_a_lid_with_joined_ribs_take_an_attached_sketch() {
 }
 
 #[test]
-#[ignore = "fails until the Android port names a helical thread's two groove ends apart"]
+#[ignore = "fails until a thread's two groove ends are named apart"]
 fn the_groove_ends_of_a_helical_thread_take_an_attached_sketch() {
     known_faces_attach(0);
 }
