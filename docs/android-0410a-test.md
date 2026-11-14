@@ -195,7 +195,7 @@ Upstream's first plugin, [SolidCraft Gears](https://github.com/bherbruck/solidcr
 **On 0.41.0a plugins can't be installed on Android.** Preferences › Plugins says "Plugins are
 available in the desktop app", and `plugin.install` answers "installing plugins needs the desktop
 app". Upstream keeps installed plugins in a per-user folder under `$XDG_DATA_HOME` or `$HOME`, and an
-Android app has neither. The fix (for 0.41.0b) gives upstream's plugin code the app's own private
+Android app has neither. The fix, released in 0.41.0b, gives upstream's plugin code the app's own private
 folder instead, the way the app already gives one for crash reports
 (`solidcraft_engine::plugin::configure_process_plugins_dir`).
 

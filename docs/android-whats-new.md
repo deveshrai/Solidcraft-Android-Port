@@ -5,6 +5,7 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.41.0b](#0410b): plugins install and run on Android; tested on a Galaxy Tab, a Galaxy Z Fold, a Pixel 9 and Googlebooks
 - [0.41.0a](#0410a): upstream 0.41.0 with plugins; SolidCraft for Android and Googlebook OS; the port's gears and helical threads retired
 - [0.40.0-rc.3b](#0400-rc3b): the app's top bar below a DeX window's title bar
 - [0.40.0-rc.3a](#0400-rc3a): upstream's 0.40.0-rc.3 pre-release; a model locomotive built over MCP
@@ -19,6 +20,24 @@ missing: [android-known-issues.md](android-known-issues.md).
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.41.0b
+
+**Plugins work on Android and Googlebook OS.** In 0.41.0a, Preferences › Plugins said plugins were
+for the desktop app, and nothing could be installed: upstream keeps installed plugins in a per-user
+folder under `$XDG_DATA_HOME` or `$HOME`, and an Android app has neither. The app now gives upstream's
+plugin code its own private folder. **Install plugin…** takes a plugin's `.zip` through Android's file
+picker, and its entries run from **Plugins › Plugins…**, as on the desktop.
+
+Tested on a Galaxy Z Fold with [SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears)
+0.1.1: installed, run from the menu, and run by an agent over MCP to make every gear of a
+limited-slip differential with mounting brackets and sleeved bushings (100 calls, 18.7 s, no
+interference among its 30 bodies; [the test](android-0410a-test.md#5-plugins-on-a-galaxy-z-fold)).
+Upstream's plugin runtime compiles each plugin to machine code at run time, and Android allows it.
+
+Also since 0.41.0a, on the same build as 0.41.0a: the cassette test on a Galaxy Tab (41.8 s), a
+Galaxy Z Fold (44.8 s) and a Pixel 9 (66.5 s), recorded; the app on HP and Dell XPS Googlebooks;
+two layout problems on a phone held upright, now in [known issues](android-known-issues.md).
 
 ## 0.41.0a
 

@@ -7,7 +7,7 @@ upstream release.
 
 ![The port and upstream](screenshots/android/hero-port-vs-upstream.png)
 
-Current: **port 0.41.0a**, against **upstream 0.41.0** ([what's new](android-whats-new.md)). This page is
+Current: **port 0.41.0b**, against **upstream 0.41.0** ([what's new](android-whats-new.md)). This page is
 kept up to date with each port release ([keeping this page current](#keeping-this-page-current)).
 
 - [At a glance](#at-a-glance)
@@ -20,7 +20,7 @@ kept up to date with each port release ([keeping this page current](#keeping-thi
 
 ## At a glance
 
-| | Upstream 0.41.0 | Port 0.41.0a |
+| | Upstream 0.41.0 | Port 0.41.0b |
 |---|---|---|
 | Platforms | Windows, macOS, Linux, web | All of upstream's, **plus Android and Googlebook OS**: phones, tablets, foldables, Samsung DeX, Googlebooks (an arm64 APK, and an x86_64 one for Intel Googlebooks) |
 | Modelling | Everything: sketches, the solver, every feature and workspace, exact modelled threads, plugins | The same, unchanged |

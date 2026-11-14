@@ -12,7 +12,7 @@ any Android device, on HP and Dell XPS Googlebooks.*
 [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with every
 upstream release (now **0.41.0**), as an app for Android phones, tablets and foldables, Samsung DeX,
 and Googlebooks, Google's laptops whose Googlebook OS is Android-based. Current release:
-**0.41.0a** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases/latest): arm64 for
+**0.41.0b** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases/latest): arm64 for
 phones, tablets and Snapdragon Googlebooks; x86_64 for Intel Googlebooks).
 
 | Added in this port | What it gives you | Guide |
@@ -26,7 +26,8 @@ Everything else is upstream's, unchanged: the sketcher and solver, every feature
 exact modelled threads, and since 0.41 **plugins**, the first of them
 [SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears), an involute gear generator.
 
-**New in 0.41.0a:** upstream's 0.41.0 with plugins, a Constrain dialog for assemblies and sturdier
+**New in 0.41.0b:** plugins install and run on Android and Googlebook OS
+([below](#plugins-experimental-desktop-runtime)). **In 0.41.0a:** upstream's 0.41.0 with plugins, a Constrain dialog for assemblies and sturdier
 fillets and STEP imports; the new name and an x86_64 APK for Intel Googlebooks. The port's own gears
 and helical threads are retired in favour of upstream's plugins and modelled threads: designs saved
 by earlier port releases still open, their helical threads as upstream's modelled threads with the
@@ -161,7 +162,7 @@ Format and example: [docs/scripts.md](docs/scripts.md). Pages can also be driven
 
 ## Plugins (experimental desktop runtime)
 
-**On Android and Googlebook OS** plugins work from port 0.41.0b, as on the desktop: Install plugin… on
+**On Android and Googlebook OS** plugins work since port 0.41.0b, as on the desktop: Install plugin… on
 Preferences › Plugins takes the `.zip` through Android's file picker, and the plugin's entries run
 from the Plugins menu. (0.41.0a can't install them: [known issues](docs/android-known-issues.md).)
 Upstream's first plugin, [SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears), made
