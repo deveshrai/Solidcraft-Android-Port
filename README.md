@@ -27,7 +27,7 @@ exact modelled threads, and since 0.41 **plugins**, the first of them
 [SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears), an involute gear generator.
 
 **New in 0.41.0b:** plugins install and run on Android and Googlebook OS
-([below](#plugins-experimental-desktop-runtime)). **In 0.41.0a:** upstream's 0.41.0 with plugins, a Constrain dialog for assemblies and sturdier
+([below](#plugins-on-android)). **In 0.41.0a:** upstream's 0.41.0 with plugins, a Constrain dialog for assemblies and sturdier
 fillets and STEP imports; the new name and an x86_64 APK for Intel Googlebooks. The port's own gears
 and helical threads are retired in favour of upstream's plugins and modelled threads: designs saved
 by earlier port releases still open, their helical threads as upstream's modelled threads with the
@@ -39,6 +39,18 @@ Galaxy Tab in DeX in 9 seconds ([the test](docs/android-0400rc3a-test.md); on 0.
 [its test](docs/android-0410a-test.md)):
 
 ![A model locomotive and track built over MCP on a Galaxy Tab](docs/screenshots/android/locomotive-mcp-tab-0400rc3a.gif)
+
+## Plugins on Android
+
+Plugins work on Android and Googlebook OS since port 0.41.0b, as on the desktop: Install plugin… on
+Preferences › Plugins takes the `.zip` through Android's file picker, and the plugin's entries run
+from the Plugins menu. (0.41.0a can't install them: [known issues](docs/android-known-issues.md).)
+Upstream's first plugin, [SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears), made
+every gear of this differential, built by an agent over MCP on a Galaxy Z Fold
+([MP4](docs/screenshots/android/lsd-gears-plugin-fold-frame-0410b.mp4),
+[the test](docs/android-0410a-test.md#5-plugins-on-a-galaxy-z-fold)):
+
+![A limited-slip differential on a Galaxy Z Fold, its sun and planet gears made by the SolidCraft Gears plugin](docs/screenshots/android/lsd-gears-plugin-fold-frame-0410b.gif)
 
 [What's new](docs/android-whats-new.md) ·
 [port vs upstream](docs/android-vs-upstream.md) ·
@@ -161,16 +173,6 @@ Format and example: [docs/scripts.md](docs/scripts.md). Pages can also be driven
 [browser command API](docs/browser-api.md).
 
 ## Plugins (experimental desktop runtime)
-
-**On Android and Googlebook OS** plugins work since port 0.41.0b, as on the desktop: Install plugin… on
-Preferences › Plugins takes the `.zip` through Android's file picker, and the plugin's entries run
-from the Plugins menu. (0.41.0a can't install them: [known issues](docs/android-known-issues.md).)
-Upstream's first plugin, [SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears), made
-every gear of this differential, built by an agent over MCP on a Galaxy Z Fold
-([MP4](docs/screenshots/android/lsd-gears-plugin-fold-frame-0410b.mp4),
-[the test](docs/android-0410a-test.md#5-plugins-on-a-galaxy-z-fold)):
-
-![A limited-slip differential on a Galaxy Z Fold, its sun and planet gears made by the SolidCraft Gears plugin](docs/screenshots/android/lsd-gears-plugin-fold-frame-0410b.gif)
 
 Plugins add separately distributed behaviour without compiling that behaviour into SolidCraft.
 The initial runtime loads **WebAssembly components**, explicitly requested by the user. Merely
