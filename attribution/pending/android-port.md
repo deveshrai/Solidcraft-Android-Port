@@ -135,3 +135,5 @@
 | docs/screenshots/android/cassette-tab-0410a-section.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Galaxy Tab, 0.41.0a): a section through an M2 screw in its modelled tapped thread | MIT OR Apache-2.0 |
 | docs/screenshots/android/cassette-tab-0410a.gif | SolidCraft contributors | screen recording of SolidCraft itself on Android (Galaxy Tab, 0.41.0a): the cassette housing built over MCP | MIT OR Apache-2.0 |
 | docs/screenshots/android/cassette-tab-0410a.mp4 | SolidCraft contributors | screen recording of SolidCraft itself on Android (Galaxy Tab, 0.41.0a): the cassette housing built over MCP | MIT OR Apache-2.0 |
+| docs/screenshots/android/cassette-fold-0410a.gif | SolidCraft contributors | screen recording of SolidCraft itself on Android (Galaxy Z Fold, 0.41.0a): the cassette housing built over MCP | MIT OR Apache-2.0 |
+| docs/screenshots/android/cassette-fold-0410a.mp4 | SolidCraft contributors | screen recording of SolidCraft itself on Android (Galaxy Z Fold, 0.41.0a): the cassette housing built over MCP | MIT OR Apache-2.0 |

@@ -105,6 +105,24 @@ with a 0.05 mm print clearance.
 
 ![A section through screw 1 in its tapped hole](screenshots/android/cassette-tab-0410a-section.jpg)
 
+### On a Galaxy Z Fold
+
+The same test on a phone: a Galaxy Z Fold (SM-F971B, Android 17, the inner screen), over Wi-Fi as an
+agent on another computer would connect, with the released arm64 APK.
+
+![The cassette housing built over MCP on a Galaxy Z Fold, 0.41.0a](screenshots/android/cassette-fold-0410a.gif)
+
+*The Fold's inner screen during the run, at its real speed ([MP4](screenshots/android/cassette-fold-0410a.mp4)).*
+
+| | Galaxy Z Fold, 0.41.0a | Galaxy Tab, 0.41.0a |
+|---|---|---|
+| Operations | 121, **all succeeded** | 121, all succeeded |
+| Time | **44.8 s** (40.2 s in calls), over Wi-Fi, recording the screen | 41.8 s (37.1 s in calls), over USB |
+| Screw holes and tapped threads | 13.5 s | 11.2 s |
+| Checks | 8.7 s | 10.1 s |
+| Screw against its tapped thread, exact | no interference (4.6 s for the pair) | no interference (3.3 s) |
+| Volumes, faces | identical: side B 9563.73 mm³, side A 8729.04 mm³, each screw 26.17 mm³ and 23 faces | |
+
 What it shows:
 
 - **Upstream's threads are exact and fast to check.** The interference check now intersects a screw
@@ -119,7 +137,8 @@ What it shows:
 
 ## 5. Not tested yet
 
-- A phone: this release ran on the emulator and, after release, a Galaxy Tab (section 4). The DeX
+- Phones other than a Galaxy Z Fold: this release ran on the emulator and, after release, a Galaxy
+  Tab and a Galaxy Z Fold (section 4). The DeX
   window fix of 0.40.0-rc.3b was checked on a Galaxy Tab.
 - Googlebooks other than an HP and a Dell XPS model. On those two, after release, it worked exactly
   as on other Android devices (the Android underneath is the same); other models have other
