@@ -119,9 +119,11 @@ What it shows:
 
 ## 5. Not tested yet
 
-- A phone or Googlebook: the emulator and, after release, the Galaxy Tab (section 4). The DeX window
-  fix of 0.40.0-rc.3b was checked on a Galaxy Tab.
+- A phone: this release ran on the emulator and, after release, a Galaxy Tab (section 4). The DeX
+  window fix of 0.40.0-rc.3b was checked on a Galaxy Tab.
+- Googlebooks other than an HP and a Dell XPS model. On those two, after release, it worked exactly
+  as on other Android devices (the Android underneath is the same); other models have other
+  resolutions and scaling.
 - **Plugins** on a device: installing and running SolidCraft Gears. Upstream's plugin runtime
   compiles WebAssembly to machine code at run time; whether Android allows that for this app is
   the first thing to check.
-- The x86_64 APK: built, never run.
