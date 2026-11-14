@@ -28,7 +28,8 @@ old values kept in the design, and designs are now upstream's own format
 ([what changed](docs/android-whats-new.md#0410a)).
 
 A 3D-printable G-scale locomotive mechanism and its track, 51 parts, built by an agent over MCP on a
-Galaxy Tab in DeX in 9 seconds ([the test](docs/android-0400rc3a-test.md)):
+Galaxy Tab in DeX in 9 seconds ([the test](docs/android-0400rc3a-test.md); on 0.41.0a too:
+[its test](docs/android-0410a-test.md)):
 
 ![A model locomotive and track built over MCP on a Galaxy Tab](docs/screenshots/android/locomotive-mcp-tab-0400rc3a.gif)
 

@@ -54,7 +54,9 @@ the network, desktop windows in DeX, crash reports you can save, and the OpenGL 
 fallbacks, all carried over to upstream's reorganised code (its new `ui-kit` and `viewport-gpu`
 crates).
 
-**Not tested yet:** plugins on a device, and Googlebooks ([known issues](android-known-issues.md)).
+**Tested** on the Android emulator: the locomotive and track built over MCP, and designs from every
+earlier port release opened ([the test](android-0410a-test.md)). **Not tested yet:** a phone,
+tablet or Googlebook, and plugins on a device ([known issues](android-known-issues.md)).
 
 ## 0.40.0-rc.3b
 

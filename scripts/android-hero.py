@@ -11,7 +11,7 @@ SHOT, OUT, UP, PORT = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 W, H = 1800, 960
 BG, FG, DIM, LINE = (17, 19, 25), (236, 238, 242), (160, 166, 178), (52, 56, 66)
 BLUE, GREEN, RED, YELLOW = (88, 166, 255), (74, 222, 128), (248, 81, 73), (250, 204, 21)
-PLEX = f"{REPO}/assets/fonts/ibm-plex-sans/IBMPlexSans-Variable.ttf"
+PLEX = f"{REPO}/crates/look/fonts/ibm-plex-sans/IBMPlexSans-Variable.ttf"
 
 
 def font(size, weight="Regular"):
@@ -43,8 +43,8 @@ im.paste(shot, (fx + pad, fy + pad), mask)
 cx, cy = fx + pad + 190, fy + pad + 96
 box = (cx, cy, cx + 470, cy + 66)
 d.rounded_rectangle(box, radius=10, fill=(255, 236, 160), outline=YELLOW, width=3)
-d.text((cx + 14, cy + 6), "Locomotive and track, 51 parts: 9.0 s", font=font(20, "SemiBold"), fill=(30, 30, 30))
-d.text((cx + 14, cy + 34), "95 MCP calls on a Galaxy Tab in DeX; no part overlaps", font=font(16), fill=(60, 60, 60))
+d.text((cx + 14, cy + 6), "Locomotive and track, 51 parts, over MCP", font=font(20, "SemiBold"), fill=(30, 30, 30))
+d.text((cx + 14, cy + 34), "0.41.0a; 9 s on a Galaxy Tab in DeX; no part overlaps", font=font(16), fill=(60, 60, 60))
 
 d.text((60, fy + shot.height + 2 * pad + 22),
        "A 3D-printable G-scale locomotive mechanism on 400 mm of track, built by an agent over the MCP server.",
@@ -72,7 +72,7 @@ rows = [
     ("Android app", "touch, crosshair picks, mouse, keyboard", None, True),
     ("Googlebook OS and DeX", "desktop windows; Arm and Intel APKs", None, True),
     ("MCP server on the network", "Claude Code from Termux or Wi-Fi", "stdio", True),
-    ("Plugins", "SolidCraft Gears and more, as upstream", True, True),
+    ("Plugins", "upstream's, built in; not yet tried on a device", True, True),
     ("Every upstream feature", "same commands, same design files", True, True),
 ]
 y = 232
