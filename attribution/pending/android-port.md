@@ -137,3 +137,6 @@
 | docs/screenshots/android/cassette-tab-0410a.mp4 | SolidCraft contributors | screen recording of SolidCraft itself on Android (Galaxy Tab, 0.41.0a): the cassette housing built over MCP | MIT OR Apache-2.0 |
 | docs/screenshots/android/cassette-fold-0410a.gif | SolidCraft contributors | screen recording of SolidCraft itself on Android (Galaxy Z Fold, 0.41.0a): the cassette housing built over MCP | MIT OR Apache-2.0 |
 | docs/screenshots/android/cassette-fold-0410a.mp4 | SolidCraft contributors | screen recording of SolidCraft itself on Android (Galaxy Z Fold, 0.41.0a): the cassette housing built over MCP | MIT OR Apache-2.0 |
+| docs/screenshots/android/cassette-pixel-0410a.gif | SolidCraft contributors | screen recording of SolidCraft itself on Android (Pixel 9, 0.41.0a): the cassette housing built over MCP | MIT OR Apache-2.0 |
+| docs/screenshots/android/cassette-pixel-0410a.mp4 | SolidCraft contributors | screen recording of SolidCraft itself on Android (Pixel 9, 0.41.0a): the cassette housing built over MCP | MIT OR Apache-2.0 |
+| docs/screenshots/android/pixel-fit-cropped-0410a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on Android (Pixel 9, 0.41.0a): the isometric view of a wide part in portrait | MIT OR Apache-2.0 |

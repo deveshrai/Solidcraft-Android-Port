@@ -123,6 +123,34 @@ agent on another computer would connect, with the released arm64 APK.
 | Screw against its tapped thread, exact | no interference (4.6 s for the pair) | no interference (3.3 s) |
 | Volumes, faces | identical: side B 9563.73 mm³, side A 8729.04 mm³, each screw 26.17 mm³ and 23 faces | |
 
+### On a Pixel 9
+
+And on a phone held upright: a Pixel 9 (Android 17, 1080 × 2424, portrait), over USB (`adb forward`),
+with the released arm64 APK, upgraded in place from 0.23.0a.
+
+![The cassette housing built over MCP on a Pixel 9, 0.41.0a](screenshots/android/cassette-pixel-0410a.gif)
+
+*The Pixel's screen during the run, at its real speed ([MP4](screenshots/android/cassette-pixel-0410a.mp4)).*
+
+| | Pixel 9 | Galaxy Z Fold | Galaxy Tab |
+|---|---|---|---|
+| Operations | 121, **all succeeded** | 121, all succeeded | 121, all succeeded |
+| Time | **66.5 s** (61.8 s in calls) | 44.8 s | 41.8 s |
+| Screw holes and tapped threads | 21.1 s | 13.5 s | 11.2 s |
+| Checks | 12.8 s | 8.7 s | 10.1 s |
+| Screw against its tapped thread, exact | no interference (5.2 s) | no interference (4.6 s) | no interference (3.3 s) |
+
+The same volumes and faces again. Two things a portrait phone shows that the tablet and the Fold don't:
+
+- **The isometric view doesn't fit a wide part.** After `view.isometric` the 100 mm housing runs off
+  both sides of the narrow view, so the fit seems to go by the view's height only:
+
+  ![The isometric view on a Pixel 9 in portrait, the housing cropped](screenshots/android/pixel-fit-cropped-0410a.jpg)
+
+- **The crosshair button sits half off the left edge** of the view bar.
+
+Both are in [known issues](android-known-issues.md).
+
 What it shows:
 
 - **Upstream's threads are exact and fast to check.** The interference check now intersects a screw
@@ -137,8 +165,8 @@ What it shows:
 
 ## 5. Not tested yet
 
-- Phones other than a Galaxy Z Fold: this release ran on the emulator and, after release, a Galaxy
-  Tab and a Galaxy Z Fold (section 4). The DeX
+- Other phones: this release ran on the emulator and, after release, a Galaxy Tab, a Galaxy Z Fold
+  and a Pixel 9 (section 4). The DeX
   window fix of 0.40.0-rc.3b was checked on a Galaxy Tab.
 - Googlebooks other than an HP and a Dell XPS model. On those two, after release, it worked exactly
   as on other Android devices (the Android underneath is the same); other models have other
