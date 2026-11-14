@@ -19,6 +19,20 @@ pub fn configure_process_host_limits(limits: HostLimits) -> Result<()> {
 pub(crate) fn default_host_limits() -> HostLimits {
     PROCESS_HOST_LIMITS.get().copied().unwrap_or_default()
 }
+/// SolidCraft Android port: the plugins folder an app names when its platform has no per-user data
+/// folder (Android has no `$HOME`; the app gives its own private folder). Set once, at start.
+static PROCESS_PLUGINS_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+pub fn configure_process_plugins_dir(dir: PathBuf) -> Result<()> {
+    PROCESS_PLUGINS_DIR.set(dir).map_err(|_| error("the process plugins folder is already configured"))
+}
+/// The installed plugins' folder when no session names one: the app's ([`configure_process_plugins_dir`]),
+/// else the per-user `plugins` folder ([`crate::recovery::data_dir`]).
+pub fn default_plugins_dir() -> Option<PathBuf> {
+    first_plugins_dir(PROCESS_PLUGINS_DIR.get().cloned(), crate::recovery::data_dir())
+}
+fn first_plugins_dir(app: Option<PathBuf>, data: Option<PathBuf>) -> Option<PathBuf> {
+    app.or_else(|| data.map(|p| p.join("plugins")))
+}
 fn error(s: impl Into<String>) -> EngineError {
     EngineError::Other(format!("plugin: {}", s.into()))
 }
@@ -42,7 +56,7 @@ impl AppState {
         if cfg!(target_arch = "wasm32") {
             return None;
         }
-        self.plugins_dir.clone().or_else(|| crate::recovery::data_dir().map(|p| p.join("plugins")))
+        self.plugins_dir.clone().or_else(default_plugins_dir)
     }
 
     /// Discovery must not replace a package path explicitly selected by inspection.

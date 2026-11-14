@@ -217,6 +217,10 @@ mod android {
         if let Some(dir) = data.as_deref() {
             solidcraft_viewport_gpu::tess_guard::remember_in(dir);
         }
+        // Plugins install into the app's own folder: Android has no per-user data folder for upstream's.
+        if let Some(dir) = data.as_ref() {
+            let _ = solidcraft_engine::plugin::configure_process_plugins_dir(dir.join("plugins"));
+        }
         // Where a launch that can't start says why: a computer reaches it over USB.
         let error_file = app.external_data_path().or_else(|| data.clone()).map(|d| d.join(crate::startup::ERROR_FILE));
         let mut crashed = Vec::new();

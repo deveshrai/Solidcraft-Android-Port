@@ -120,8 +120,10 @@ Upstream SolidCraft runs plugins since 0.41.0 (an experimental first version), a
 builds them in. The first is [SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears),
 an involute spur gear generator: download its `.zip` from its releases page, then **Settings ›
 Plugins › Install plugin…** and pick the file in Android's file picker. Installed plugins run from
-the **Plugins** menu, each with a dialog built from its parameters. Plugins haven't been tried on
-an Android device yet ([known issues](android-known-issues.md)). The port's own Gear command was
+the **Plugins** menu (**Plugins › Plugins…**), each with a dialog built from its parameters. This
+works from 0.41.0b; 0.41.0a can't install plugins ([known issues](android-known-issues.md)). Tested
+on a Galaxy Z Fold ([the test](android-0410a-test.md#5-plugins-on-a-galaxy-z-fold)). An agent over
+MCP can't install a plugin, but it can run a package unpacked in its own folder. The port's own Gear command was
 retired in 0.41.0a; gears made with it stay in their designs as ordinary sketches and features.
 
 ## Rendering

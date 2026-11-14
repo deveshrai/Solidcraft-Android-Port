@@ -21,7 +21,7 @@ doesn't, and the reverse.
 | Issue | Seen on | Work-around today | Plan |
 |---|---|---|---|
 | **On Adreno GPUs bodies are built on the CPU.** Upstream 0.40's GPU tessellation shader crashes Qualcomm's compiler, so the port skips it there. Showing a large design can take longer than it would on the GPU. | Galaxy Z Fold (Adreno 840), 0.40.0-rc.2a | None needed | Report the crash upstream with the shader; turn the GPU back on for Adreno once a driver or shader change avoids it |
-| **Plugins haven't been tried on an Android device.** Upstream's plugins (0.41.0, an experimental first version) are built into the app, with upstream's WebAssembly runtime; installing and running one, such as SolidCraft Gears, hasn't been tested on a phone, tablet or Googlebook yet. | Not tested | Report what happens: [issues](https://github.com/deveshrai/Solidcraft-Android-Port/issues) | Test SolidCraft Gears on a device for 0.41.0b |
+| **Plugins can't be installed on 0.41.0a.** Preferences › Plugins says they are for the desktop app: upstream keeps plugins in a per-user folder under `$XDG_DATA_HOME` or `$HOME`, which Android doesn't have. | 0.41.0a, every device | None on 0.41.0a | Fixed for 0.41.0b: the app's own folder; SolidCraft Gears installs and runs on a Galaxy Z Fold ([the test](android-0410a-test.md#5-plugins-on-a-galaxy-z-fold)) |
 | **Googlebook screens differ.** The app runs on Googlebooks exactly as on other Android devices, since the Android underneath is the same; it was fine on an HP and a Dell XPS Googlebook (0.41.0a). Other models have other resolutions and scaling, which haven't been tried. | HP and Dell XPS Googlebooks, 0.41.0a | If the layout looks wrong, resize the app's window | Report screenshots from other models: [issues](https://github.com/deveshrai/Solidcraft-Android-Port/issues) |
 | **On a phone held upright the isometric view doesn't fit a wide part.** View › Isometric (and an agent's `view.isometric`) leaves a part wider than tall running off both sides of the view; the fit seems to go by the view's height only. | Pixel 9 in portrait, 0.41.0a | Turn the phone sideways, or zoom out with a pinch | Fit by width too, in the port or upstream (check upstream first) |
 | **On a phone held upright the crosshair button is half off the screen**, at the view bar's left edge. It still works. | Pixel 9 in portrait, 0.41.0a | Tap its visible half, or turn the phone sideways | Keep the view bar on screen on narrow views |
@@ -74,6 +74,10 @@ reported or left to upstream, not patched in the port, so merges stay clean.
   texture deltas). The other 188 Preferences tests pass.
 
 ## By design
+
+- **An agent can't install a plugin.** Over MCP, `plugin.install` refuses the plugins folder, which is
+  outside the folders an agent may use. Upstream's rule on every platform: Install plugin… on
+  Preferences › Plugins stays with the person at the device.
 
 - **The first open after an update rebuilds the design.** A design keeps its computed model only for
   the build that computed it, so the first time a newer SolidCraft opens it, every feature is

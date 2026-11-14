@@ -76,7 +76,8 @@ struct Manifest {
 /// The plugins directory: `$XDG_DATA_HOME/solidcraft/plugins` (and the platform equivalents of
 /// [`solidcraft_engine::recovery::data_dir`]). `None` when that folder cannot be named.
 pub fn plugins_dir() -> Option<PathBuf> {
-    solidcraft_engine::recovery::data_dir().map(|d| d.join("plugins"))
+    // SolidCraft Android port: the app's own folder where there is no per-user data folder.
+    solidcraft_engine::plugin::default_plugins_dir()
 }
 
 /// An id a folder and a manifest may share: 1–64 characters, lowercase letters, digits and

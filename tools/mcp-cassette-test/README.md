@@ -8,6 +8,7 @@ fit. Results and recordings: [docs/android-mcp-live-test.md](../../docs/android-
 |---|---|
 | `mcp.py` | A small MCP client for the server's HTTP transport; times every call into a JSON-lines log |
 | `cassette.py` | The test: both halves, the tape-path block, holes, tapped threads, the screw, the fit, the checks, exports |
+| `lsd.py` | A limited-slip differential: its gears made by the SolidCraft Gears plugin (an unpacked copy in the agent's folder), then the clutch packs, carrier, bushings and brackets |
 | `fit.py` | The thread fit from two exported STL meshes: the smallest radial gap at every turn of the screw |
 | `grab.sh` | Screenshots from the device as fast as it gives them, while a run goes on |
 | `mkgif.py` | A captioned GIF from those screenshots and the timings log |

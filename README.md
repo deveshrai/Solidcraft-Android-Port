@@ -161,6 +161,16 @@ Format and example: [docs/scripts.md](docs/scripts.md). Pages can also be driven
 
 ## Plugins (experimental desktop runtime)
 
+**On Android and Googlebook OS** plugins work from port 0.41.0b, as on the desktop: Install plugin… on
+Preferences › Plugins takes the `.zip` through Android's file picker, and the plugin's entries run
+from the Plugins menu. (0.41.0a can't install them: [known issues](docs/android-known-issues.md).)
+Upstream's first plugin, [SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears), made
+every gear of this differential, built by an agent over MCP on a Galaxy Z Fold
+([MP4](docs/screenshots/android/lsd-gears-plugin-fold-frame-0410b.mp4),
+[the test](docs/android-0410a-test.md#5-plugins-on-a-galaxy-z-fold)):
+
+![A limited-slip differential on a Galaxy Z Fold, its sun and planet gears made by the SolidCraft Gears plugin](docs/screenshots/android/lsd-gears-plugin-fold-frame-0410b.gif)
+
 Plugins add separately distributed behaviour without compiling that behaviour into SolidCraft.
 The initial runtime loads **WebAssembly components**, explicitly requested by the user. Merely
 installing a folder, enabling it in Preferences, or opening a design never executes plugin code.

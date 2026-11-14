@@ -182,6 +182,30 @@
           "count": 1
         }
       ]
+    },
+    {
+      "name": "Plugins",
+      "why": "Plugins install on Android: upstream's plugins folder is under $XDG_DATA_HOME or $HOME, which Android doesn't set, so the app names its own private folder",
+      "files": [
+        "crates/engine/src/plugin.rs",
+        "crates/engine/src/plugin/tests.rs",
+        "crates/ui-egui/src/plugins.rs"
+      ],
+      "tests": [
+        "solidcraft-engine --lib the_apps_plugins_folder_comes_before_the_per_user_one"
+      ],
+      "markers": [
+        {
+          "file": "crates/engine/src/plugin.rs",
+          "pattern": "SolidCraft Android port: the plugins folder an app names",
+          "count": 1
+        },
+        {
+          "file": "crates/ui-egui/src/plugins.rs",
+          "pattern": "SolidCraft Android port: the app's own folder",
+          "count": 1
+        }
+      ]
     }
   ]
 }

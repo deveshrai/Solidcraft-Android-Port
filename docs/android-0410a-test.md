@@ -18,7 +18,8 @@ XPS Googlebooks.
 - [2. Designs saved by earlier port releases](#2-designs-saved-by-earlier-port-releases)
 - [3. The APKs](#3-the-apks)
 - [4. The cassette test on a Galaxy Tab](#4-the-cassette-test-on-a-galaxy-tab)
-- [5. Not tested yet](#5-not-tested-yet)
+- [5. Plugins on a Galaxy Z Fold](#5-plugins-on-a-galaxy-z-fold)
+- [6. Not tested yet](#6-not-tested-yet)
 
 ## In short
 
@@ -186,7 +187,80 @@ What it shows:
   meshes' tolerance, not an overlap.
 - The tapped threads take 1.1 to 2.5 s each, growing with every thread already in the body.
 
-## 5. Not tested yet
+## 5. Plugins on a Galaxy Z Fold
+
+Upstream's first plugin, [SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears) 0.1.1
+(its release `.zip`, checksum as published), on a Galaxy Z Fold.
+
+**On 0.41.0a plugins can't be installed on Android.** Preferences › Plugins says "Plugins are
+available in the desktop app", and `plugin.install` answers "installing plugins needs the desktop
+app". Upstream keeps installed plugins in a per-user folder under `$XDG_DATA_HOME` or `$HOME`, and an
+Android app has neither. The fix (for 0.41.0b) gives upstream's plugin code the app's own private
+folder instead, the way the app already gives one for crash reports
+(`solidcraft_engine::plugin::configure_process_plugins_dir`).
+
+With the fix, on a test build of 0.41.0b, everything works as on the desktop:
+
+![Installing and running SolidCraft Gears on a Galaxy Z Fold](screenshots/android/gears-plugin-fold-0410b.gif)
+
+*Install plugin… on Preferences › Plugins, the plugin's summary and what it asks for, Install,
+then Plugins › Plugins…, the plugin's form, Run (2× speed; [MP4](screenshots/android/gears-plugin-fold-0410b.mp4)).
+Choosing the `.zip` in Android's file picker is cut from the recording.*
+
+| | |
+|---|---|
+| Install | through Android's file picker, as a user would; the install dialog lists "Use of 8 SolidCraft commands" |
+| Run | Plugins › Plugins… › Gears: module 2, 20 teeth, face width 10 mm, pressure angle 20°; "Plugins finished." |
+| The gear | a closed solid, 44.0 mm across the tips (m (z + 2) = 2 × 22), 10.0 mm thick, 12,290 mm³, 162 faces |
+| The timeline | Gear (a cylinder), Tooth profile (a sketch), Tooth (an extrude), CircularPattern1: ordinary, editable features |
+| The plugin runtime | upstream's WebAssembly runtime compiles the plugin to machine code at run time; Android allows it, nothing extra needed |
+
+An agent over MCP can't install a plugin: `plugin.install` refuses the plugins folder, which is
+outside the folders an agent may use. That is upstream's rule on every platform; installing stays
+with the person at the device.
+
+![The gear made by the plugin](screenshots/android/gears-plugin-fold-0410b.jpg)
+
+### A limited-slip differential, its gears from the plugin
+
+Then a whole mechanism around the plugin's gears, built by an agent over MCP on the Fold
+([`tools/mcp-cassette-test/lsd.py`](../tools/mcp-cassette-test/lsd.py)): a limited-slip spur-gear
+differential with its mounting brackets and sleeved bushings.
+
+![A limited-slip differential built over MCP on a Galaxy Z Fold, its gears made by SolidCraft Gears](screenshots/android/lsd-gears-plugin-fold-0410b.gif)
+
+*The Fold's screen, at its real speed ([MP4](screenshots/android/lsd-gears-plugin-fold-0410b.mp4)).*
+
+| Part | What it is |
+|---|---|
+| Sun gears (2) | the plugin's gear, module 1.5, 18 teeth, 10 mm wide, bore 10.2 mm: one per axle |
+| Planet gears (6) | the plugin's gear, module 1.5, 10 teeth, 15.5 mm wide, bore 4.4 mm: three pairs at 120°, each planet meshing its partner and one sun |
+| Clutch packs (2) | three friction discs (Ø26, 0.8 mm) and a preload spring behind each sun: the limited slip |
+| Carrier | two end plates (Ø78), three posts, hubs (Ø16) and six planet pins (Ø4) |
+| Axles (2) | Ø10, one into each sun |
+| Sleeved bushings (2) | bronze sleeves, Ø22 outside and Ø16.2 inside, on the carrier's hubs |
+| Mounting brackets (2) | pillow blocks with a Ø22 bore for the bushing and two bolt holes in the foot, on a 110 × 90 base plate |
+
+| | |
+|---|---|
+| Calls | 100, **all succeeded**, in **18.7 s** |
+| The plugin | `plugin.inspect` 0.1 s, the sun gear 1.5 s, the planet gear 0.9 s |
+| Gears in mesh | each gear is its own plugin-made design, inserted as a linked component (two suns, six planets) and turned so a tooth meets a gap at every mesh, with 0.05 mm backlash. Both suns have 18 teeth, a multiple of 3, so all three pairs mesh alike |
+| Interference | **none** among all 30 bodies (0.9 s), every pair checked, the gears' exact teeth included |
+| Bodies | 30, all closed |
+
+![The gear train](screenshots/android/lsd-1-gears-fold-0410b.jpg)
+
+![The differential on its brackets](screenshots/android/lsd-3-assembly-fold-0410b.jpg)
+
+![A section through the axis: axles, suns, planets, clutch packs, carrier, bushings and brackets](screenshots/android/lsd-4-section-fold-0410b.jpg)
+
+How the agent ran the plugin: an agent may run a plugin package in its own folder, not one installed
+in the app's plugins folder, so the script runs an unpacked copy of the same 0.1.1 release
+(`plugin.inspect` for its approval hash, then `plugin.run`). The plugin's features join whatever
+body they meet and so expect a design of their own, hence one design per gear type.
+
+## 6. Not tested yet
 
 - Other phones: this release ran on the emulator and, after release, a Galaxy Tab, a Galaxy Z Fold
   and a Pixel 9 (section 4). The DeX
@@ -194,6 +268,5 @@ What it shows:
 - Googlebooks other than an HP and a Dell XPS model. On those two, after release, it worked exactly
   as on other Android devices (the Android underneath is the same); other models have other
   resolutions and scaling.
-- **Plugins** on a device: installing and running SolidCraft Gears. Upstream's plugin runtime
-  compiles WebAssembly to machine code at run time; whether Android allows that for this app is
-  the first thing to check.
+- Plugins other than SolidCraft Gears, and plugins on a phone held upright, a Galaxy Tab or a
+  Googlebook (section 5 is a Galaxy Z Fold).

@@ -875,3 +875,14 @@ mod install_zip {
         let _ = std::fs::remove_dir_all(root);
     }
 }
+
+/// Android port: where the platform has no per-user data folder, plugins install into the folder
+/// the app names; where there is one, the app's folder still comes first.
+#[test]
+fn the_apps_plugins_folder_comes_before_the_per_user_one() {
+    let (app, data) = (PathBuf::from("/data/app/files/plugins"), PathBuf::from("/home/me/.local/share/solidcraft"));
+    assert_eq!(first_plugins_dir(Some(app.clone()), None), Some(app.clone()));
+    assert_eq!(first_plugins_dir(Some(app.clone()), Some(data.clone())), Some(app));
+    assert_eq!(first_plugins_dir(None, Some(data.clone())), Some(data.join("plugins")));
+    assert_eq!(first_plugins_dir(None, None), None);
+}
