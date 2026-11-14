@@ -70,7 +70,7 @@ mod android {
     /// Whether Escape has something to close: Preferences, a dialog, a tool, a sketch being
     /// edited, a menu or popup, or a field with the keyboard.
     fn escape_closes(app: &SolveApp, ctx: &egui::Context) -> bool {
-        app.prefs_window.open
+        app.prefs_window.shell.open
             || app.dialog.is_some()
             || app.tool.is_some()
             || app.session.active_sketch.is_some()

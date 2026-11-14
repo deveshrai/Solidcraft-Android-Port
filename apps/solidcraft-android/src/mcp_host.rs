@@ -9,9 +9,10 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use solidcraft_ui_egui::i18n::{format, tr};
+use solidcraft_control::ControlRequest;
+use solidcraft_ui_egui::SolveApp;
 use solidcraft_ui_egui::prefs::mcp_server::{McpServerPage, McpServerSettings};
-use solidcraft_ui_egui::{ControlRequest, SolveApp};
+use solidcraft_ui_text::{format, tr};
 
 use crate::mcp_http::{Endpoint, MakeServer, Ready, lan_address, new_token};
 
@@ -122,7 +123,9 @@ impl McpHost {
                 // through `control.pending` (and tells the agent to call `pending` after a few
                 // minutes more), so a long boolean never looks like an app that stopped
                 // answering. Its requests join the app's.
-                let requests = crate::control_server::start(solidcraft_engine::control_auth::Listen::Exact(0), self.ctx.clone());
+                let started = crate::control_server::start(solidcraft_control::auth::Listen::Exact(0), self.ctx.clone())
+                    .map_err(|_| tr("mcp.no_control").to_string())?;
+                let (requests, p) = (started.requests, started.port);
                 let (forward, ctx) = (self.control.clone(), self.ctx.clone());
                 std::thread::Builder::new()
                     .name("mcp-control".into())
@@ -135,7 +138,6 @@ impl McpHost {
                         }
                     })
                     .map_err(|e| e.to_string())?;
-                let p = solidcraft_engine::control_auth::read_current_port().ok_or_else(|| tr("mcp.no_control").to_string())?;
                 self.control_port = Some(p);
                 p
             }
