@@ -49,7 +49,9 @@ filleted the four vertical edges, then took a screenshot through the server and 
 
 **A bigger test, on a Galaxy Z Fold over Wi-Fi:** a cassette housing in two halves with five M2 screws on
 helical threads, built and checked to fit through the server: 121 operations in 105 s, none failed, with
-the time of every operation ([android-mcp-live-test.md](android-mcp-live-test.md)).
+the time of every operation ([android-mcp-live-test.md](android-mcp-live-test.md)). On 0.41.0a, with
+upstream's modelled threads, the same 121 operations take 42 s on a Galaxy Tab, 45 s on the Fold and
+67 s on a Pixel 9 ([android-0410a-test.md](android-0410a-test.md#4-the-cassette-test-on-a-galaxy-tab)).
 
 ![A cassette housing built over the MCP server on a Galaxy Z Fold](screenshots/android/mcp-cassette-fold.gif)
 

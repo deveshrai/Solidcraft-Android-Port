@@ -55,8 +55,12 @@ fallbacks, all carried over to upstream's reorganised code (its new `ui-kit` and
 crates).
 
 **Tested** on the Android emulator: the locomotive and track built over MCP, and designs from every
-earlier port release opened ([the test](android-0410a-test.md)). **Not tested yet:** a phone,
-tablet or Googlebook, and plugins on a device ([known issues](android-known-issues.md)).
+earlier port release opened ([the test](android-0410a-test.md)). After release, the cassette test
+(121 MCP calls) on a Galaxy Tab (41.8 s), a Galaxy Z Fold (44.8 s), a Pixel 9 (66.5 s) and the
+emulator in a laptop-sized window (39.8 s), all recorded; the app ran as on any Android device on HP
+and Dell XPS Googlebooks. A phone held upright crops a wide part in the isometric view and puts the
+crosshair button half off the screen. **Not tested yet:** plugins on a device
+([known issues](android-known-issues.md)).
 
 ## 0.40.0-rc.3b
 

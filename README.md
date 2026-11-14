@@ -1,6 +1,12 @@
 # SolidCraft for Android and Googlebook OS
 
-![SolidCraft for Android and Googlebook OS: upstream SolidCraft on phones, tablets, foldables, Samsung DeX and Googlebooks, with a model locomotive built over MCP](docs/screenshots/android/hero-port-vs-upstream.png)
+![SolidCraft for Android and Googlebook OS: the same cassette housing built over MCP on a Googlebook-sized screen, an Android tablet and an Android phone, each finishing at its real time](docs/screenshots/android/hero-cassette-race-0410a.gif)
+
+*One cassette housing, 121 MCP calls, on three screens, played 3× faster: the Android emulator in a
+laptop-sized window standing in for a Googlebook (39.8 s), a Galaxy Tab (41.8 s) and a Pixel 9
+(66.5 s) ([MP4](docs/screenshots/android/hero-cassette-race-0410a.mp4),
+[the test](docs/android-0410a-test.md#4-the-cassette-test-on-a-galaxy-tab)). The app also ran, as on
+any Android device, on HP and Dell XPS Googlebooks.*
 
 **This is SolidCraft for Android and Googlebook OS.** It is upstream
 [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with every

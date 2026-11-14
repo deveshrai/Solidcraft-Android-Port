@@ -4,7 +4,14 @@ Upstream's 0.41.0 merged into SolidCraft for Android and Googlebook OS, the port
 helical threads retired, and what was checked before release. No phone or tablet was attached for
 this release; the device run is the Android emulator (a Pixel Tablet image, Android 16, arm64,
 which draws on the CPU), so its times are slow and only show that everything works. After release,
-the cassette test ran on a Galaxy Tab ([section 4](#4-the-cassette-test-on-a-galaxy-tab)).
+the cassette test ran on a Galaxy Tab, a Galaxy Z Fold, a Pixel 9 and the emulator in a
+laptop-sized window ([section 4](#4-the-cassette-test-on-a-galaxy-tab)), and the app on HP and Dell
+XPS Googlebooks.
+
+![The cassette housing on a Googlebook-sized emulator, a Galaxy Tab and a Pixel 9, side by side](screenshots/android/hero-cassette-race-0410a.gif)
+
+*The three recordings side by side, 3× faster, each finishing at its real time
+([MP4](screenshots/android/hero-cassette-race-0410a.mp4); made by `scripts/android-hero-race.py`).*
 
 - [In short](#in-short)
 - [1. The locomotive on 0.41.0a](#1-the-locomotive-on-0410a)
@@ -150,6 +157,22 @@ The same volumes and faces again. Two things a portrait phone shows that the tab
 - **The crosshair button sits half off the left edge** of the view bar.
 
 Both are in [known issues](android-known-issues.md).
+
+### On the emulator, as a Googlebook stand-in
+
+No Googlebook was connected for a recording, so for the hero above the emulator stands in for one:
+the Pixel Tablet image (Android 16) in a 2560 × 1600 landscape window, the shape of a laptop screen,
+drawing with the Mac's GPU (`-gpu host`) this time. Googlebook OS is Android, so the app is the same;
+the times are the Mac's, not a Googlebook's.
+
+| | Emulator, laptop window | Galaxy Tab | Galaxy Z Fold | Pixel 9 |
+|---|---|---|---|---|
+| Operations | 121, all succeeded | 121 | 121 | 121 |
+| Time | **39.8 s** (36.3 s in calls) | 41.8 s | 44.8 s | 66.5 s |
+| Screw holes and tapped threads | 13.1 s | 11.2 s | 13.5 s | 21.1 s |
+| Checks | 8.7 s | 10.1 s | 8.7 s | 12.8 s |
+
+The same volumes and faces as on the devices.
 
 What it shows:
 
