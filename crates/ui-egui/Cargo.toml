@@ -76,6 +76,9 @@ proc-macro2 = { workspace = true }
 # egui-winit's clipboard. arboard has no Android backend: there, a paste gives text only.
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
+
+# PDFs attached to the agent chat.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lopdf = { version = "0.45", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
