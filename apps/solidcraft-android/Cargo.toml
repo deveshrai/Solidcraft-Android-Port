@@ -49,3 +49,7 @@ jni = "0.22"
 libc = "0.2"
 # log → logcat (MIT OR Apache-2.0).
 android_logger = { version = "0.15", default-features = false }
+
+# The keyboard gate's tests (src/keyboard.rs) run egui on every system.
+[dev-dependencies]
+egui = { workspace = true }

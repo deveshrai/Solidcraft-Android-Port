@@ -20,6 +20,8 @@ mod mcp_http;
 // Plain functions, built (and tested) on every system.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 mod insets;
+#[cfg(any(target_os = "android", test))]
+mod keyboard;
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 mod names;
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
@@ -62,6 +64,8 @@ mod android {
         caption: Option<f32>,
         /// Settings › MCP server.
         mcp: McpHost,
+        /// The on-screen keyboard comes up for a tapped field, not for a window opening.
+        keyboard: crate::keyboard::KeyboardGate,
         /// The app's folder, the graphics this launch started on, and whether that was a fallback:
         /// told once a frame is on screen (`startup::drew`).
         started: Option<(std::path::PathBuf, Backend, bool)>,
@@ -138,6 +142,7 @@ mod android {
             } else {
                 self.app.ui(&mut ui.new_child(egui::UiBuilder::new().max_rect(content)));
             }
+            self.keyboard.frame(ui.ctx());
             // egui's Copy has no clipboard on Android: hand what it copied to the system's.
             if let Some(d) = &self.documents {
                 let copied: Vec<String> = ui.ctx().output(|o| {
@@ -304,7 +309,7 @@ mod android {
                 if fallback {
                     app.set_status("The last launch could not start its graphics, so this one uses OpenGL ES.", false);
                 }
-                Ok(Box::new(Shell { app, frames: 0, documents, escape: false, caption: None, mcp, started }))
+                Ok(Box::new(Shell { app, frames: 0, documents, escape: false, caption: None, mcp, keyboard: Default::default(), started }))
             }),
         );
         if let Err(e) = result {

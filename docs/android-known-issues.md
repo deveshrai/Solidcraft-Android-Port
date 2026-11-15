@@ -103,6 +103,7 @@ reported or left to upstream, not patched in the port, so merges stay clean.
 
 | Issue | Fixed in |
 |---|---|
+| The on-screen keyboard came up whenever a window or tool focused a field by itself (Add parameter, a rectangle's dimension boxes), covering the dialog or the sketch: a rectangle's second corner landed on the keyboard ([#6](https://github.com/deveshrai/Solidcraft-Android-Port/issues/6)) | 0.41.0c: the keyboard comes up when you tap a field; a hardware keyboard still types into the focused field at once. Tested on a Galaxy Z Fold |
 | Plugins couldn't be installed: Preferences › Plugins said they were for the desktop app, because upstream keeps plugins under `$XDG_DATA_HOME` or `$HOME`, which Android doesn't have | 0.41.0b: the app's own folder; SolidCraft Gears installs and runs on a Galaxy Z Fold ([the test](android-0410a-test.md#5-plugins-on-a-galaxy-z-fold)) |
 | Checks between large bodies were slow: interference and clearance between the cassette test's two halves took about 38 s and 35 s on a Galaxy Z Fold | 0.41.0a: about 0.5 s each, the whole checks stage 9 s on the Fold ([android-0410a-test.md](android-0410a-test.md#on-a-galaxy-z-fold)) |
 | The port's own gears and helical threads, and their open issues (slow gear-against-gear checks, a sketch on a helical groove's end, threads not stopping at a shoulder, the hard-to-find Helical B-rep option) | Retired in 0.41.0a for upstream's plugins (SolidCraft Gears) and modelled threads |

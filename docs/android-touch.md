@@ -164,6 +164,12 @@ Tap a field (a dialog's value, command search, a rename) and Android's on-screen
 up; type, and tap outside or press Back to put it away. It covers the lower part of the screen,
 so a dialog low on the screen may sit under it; a hardware keyboard avoids that.
 
+A field the app focuses for you (a new parameter's name, a rectangle's dimension boxes as you
+place its first corner) takes a hardware keyboard's typing at once, but the on-screen keyboard
+waits until you tap the field (since 0.41.0c, [#6](https://github.com/deveshrai/Solidcraft-Android-Port/issues/6)).
+Once it is up it stays up as Tab moves to the next box; if you hid it with its ⌄ key, tap the
+field again to bring it back.
+
 ![Typing on the on-screen keyboard](screenshots/android/12-on-screen-keyboard.jpg)
 
 ## Files
