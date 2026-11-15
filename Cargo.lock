@@ -5822,7 +5822,7 @@ version = "0.42.0"
 
 [[package]]
 name = "solidcraft-android"
-version = "0.41.0"
+version = "0.42.0"
 dependencies = [
  "android_logger",
  "eframe",

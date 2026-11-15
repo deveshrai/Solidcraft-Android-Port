@@ -5,6 +5,7 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.42.0a](#0420a): upstream 0.42.0; the on-screen keyboard waits for a tap (#6)
 - [0.41.0b](#0410b): plugins install and run on Android; tested on a Galaxy Tab, a Galaxy Z Fold, a Pixel 9 and Googlebooks
 - [0.41.0a](#0410a): upstream 0.41.0 with plugins; SolidCraft for Android and Googlebook OS; the port's gears and helical threads retired
 - [0.40.0-rc.3b](#0400-rc3b): the app's top bar below a DeX window's title bar
@@ -20,6 +21,20 @@ missing: [android-known-issues.md](android-known-issues.md).
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.42.0a
+
+**Upstream 0.42.0**, with its new Preferences › Security page (signing and checking saved
+designs) and everything else in [upstream's release notes](https://github.com/tangency-labs/solidcraft/releases/tag/v0.42.0).
+
+**The on-screen keyboard waits for a tap** ([#6](https://github.com/deveshrai/Solidcraft-Android-Port/issues/6)).
+A window or tool that focuses a field by itself (Add parameter, a rectangle's dimension boxes) no
+longer brings the keyboard up over the dialog or the sketch: it comes up when you tap the field,
+and a hardware keyboard still types into the focused field at once. Tapping a field after hiding
+the keyboard with ⌄ brings it back.
+
+Tested: [android-0420a-test.md](android-0420a-test.md), with a practice bracket built over MCP on a
+Galaxy Tab in 8 s.
 
 ## 0.41.0b
 

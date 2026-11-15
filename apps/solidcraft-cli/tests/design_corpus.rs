@@ -76,7 +76,9 @@ fn port_designs_open_with_their_helical_threads_as_modelled_threads() {
         let s = open(&p);
         let name = p.display();
         let doc: Value = serde_json::from_str(&s.doc.to_json()).unwrap();
-        assert!(doc.get("format_pending").is_none_or(|v| v.as_array().is_some_and(Vec::is_empty)), "{name}: {doc:?}");
+        // Upstream's own pending changes may be listed; the port's retired ones are not.
+        let pending = doc["format_pending"].as_array().cloned().unwrap_or_default();
+        assert!(!pending.iter().any(|v| v.as_str().is_some_and(|v| v.starts_with("helical-thread"))), "{name}: {pending:?}");
         for id in &helical {
             let f = doc["features"].as_array().unwrap().iter().find(|f| f["id"] == *id).unwrap_or_else(|| panic!("{name}: thread {id}"));
             assert_eq!(f["modeled"], true, "{name}: {f}");
