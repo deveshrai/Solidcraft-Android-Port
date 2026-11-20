@@ -16536,7 +16536,8 @@ mod tests {
         let mut h = crate::scenario::Harness::new();
         h.app.home.open = false;
         // As on a device: the viewport drawn on the GPU (the target alone; no device is needed).
-        h.app.viewport.gpu = Some(GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false, edges: false });
+        h.app.viewport.gpu =
+            Some(GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false, edges: false });
         for (id, p) in [("sketch.create", json!({"plane": "XY"})), ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [60, 20]}))] {
             h.app.run(id, p).unwrap();
         }
@@ -16576,7 +16577,8 @@ mod tests {
     fn the_crosshair_button_lets_a_finger_pick() {
         let mut h = crate::scenario::Harness::new();
         h.app.home.open = false;
-        h.app.viewport.gpu = Some(GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false, edges: false });
+        h.app.viewport.gpu =
+            Some(GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false, edges: false });
         h.call("engine.execute", json!({"command":"solid.box","params":{"length":60,"width":60,"height":20}}));
         h.call("ui.camera", json!({"fit":true}));
         // A tap as egui-winit sends it: the press in one frame, the release and PointerGone in
