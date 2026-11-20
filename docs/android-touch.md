@@ -35,10 +35,14 @@ trackpad, mouse and keyboard as on a computer.
 | Drag a menu or dialog up or down | Scroll it: a ribbon menu taller than the screen (Model › Create runs past the bottom on a foldable) or a tall dialog. A mouse drags a menu row onto the ribbon to pin it instead |
 | Home button by the axis triad | Return to the home view |
 
-Once two fingers are down the touch stays a pan or pinch until every finger lifts, so lifting
-one finger first does not start an orbit. While a sketch is being edited or a sketch tool is on,
-a one-finger drag draws or drags geometry as the mouse does, not orbit; the view bar at the bottom
-(orbit, pan, zoom buttons) still moves the view then.
+Orbit, pan and pinch are upstream's touchscreen navigation (Preferences › Navigation), on by
+default on Android since 0.45.0a; turned off, a one-finger drag box-selects as a mouse does. Once
+two fingers are down the touch stays a pan or pinch until every finger lifts, so lifting one
+finger first does not start an orbit. A finger that lands on a point, curve or dimension of the
+sketch being edited, or on a dialog's arrow, drags it as the mouse does instead of orbiting, and
+with a dialog open a finger on empty space still turns the view. While a sketch tool is on, a
+one-finger drag draws; the view bar at the bottom (orbit, pan, zoom buttons) still moves the view
+then.
 
 | One finger: orbit | Pinch: zoom | Two fingers: pan |
 |---|---|---|

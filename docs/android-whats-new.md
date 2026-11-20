@@ -5,6 +5,7 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.45.0a](#0450a): upstream 0.43.0 to 0.45.0 (drawings); upstream's touch navigation, and a finger drags sketch geometry
 - [0.42.0a](#0420a): upstream 0.42.0; the on-screen keyboard waits for a tap (#6)
 - [0.41.0b](#0410b): plugins install and run on Android; tested on a Galaxy Tab, a Galaxy Z Fold, a Pixel 9 and Googlebooks
 - [0.41.0a](#0410a): upstream 0.41.0 with plugins; SolidCraft for Android and Googlebook OS; the port's gears and helical threads retired
@@ -21,6 +22,27 @@ missing: [android-known-issues.md](android-known-issues.md).
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.45.0a
+
+**Upstream 0.43.0, 0.44.0, 0.44.1 and 0.45.0**: drawings (sheets, views, dimensions, notes and
+parts lists, exported as SVG or PNG), big assemblies drawn as instances, a document browser,
+sheet metal from the part's surfaces, plugins that import files, and everything else in
+upstream's release notes for [0.43.0](https://github.com/tangency-labs/solidcraft/releases/tag/v0.43.0),
+[0.44.0](https://github.com/tangency-labs/solidcraft/releases/tag/v0.44.0),
+[0.44.1](https://github.com/tangency-labs/solidcraft/releases/tag/v0.44.1) and
+[0.45.0](https://github.com/tangency-labs/solidcraft/releases/tag/v0.45.0).
+
+**Touch navigation is upstream's.** Upstream 0.45.0 has its own (one finger orbits, two pan, a
+pinch zooms; Preferences › Navigation), and the port now uses it, on by default on Android, in
+place of its own. Two things the port's code did and upstream's didn't are kept: a finger on a
+point, curve or dimension of the sketch being edited drags it instead of orbiting, and a finger
+turns the view with a dialog open, so what Extrude or Create Sketch picks can be reached. The
+crosshair, finger-dragged arrows and finger-scrolled drop-downs are unchanged.
+
+Designs saved by 0.45.0a are format 63 and don't open in earlier port releases.
+
+Tested: [android-0450a-test.md](android-0450a-test.md), by finger on a Galaxy Tab.
 
 ## 0.42.0a
 

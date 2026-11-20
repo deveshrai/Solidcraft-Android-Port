@@ -4,8 +4,8 @@ What is wrong or missing in the current port release, and what is planned for th
 entry says how to work around it today. Fixed entries move to [Fixed](#fixed) with the release that
 fixed them.
 
-Current: **port 0.41.0a** (upstream's 0.41.0). Next:
-**0.41.0b**, or the next upstream release's **a**, if upstream releases
+Current: **port 0.45.0a** (upstream's 0.45.0). Next:
+**0.45.0b**, or the next upstream release's **a**, if upstream releases
 first. See also [android-vs-upstream.md](android-vs-upstream.md) for what upstream has that the port
 doesn't, and the reverse.
 
@@ -103,6 +103,7 @@ reported or left to upstream, not patched in the port, so merges stay clean.
 
 | Issue | Fixed in |
 |---|---|
+| With upstream's touch navigation, a finger on sketch geometry orbited instead of dragging it, and with a dialog open a finger couldn't turn the view | 0.45.0a, the release that adopted it: a finger on what the view drags is the view's, and touch navigation stays on with a dialog open. Tested on a Galaxy Tab |
 | The on-screen keyboard came up whenever a window or tool focused a field by itself (Add parameter, a rectangle's dimension boxes), covering the dialog or the sketch: a rectangle's second corner landed on the keyboard ([#6](https://github.com/deveshrai/Solidcraft-Android-Port/issues/6)) | 0.42.0a: the keyboard comes up when you tap a field; a hardware keyboard still types into the focused field at once. Tested on a Galaxy Z Fold |
 | Plugins couldn't be installed: Preferences › Plugins said they were for the desktop app, because upstream keeps plugins under `$XDG_DATA_HOME` or `$HOME`, which Android doesn't have | 0.41.0b: the app's own folder; SolidCraft Gears installs and runs on a Galaxy Z Fold ([the test](android-0410a-test.md#5-plugins-on-a-galaxy-z-fold)) |
 | Checks between large bodies were slow: interference and clearance between the cassette test's two halves took about 38 s and 35 s on a Galaxy Z Fold | 0.41.0a: about 0.5 s each, the whole checks stage 9 s on the Fold ([android-0410a-test.md](android-0410a-test.md#on-a-galaxy-z-fold)) |
