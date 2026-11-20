@@ -152,6 +152,7 @@
         "Cargo.lock",
         "crates/ui-egui/Cargo.toml",
         "crates/ui-egui/src/fonts.rs",
+        "crates/sketch/src/fonts/fallback.rs",
         "xtask/src/assets.rs",
         "xtask/src/layers.rs",
         "skills/solidcraft-crash-safety/SKILL.md",
