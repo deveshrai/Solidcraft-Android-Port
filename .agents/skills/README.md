@@ -29,5 +29,6 @@ These are not built into the app. The skills for agents that model through Solid
 | [`solidcraft-performance`](solidcraft-performance/SKILL.md) | works on slow code, the window thread or the wasm build |
 | [`solidcraft-packaging`](solidcraft-packaging/SKILL.md) | prepares a release or changes packages |
 | [`solidcraft-agent-tools`](solidcraft-agent-tools/SKILL.md) | runs the app, drives the control channel or changes MCP tools |
+| [`solidcraft-android-port`](solidcraft-android-port/SKILL.md) | works in the Android port: merging an upstream release, changing an upstream file for the port, releasing an APK |
 
 `solidcraft-file-pr`, `solidcraft-babysit-pr` (with its `pr-wait` watcher), `solidcraft-full-stop`, `solidcraft-takeover` and `solidcraft-modernize` are adapted from [tstack](https://github.com/t3dotgg/tstack) by Theo Browne, MIT licence ([LICENSE-tstack](LICENSE-tstack)).

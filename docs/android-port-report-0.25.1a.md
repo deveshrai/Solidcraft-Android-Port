@@ -184,4 +184,4 @@ and proves after each merge that nothing of its own broke
   (`scripts/android-port.py upstream-failures`), so a skip never outlives the bug.
 - Port strings upstream adds with the same text are dropped automatically; the sync also runs
   upstream's `lists` and `skills` checks (the port's line in a skill had pushed it past upstream's cap).
-- Agents get the same rules in [`skills/solidcraft-android-port/SKILL.md`](../skills/solidcraft-android-port/SKILL.md).
+- Agents get the same rules in [`.agents/skills/solidcraft-android-port/SKILL.md`](../.agents/skills/solidcraft-android-port/SKILL.md).

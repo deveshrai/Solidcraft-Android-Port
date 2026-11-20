@@ -65,7 +65,7 @@ every merge that each of those places still works.
 **Adding to the port**: a new upstream file you change goes into the area it serves (or a new
 area) in `android-port-areas.json`, with a test in that area's existing test file; a port release
 that changes what a design file holds adds a corpus file saved by its CLI. Agents read the same
-rules in [`skills/solidcraft-android-port/SKILL.md`](../skills/solidcraft-android-port/SKILL.md).
+rules in [`.agents/skills/solidcraft-android-port/SKILL.md`](../.agents/skills/solidcraft-android-port/SKILL.md).
 
 ## Updating
 

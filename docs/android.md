@@ -255,7 +255,7 @@ with the tests that prove each, is [`scripts/android-port-areas.json`](../script
 | `ATTRIBUTION.md`, `vendor/README.md` | The vendored winit and its patch |
 | `docs/building.md` | How to build the APK |
 | `.gitignore` | Local `continue-*.sh` session scripts |
-| `AGENTS.md`, `skills/solidcraft-android-port/SKILL.md` (new) | A router row and a skill: the port's rules and merge routine for agents |
+| `.agents/skills/solidcraft-android-port/SKILL.md` (new), `.agents/skills/README.md` | A skill and its row: the port's rules and merge routine for agents |
 | `apps/solidcraft-cli/tests/corpus/port-*.solidcraft` (new), `corpus/README.md` | Designs saved by port releases, so every merge proves they still open (0.24.0b: a gear and a helical thread) |
 | `apps/solidcraft-android/Cargo.toml` | `serde`, for the desktop app's control server it builds from (0.25.1) |
 

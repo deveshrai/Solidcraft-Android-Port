@@ -27,7 +27,7 @@ Work: ROADMAP.md, "Where help is wanted most" in CONTRIBUTING.md, issues labelle
 - Run `cargo xtask fast` before each commit; CI runs the full gate. `cargo xtask skills` checks this file and both skill folders.
 
 ## Skills: read the one for your task
-Dev skills: `.agents/skills/` (`.claude/skills` links there; Windows: Developer Mode, `git config core.symlinks true`). In-app MCP skills: `skills/`.
+Dev skills: `.agents/skills/` (`.claude/skills` links there; Windows: its README). In-app MCP skills: `skills/`.
 
 | Skill | When |
 |---|---|
@@ -58,4 +58,4 @@ Dev skills: `.agents/skills/` (`.claude/skills` links there; Windows: Developer 
 | `skills/solidcraft-reporting/SKILL.md` | a bug report |
 | `skills/solidcraft-checking/SKILL.md` | checking, porting, designs in git |
 | `skills/solidcraft-mechanisms/SKILL.md` | assemblies, joints, motion |
-| `skills/solidcraft-android-port/SKILL.md` | Android |
+| `.agents/skills/solidcraft-android-port/SKILL.md` | Android |
