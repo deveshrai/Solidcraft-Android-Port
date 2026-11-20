@@ -48,9 +48,9 @@ turning the view and lifting it selects; Create Sketch, Extrude and a rectangle'
 boxes open without the on-screen keyboard (#6), and typing into Distance then Enter built the
 body.
 
-Not tried on the device: two fingers (the Tab doesn't let adb inject a second finger; upstream's
-and the port's tests for pan and pinch pass), and the on-screen keyboard coming up for a tapped
-field (with the Book Cover keyboard attached, Android keeps it hidden; it was tried on a Galaxy Z
+Two fingers pan and a pinch zooms on the device too, tried by hand after the release (adb can't
+inject a second finger on the Tab). Not tried on the device: the on-screen keyboard coming up for
+a tapped field (with the Book Cover keyboard attached, Android keeps it hidden; it was tried on a Galaxy Z
 Fold for 0.42.0a).
 
 ## 3. The checks
