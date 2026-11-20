@@ -26,6 +26,10 @@ mod keyboard;
 mod names;
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 mod startup;
+// Thread-local keys past Android's limit (build.rs wraps std's key calls into it).
+#[cfg(unix)]
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+mod tls_keys;
 
 #[cfg(target_os = "android")]
 mod android {

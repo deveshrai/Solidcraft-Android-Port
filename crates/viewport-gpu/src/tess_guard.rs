@@ -65,7 +65,7 @@ mod tests {
         remember_in(&d);
         assert!(!died_compiling());
         // A compile that returns removes its marker.
-        assert_eq!(compiling(|| died_compiling()), true, "the marker is there while it compiles");
+        assert!(compiling(died_compiling), "the marker is there while it compiles");
         assert!(!died_compiling());
         // One that never returned (the process died) left it.
         let _ = std::fs::write(d.join(MARKER), b"");

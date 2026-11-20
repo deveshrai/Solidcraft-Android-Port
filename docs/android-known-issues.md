@@ -4,8 +4,8 @@ What is wrong or missing in the current port release, and what is planned for th
 entry says how to work around it today. Fixed entries move to [Fixed](#fixed) with the release that
 fixed them.
 
-Current: **port 0.45.0a** (upstream's 0.45.0). Next:
-**0.45.0b**, or the next upstream release's **a**, if upstream releases
+Current: **port 0.45.0b** (upstream's 0.45.0). Next:
+**0.45.0c**, or the next upstream release's **a**, if upstream releases
 first. See also [android-vs-upstream.md](android-vs-upstream.md) for what upstream has that the port
 doesn't, and the reverse.
 
@@ -103,6 +103,7 @@ reported or left to upstream, not patched in the port, so merges stay clean.
 
 | Issue | Fixed in |
 |---|---|
+| The app closed when a chamfer was previewed (a cone's or a cylinder's edge picked), or now and then elsewhere after using it a while: Rust's std on Android takes a system thread-local key for each of the app's ~150 thread-locals and Android gives a process about 128, shared with the graphics driver, so std aborted ("out of TLS keys"). Adreno phones ran out first | 0.45.0b: the app's thread-locals share one system key (`apps/solidcraft-android/src/tls_keys.rs`). On the Galaxy Z Fold the same taps that crashed 0.45.0a every time (cone, Chamfer, base edge) previewed and applied, and so did a cylinder's top edge, through three folds and unfolds |
 | With upstream's touch navigation, a finger on sketch geometry orbited instead of dragging it, and with a dialog open a finger couldn't turn the view | 0.45.0a, the release that adopted it: a finger on what the view drags is the view's, and touch navigation stays on with a dialog open. Tested on a Galaxy Tab |
 | The on-screen keyboard came up whenever a window or tool focused a field by itself (Add parameter, a rectangle's dimension boxes), covering the dialog or the sketch: a rectangle's second corner landed on the keyboard ([#6](https://github.com/deveshrai/Solidcraft-Android-Port/issues/6)) | 0.42.0a: the keyboard comes up when you tap a field; a hardware keyboard still types into the focused field at once. Tested on a Galaxy Z Fold |
 | Plugins couldn't be installed: Preferences › Plugins said they were for the desktop app, because upstream keeps plugins under `$XDG_DATA_HOME` or `$HOME`, which Android doesn't have | 0.41.0b: the app's own folder; SolidCraft Gears installs and runs on a Galaxy Z Fold ([the test](android-0410a-test.md#5-plugins-on-a-galaxy-z-fold)) |

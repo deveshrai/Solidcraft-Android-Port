@@ -5,6 +5,7 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.45.0b](#0450b): no more closing on a chamfer preview or after a while on Adreno phones
 - [0.45.0a](#0450a): upstream 0.43.0 to 0.45.0 (drawings); upstream's touch navigation, and a finger drags sketch geometry
 - [0.42.0a](#0420a): upstream 0.42.0; the on-screen keyboard waits for a tap (#6)
 - [0.41.0b](#0410b): plugins install and run on Android; tested on a Galaxy Tab, a Galaxy Z Fold, a Pixel 9 and Googlebooks
@@ -22,6 +23,16 @@ missing: [android-known-issues.md](android-known-issues.md).
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.45.0b
+
+**The app no longer closes when a chamfer is previewed**, or now and then after using it a while.
+On a Galaxy Z Fold, picking a cone's base edge in Chamfer closed 0.45.0a every time. The cause was
+not the geometry: Rust's standard library on Android takes one of the system's thread keys for each
+of the app's ~150 thread-locals, and Android gives an app about 128, shared with the graphics
+driver. Adreno phones ran out first, and the app stopped itself. The app's thread-locals now share
+one system key (`apps/solidcraft-android/src/tls_keys.rs`). On the Fold the same steps, a
+cylinder's top edge and three folds and unfolds mid-design all went through.
 
 ## 0.45.0a
 
