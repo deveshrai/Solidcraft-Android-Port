@@ -68,6 +68,24 @@ pub(crate) fn track(app: &mut SolveApp, ctx: &egui::Context, rect: Rect, orbit_p
     Some(aim)
 }
 
+/// Whether a finger just put down at `at` is the view's rather than touch navigation's: on a
+/// dialog's drag arrow, a handle, a dimension or a constraint glyph, or on the geometry of the
+/// sketch being edited, which a finger drags as the mouse does. Checked only as a finger lands.
+pub(crate) fn view_takes(app: &SolveApp, ctx: &egui::Context, proj: &crate::viewport::Proj, at: Option<Pos2>) -> bool {
+    use crate::viewport::Hit;
+    let landed = ctx.input(|i| i.events.iter().any(|e| matches!(e, Event::Touch { phase: TouchPhase::Start, .. })));
+    let Some(p) = at.filter(|_| landed) else { return false };
+    let own = |hit: &Hit| {
+        matches!(hit, Hit::SketchPoint { sketch, .. } | Hit::SketchMidpoint { sketch, .. } | Hit::SketchCurve { sketch, .. }
+            if Some(*sketch) == app.session.active_sketch)
+    };
+    crate::canvas::arrow_at_touch(ctx, p)
+        || crate::canvas::owns_pointer(app, proj, p)
+        || crate::dim_view::hit(p).is_some()
+        || crate::sketch_tools::glyph_at(p).is_some()
+        || (app.session.active_sketch.is_some() && crate::viewport::pick(app, proj, p).first().is_some_and(own))
+}
+
 /// The crosshair for a finger at `at`: above it, kept in the view.
 fn crosshair(at: Pos2, rect: Rect) -> Pos2 {
     pos2(at.x, (at.y - RAISE).max(rect.top() + 1.0))

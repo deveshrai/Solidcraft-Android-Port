@@ -827,12 +827,13 @@ fn handle_input(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &egui::
     device(app, rect, caps);
 
     // Pencil mode assigns finger gestures to navigation even when the separate preference is off.
-    let touch_enabled = (app.preferences.touchscreen_navigation || app.preferences.pencil_mode)
-        && app.tool.is_none()
-        && app.dialog.is_none()
-        && app.viewport.context_menu.is_none();
+    // SolidCraft (Android port): with a dialog open too, so a finger turns the view to reach what
+    // the dialog picks; a finger pressed on what the view drags is left to the view.
+    let touch_enabled =
+        (app.preferences.touchscreen_navigation || app.preferences.pencil_mode) && app.tool.is_none() && app.viewport.context_menu.is_none();
+    let touch_start = inside && !crate::touch_pick::view_takes(app, ui.ctx(), &projection(app, rect), hover);
     let had_touch = app.viewport.touch.owned;
-    let touch = app.viewport.touch.frame(ui, resp.rect, &[axes, readout.unwrap_or(Rect::NOTHING)], inside, touch_enabled, caps.orbit);
+    let touch = app.viewport.touch.frame(ui, resp.rect, &[axes, readout.unwrap_or(Rect::NOTHING)], touch_start, touch_enabled, caps.orbit);
 
     // ---- navigation ----
     let trackpad_pan = app.preferences.trackpad_pans();

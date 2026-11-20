@@ -16569,6 +16569,44 @@ mod tests {
         assert_eq!(picked(&h), Some(1), "the first tap picks the profile under the finger");
     }
 
+    /// SolidCraft (Android port): with upstream's touch navigation, a finger on a corner of the
+    /// sketch being edited drags the corner instead of orbiting, and with Extrude open a finger
+    /// on empty space still turns the view, so what the dialog picks can be reached.
+    #[test]
+    fn a_finger_drags_sketch_geometry_and_orbits_with_a_dialog_open() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        for (id, p) in [("sketch.create", json!({"plane": "XY"})), ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [60, 20]}))] {
+            h.app.run(id, p).unwrap();
+        }
+        h.call("ui.camera", json!({"fit":true}));
+        h.frames(3);
+        let drag = |h: &mut crate::scenario::Harness, from: Pos2, by: egui::Vec2| {
+            finger(h, 0, egui::TouchPhase::Start, from);
+            h.frame();
+            for step in 1..=6 {
+                finger(h, 0, egui::TouchPhase::Move, from + by * (step as f32 / 6.0));
+                h.frame();
+            }
+            finger(h, 0, egui::TouchPhase::End, from + by);
+            h.frame();
+        };
+        let (cam, undo) = (h.app.cam, h.app.session.undo.len());
+        let corner = projection(&h.app, h.app.viewport.rect.unwrap()).to_screen(Vec3::new(60.0, 20.0, 0.0)).unwrap();
+        drag(&mut h, corner, vec2(40.0, 30.0));
+        assert_eq!(h.app.cam, cam, "a finger on the sketch's corner doesn't orbit");
+        assert!(h.app.session.undo.len() > undo, "the corner was dragged");
+        h.app.finish_sketch();
+        h.frames(3);
+        h.app.dialog = Some(crate::dialogs::Dialog::for_command(&h.app, "solid.extrude").expect("the Extrude dialog"));
+        h.frames(2);
+        let empty = h.app.viewport.rect.unwrap().center() + vec2(250.0, 150.0);
+        let cam = h.app.cam;
+        drag(&mut h, empty, vec2(120.0, 0.0));
+        assert!(h.app.dialog.is_some());
+        assert_ne!(h.app.cam.yaw, cam.yaw, "a finger turns the view with the dialog open");
+    }
+
     /// SolidCraft (Android port), port issue #2: the view bar's crosshair button, pressed by a
     /// finger, turns one finger on the model from orbiting to aiming a crosshair above it; lifting
     /// the finger selects what the crosshair is on. A mouse can't press the button, and a mouse

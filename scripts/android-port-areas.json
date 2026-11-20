@@ -25,7 +25,7 @@
   "areas": [
     {
       "name": "Touch input",
-      "why": "Upstream's touch navigation (one finger orbits, two pan, a pinch zooms), on by default on Android; the view bar's crosshair button lets a finger pick; a finger drags a dialog's arrows and scrolls a drop-down; the patched winit gives the mouse and keyboard",
+      "why": "Upstream's touch navigation (one finger orbits, two pan, a pinch zooms), on by default on Android, also with a dialog open, leaving a finger on sketch geometry or a handle to the view; the view bar's crosshair button lets a finger pick; a finger drags a dialog's arrows and scrolls a drop-down; the patched winit gives the mouse and keyboard",
       "files": [
         "crates/ui-egui/src/navigation.rs",
         "crates/ui-egui/src/navigation_bar_view.rs",
@@ -38,7 +38,7 @@
         "crates/ui-egui/src/prefs.rs"
       ],
       "tests": [
-        "solidcraft-ui-egui --lib one_finger_drag_orbits two_fingers_pan_and_pinch a_tap_selects pinch_gesture a_tap_picks_a_profile a_finger_on_the_arrow_stem a_finger_scrolls_a_tall_drop_down the_crosshair_button_lets_a_finger_pick"
+        "solidcraft-ui-egui --lib one_finger_drag_orbits two_fingers_pan_and_pinch a_tap_selects pinch_gesture a_tap_picks_a_profile a_finger_on_the_arrow_stem a_finger_scrolls_a_tall_drop_down the_crosshair_button_lets_a_finger_pick a_finger_drags_sketch_geometry"
       ],
       "markers": [
         {
