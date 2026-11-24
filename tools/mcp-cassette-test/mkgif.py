@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw, ImageFont
 fd, tl, out, title = sys.argv[1:5]
 W = int(sys.argv[5]) if len(sys.argv) > 5 else 720
 SPEED = float(sys.argv[6]) if len(sys.argv) > 6 else 4.0
-FONT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets", "fonts", "ibm-plex-sans", "IBMPlexSans-Variable.ttf")
+FONT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "crates", "look", "fonts", "ibm-plex-sans", "IBMPlexSans-Variable.ttf")
 manual = json.load(open(sys.argv[7])) if len(sys.argv) > 7 else None
 
 frames = []
