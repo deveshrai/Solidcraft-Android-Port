@@ -10,9 +10,9 @@ any Android device, on HP and Dell XPS Googlebooks.*
 
 **This is SolidCraft for Android and Googlebook OS.** It is upstream
 [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft), kept up to date with every
-upstream release (now **0.45.0**), as an app for Android phones, tablets and foldables, Samsung DeX,
+upstream release (now **0.48.1**), as an app for Android phones, tablets and foldables, Samsung DeX,
 and Googlebooks, Google's laptops whose Googlebook OS is Android-based. Current release:
-**0.45.0b** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases/latest): arm64 for
+**0.48.1a** ([APKs](https://github.com/deveshrai/Solidcraft-Android-Port/releases/latest): arm64 for
 phones, tablets and Snapdragon Googlebooks; x86_64 for Intel Googlebooks).
 
 | Added in this port | What it gives you | Guide |
@@ -26,7 +26,8 @@ Everything else is upstream's, unchanged: the sketcher and solver, every feature
 exact modelled threads, and since 0.41 **plugins**, the first of them
 [SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears), an involute gear generator.
 
-**New in 0.45.0b:** the app no longer closes on a chamfer preview, or after a while, on Adreno
+**New in 0.48.1a:** upstream's 0.46.0 to 0.48.1, with a Privacy page in Settings; plugins
+build a 650 mm linear stage over MCP ([below](#plugins-on-android)). **In 0.45.0b:** the app no longer closes on a chamfer preview, or after a while, on Adreno
 phones such as the Galaxy Z Fold. **In 0.45.0a:** upstream's 0.43.0 to 0.45.0, with drawings; touch navigation is upstream's,
 and a finger still drags sketch geometry and turns the view with a dialog open. **In 0.42.0a:** the on-screen
 keyboard waits for a tap on a field instead of coming up whenever a window opens
@@ -37,12 +38,6 @@ and helical threads are retired in favour of upstream's plugins and modelled thr
 by earlier port releases still open, their helical threads as upstream's modelled threads with the
 old values kept in the design, and designs are now upstream's own format
 ([what changed](docs/android-whats-new.md#0410a)).
-
-A 3D-printable G-scale locomotive mechanism and its track, 51 parts, built by an agent over MCP on a
-Galaxy Tab in DeX in 9 seconds ([the test](docs/android-0400rc3a-test.md); on 0.41.0a too:
-[its test](docs/android-0410a-test.md)):
-
-![A model locomotive and track built over MCP on a Galaxy Tab](docs/screenshots/android/locomotive-mcp-tab-0400rc3a.gif)
 
 ## Plugins on Android
 
@@ -55,6 +50,14 @@ every gear of this differential, built by an agent over MCP on a Galaxy Z Fold
 [the test](docs/android-0410a-test.md#5-plugins-on-a-galaxy-z-fold)):
 
 ![A limited-slip differential on a Galaxy Z Fold, its sun and planet gears made by the SolidCraft Gears plugin](docs/screenshots/android/lsd-gears-plugin-fold-frame-0410b.gif)
+
+In 0.48.1a two plugins from the [plugin index](https://tharje.github.io/solidcraft-plugins/) made a
+650 mm linear stage over MCP: [Extrusions](https://github.com/TechSquidTV/SolidCraft-Plugins) the
+2060 T-slot profile, [Gears](https://github.com/bbonsen/solidcraftGearsPlugin) the rack and its
+meshed pinion; an MGN12 rail, carriage and NEMA 17 motor were added around them, 60 calls in all,
+no parts overlapping ([the test](docs/android-0481a-test.md)):
+
+![A 650 mm linear stage built over MCP on the emulator from the Extrusions and Gears plugins](docs/screenshots/android/linear-stage-emu-0481a.gif)
 
 [What's new](docs/android-whats-new.md) ·
 [port vs upstream](docs/android-vs-upstream.md) ·

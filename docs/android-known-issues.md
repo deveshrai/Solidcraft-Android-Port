@@ -4,8 +4,8 @@ What is wrong or missing in the current port release, and what is planned for th
 entry says how to work around it today. Fixed entries move to [Fixed](#fixed) with the release that
 fixed them.
 
-Current: **port 0.45.0b** (upstream's 0.45.0). Next:
-**0.45.0c**, or the next upstream release's **a**, if upstream releases
+Current: **port 0.48.1a** (upstream's 0.48.1). Next:
+**0.48.1b**, or the next upstream release's **a**, if upstream releases
 first. See also [android-vs-upstream.md](android-vs-upstream.md) for what upstream has that the port
 doesn't, and the reverse.
 
@@ -20,6 +20,8 @@ doesn't, and the reverse.
 
 | Issue | Seen on | Work-around today | Plan |
 |---|---|---|---|
+| **0.48.1a hasn't been tried on OpenGL ES or on a device yet.** It was tested on the Android emulator, which draws with Vulkan. Upstream 0.48 draws edges a new way that needs a feature OpenGL ES lacks, so on OpenGL ES the view keeps the older way; no phone falling back to OpenGL ES has shown 0.48.1a yet. | Android emulator, 0.48.1a | If the view or its edges look wrong, **Report a bug** in the app | Test on the Galaxy Tab, Z Fold and Pixel 9, and on OpenGL ES with a debug build |
+| **A plugin runs only from a folder named after its id.** Gears 0.10.0's zip unpacks to `gears-0.10.0`; an agent that runs it from there (`plugin.inspect`) is refused until it is renamed `gears`. Installing through Settings › Plugins isn't affected. | Android emulator, 0.48.1a | Rename the folder to the plugin's id | Upstream's rule: suggest the plugin ship its folder under its id |
 | **On Adreno GPUs bodies are built on the CPU.** Upstream 0.40's GPU tessellation shader crashes Qualcomm's compiler, so the port skips it there. Showing a large design can take longer than it would on the GPU. | Galaxy Z Fold (Adreno 840), 0.40.0-rc.2a | None needed | Report the crash upstream with the shader; turn the GPU back on for Adreno once a driver or shader change avoids it |
 | **Googlebook screens differ.** The app runs on Googlebooks exactly as on other Android devices, since the Android underneath is the same; it was fine on an HP and a Dell XPS Googlebook (0.41.0a). Other models have other resolutions and scaling, which haven't been tried. | HP and Dell XPS Googlebooks, 0.41.0a | If the layout looks wrong, resize the app's window | Report screenshots from other models: [issues](https://github.com/deveshrai/Solidcraft-Android-Port/issues) |
 | **On a phone held upright the isometric view doesn't fit a wide part.** View › Isometric (and an agent's `view.isometric`) leaves a part wider than tall running off both sides of the view; the fit seems to go by the view's height only. | Pixel 9 in portrait, 0.41.0a | Turn the phone sideways, or zoom out with a pinch | Fit by width too, in the port or upstream (check upstream first) |

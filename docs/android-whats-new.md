@@ -5,7 +5,7 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
-- [0.48.1a](#0481a): upstream 0.46.0 to 0.48.1; tested with a linear stage built from plugins (not released yet)
+- [0.48.1a](#0481a): upstream 0.46.0 to 0.48.1; tested with a linear stage built from plugins
 - [0.45.0b](#0450b): no more closing on a chamfer preview or after a while on Adreno phones
 - [0.45.0a](#0450a): upstream 0.43.0 to 0.45.0 (drawings); upstream's touch navigation, and a finger drags sketch geometry
 - [0.42.0a](#0420a): upstream 0.42.0; the on-screen keyboard waits for a tap (#6)
@@ -27,7 +27,7 @@ missing: [android-known-issues.md](android-known-issues.md).
 
 ## 0.48.1a
 
-Not released yet. **Upstream 0.46.0 to 0.48.1**: everything in upstream's release notes for
+**Upstream 0.46.0 to 0.48.1**: everything in upstream's release notes for
 [0.46.0](https://github.com/tangency-labs/solidcraft/releases/tag/v0.46.0),
 [0.47.0](https://github.com/tangency-labs/solidcraft/releases/tag/v0.47.0) and
 [0.48.0](https://github.com/tangency-labs/solidcraft/releases/tag/v0.48.0), with their fixes up to
