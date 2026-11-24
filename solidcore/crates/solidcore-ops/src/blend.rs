@@ -17,6 +17,7 @@
 //!   application grouping the edges of a curvature-continuous blend.
 //! - [`tangent_chain`]: the edges a blend of some edges runs on into tangentially, on the
 //!   kernel's measures.
+//! - [`delete_fillet_chain`]: a set of adjacent fillet faces removed together, on a copy.
 //!
 //! The kernel's session is driven as the C API's `round_edges` drove SMLib's executive:
 //! the turn, parameters, the set-back vertices, the corners (setbacks set, a chamfer's
@@ -40,7 +41,8 @@ use std::collections::{HashMap, HashSet};
 
 use solidcore::blend::band_room::law_fits_band;
 use solidcore::blend::blend_corner::rollover::{
-    concave_chain, concave_chain_ends, has_end_arc, is_concave_chain, RollOver,
+    chain_off_seams, concave_chain, concave_chain_ends, has_end_arc, is_concave_chain, seams_back,
+    RollOver,
 };
 use solidcore::blend::blend_corner::BlendCornerEvent;
 use solidcore::blend::blend_refusal::{BlendRefusal, NotBlendable, SetbackTooShortWhy};
@@ -80,6 +82,89 @@ use crate::{Error, FitKind, Result, RoomReason, Unblendable};
 
 mod room;
 pub use room::{band_room, BandRoom, EndRoom, Room};
+
+/// A fillet chain removed from a copy, with the input record entities that survive the edit.
+#[derive(Debug)]
+pub struct RemovedFilletChain {
+    /// The rebuilt body's record, in canonical order.
+    pub record: solidcore_record::brep::Brep,
+    /// Each result face's input record index. Removing a chain never creates a face.
+    pub face_sources: Vec<usize>,
+    /// Each result edge's input record index when its kernel identity has one unambiguous source.
+    pub edge_sources: Vec<Option<usize>>,
+}
+
+/// Remove the selected chain as one edit. `faces` names faces in the input record's `order`.
+/// An empty or single-index selection gives `None` before index validation. A larger
+/// selection gives `None` if the kernel does not recognize a fillet chain. The edit uses a copy.
+///
+/// # Errors
+/// [`Error::Argument`] for an invalid or repeated index in a selection of two or more.
+/// Copying, removal, the solid check and record conversion can also return errors.
+pub fn delete_fillet_chain(
+    body: &Body,
+    order: &crate::Order,
+    faces: &[usize],
+) -> Result<Option<RemovedFilletChain>> {
+    if faces.len() < 2 {
+        return Ok(None);
+    }
+    let (copy, input) = body.copy_with_order(order)?;
+    let selected = each_once(&input.faces, faces)?;
+    let mut brep = copy.into_inner();
+    let made = crate::session::run_on("delete_fillet_chain", &[("brep", body)], |k| {
+        let expect = Expect::under(k, &mut brep, Proof::default(), Contract::Closed)?;
+        let editing = brep.editing_enabled();
+        brep.set_editing_enabled(true);
+        let removed =
+            solidcore::blend::fillet_removal::delete_fillet_faces(k, &mut brep, &selected, None);
+        brep.set_editing_enabled(editing);
+        match removed {
+            Ok(()) => Ok(finish_under(k, brep, expect, Contract::Closed)?.map(|(b, _)| Some(b))),
+            Err(e) if e.kind() == solidcore::error::ErrorKind::NotARemovableFillet => Ok(Ok(None)),
+            Err(e) => match failure(&e) {
+                Some(why) => Ok(Err(crate::session::noted(&e, why))),
+                None => Err(e),
+            },
+        }
+    })??;
+    let Some(made) = made else { return Ok(None) };
+    let (record, output) = Body::new(made).to_record()?;
+    // Both orders describe the very same copy, before and after the edit. Only the selected
+    // faces may have gone; every remaining face must be one that was there before.
+    let mut originals = input.record_faces();
+    for face in selected {
+        originals.remove(&face);
+    }
+    let face_sources = output
+        .faces
+        .iter()
+        .map(|f| originals.remove(f).map(|i| i as usize))
+        .collect::<Option<Vec<_>>>()
+        .ok_or(Error::Exception)?;
+    if !originals.is_empty() {
+        return Err(Error::Exception);
+    }
+    // More than one record edge can represent one kernel edge where solids touch. Its
+    // identity alone cannot tell which piece survived in the output record.
+    let mut edges = HashMap::new();
+    for (i, edge) in input.edges.iter().enumerate() {
+        edges
+            .entry(*edge)
+            .and_modify(|source| *source = None)
+            .or_insert(Some(i));
+    }
+    let edge_sources = output
+        .edges
+        .iter()
+        .map(|e| edges.get(e).copied().flatten())
+        .collect();
+    Ok(Some(RemovedFilletChain {
+        record,
+        face_sources,
+        edge_sources,
+    }))
+}
 
 /// The largest size, setback or radius the operations take.
 pub const MAX_SIZE: f64 = 1e6;
@@ -130,12 +215,12 @@ pub enum Turn {
 }
 
 /// How chamfers close a corner where every edge at a vertex is chamfered between planes (the
-/// kernel's blend corner, `solidcore::blend::blend_corner::chamfer`, under the kernel's
-/// `fillet_chamfer_corner` fix).
+/// kernel's blend corner, `solidcore::blend::blend_corner::chamfer`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ChamferCorner {
-    /// The chamfer planes run on until they meet: what ops builds without asking (a corner the
-    /// session is not told a type for), so a design saved without one keeps its corners.
+    /// The chamfer planes run on until they meet: the default, so a design saved without a
+    /// corner type keeps its corners. Refused where no mitre exists (with the too wide
+    /// chamfer's fit at three chamfers).
     #[default]
     Mitre,
     /// The corner is cut off by the plane through the points where the chamfers' rails cross:
@@ -308,6 +393,7 @@ fn room_reason(r: NoRoomReason) -> Option<RoomReason> {
         NoRoomReason::OffsetCollapses => R::OffsetCollapses,
         NoRoomReason::CornersTakeWholeEdge => R::CornersTakeWholeEdge,
         NoRoomReason::OverflowKeepsNothing => R::OverflowKeepsNothing,
+        NoRoomReason::EndPassesOverEndFace => R::EndPassesOverEndFace,
         NoRoomReason::RoundIntoMaterial | NoRoomReason::RailRunsPastFaceIntoMaterial => {
             R::RunsIntoMaterial
         }
@@ -362,8 +448,14 @@ pub enum Refusal {
     },
     /// [`Error::NoRoom`]: larger than its faces allow, unsized.
     NoRoom,
-    /// [`Error::CornerUnsupported`]: a vertex no corner kind handles.
-    CornerUnsupported,
+    /// [`Error::CornerUnsupported`]: a vertex no corner kind handles, with the kernel's reason
+    /// and the vertex's point where its session notes them.
+    CornerUnsupported {
+        /// The kernel's reason.
+        why: Option<String>,
+        /// The vertex's point.
+        at: Option<[f64; 3]>,
+    },
 }
 
 impl From<Refusal> for Error {
@@ -394,7 +486,7 @@ impl From<Refusal> for Error {
                 builds,
             },
             Refusal::NoRoom => Error::NoRoom,
-            Refusal::CornerUnsupported => Error::CornerUnsupported,
+            Refusal::CornerUnsupported { why, at } => Error::CornerUnsupported { why, at },
         }
     }
 }
@@ -647,7 +739,21 @@ fn blend_failure_unsized(
     corner: bool,
 ) -> std::result::Result<Refusal, SolidError> {
     if corner || info.code == FilletErrorType::CornerUnsupported as i32 {
-        Ok(Refusal::CornerUnsupported)
+        // the reason and the point are the session's note of the vertex; a later step's note
+        // over it (`corner` alone) is not the vertex's
+        let noted_here = info.code == FilletErrorType::CornerUnsupported as i32;
+        Ok(Refusal::CornerUnsupported {
+            why: if noted_here {
+                noted(info).map(str::to_owned)
+            } else {
+                None
+            },
+            at: if noted_here {
+                info.location.map(|p| [p.x, p.y, p.z])
+            } else {
+                None
+            },
+        })
     } else if info.code != FilletErrorType::NoRoom as i32 {
         Err(e)
     } else {
@@ -896,11 +1002,12 @@ fn pass(
         let mut s = FilletSession::new(k, b)?;
         // read as the corners are made
         s.set_swept_turns(p.turn == Turn::Swept);
-        // the Facet asked of the kernel's chamfer corners; the default leaves the session as it
-        // always was (no type set), so it builds what ops built before
-        if p.chamfer_corner == ChamferCorner::Facet {
-            s.set_chamfer_corner(solidcore::blend::blend_corner::BlendChamferCorner::Facet);
-        }
+        // the corner type the caller chose, always asked: a type refused where it does not
+        // exist, with its fit (the kernel picks a type itself only where none is asked)
+        s.set_chamfer_corner(match p.chamfer_corner {
+            ChamferCorner::Mitre => solidcore::blend::blend_corner::BlendChamferCorner::Mitre,
+            ChamferCorner::Facet => solidcore::blend::blend_corner::BlendChamferCorner::Facet,
+        });
         let prepared = prepare(k, &mut s, p.edges, p.section, p.law);
         let prepared_ok = prepared.is_ok();
         // a set-back vertex is no Ball: its corner is the one the setback is set on
@@ -1258,6 +1365,63 @@ fn overflow_first(
     Ok(Ok(fresh))
 }
 
+/// What the Roll-over's second pass asked on its own is asked ([`chain_alone`]).
+#[derive(Clone, Copy)]
+struct Alone<'a> {
+    /// The concave chain.
+    chain: &'a [EdgeId],
+    /// Its sizes, one an edge.
+    sizes: &'a [f64],
+    /// Its vertices V ([`concave_chain_ends`], never empty).
+    ends: &'a [VertexId],
+    section: fn(&[f64]) -> Section<'_>,
+    turn: Turn,
+}
+
+/// The Roll-over's second pass asked on its own (#10876, #19476), on `copy`, a copy of the
+/// untouched `input`: the chain is taken off its cylinders' seams where the round has no whole
+/// section at a seam's vertex ([`chain_off_seams`], #19505), the pass is run on what is then
+/// the chain, the seams are put back ([`seams_back`]) and the body is finished, taken only
+/// where it is proved a solid as the input is.
+fn chain_alone(
+    k: &mut Kernel,
+    mut copy: Brep,
+    input: &Brep,
+    alone: Alone<'_>,
+    expect: Expect,
+    contract: Contract,
+) -> solidcore::Result<Result<Brep>> {
+    let (chain, sizes, ends, turned) =
+        match chain_off_seams(k, &mut copy, alone.chain, alone.sizes)? {
+            Some(off) => {
+                let ends = concave_chain_ends(k, &mut copy, &off.edges)?;
+                (off.edges, off.sizes, ends, off.turned)
+            }
+            None => (
+                alone.chain.to_vec(),
+                alone.sizes.to_vec(),
+                alone.ends.to_vec(),
+                Vec::new(),
+            ),
+        };
+    if ends.is_empty() {
+        return Ok(Err(Error::Unsupported(
+            "a roll-over's concave chain that does not meet the cliff",
+        )));
+    }
+    let section = alone.section;
+    let p = Pass {
+        roll_over: RollOverStep::Concave(&ends),
+        ..together(&chain, section(&sizes), alone.turn, &[], contract)
+    };
+    if let Err(e) = pass_or_refuse(k, &mut copy, p)? {
+        return Ok(Err(e));
+    }
+    seams_back(k, &mut copy, &turned)?;
+    let proved = proved_as_given(k, input, expect, contract)?;
+    finish(k, copy, proved)
+}
+
 /// The blend corner's Roll-over (#10876, `solidcore::blend::blend_corner::rollover`), which the
 /// first call's corners step refused in `b` at the vertices of `roll_overs` (`edges` the asked
 /// edges, `sizes` theirs): on `fresh` (the untouched input, a copy in `b`'s order), every asked
@@ -1379,7 +1543,7 @@ pub fn failure(e: &SolidError) -> Option<Error> {
 
 /// [`failure`] for a failure of the session `s`, where a step of the session failed: the
 /// kernel's statement followed by what the session noted of that step ([`noted`]), so two
-/// failures the kernel states alike ("the fillet body is not built") say which step failed
+/// failures the kernel states alike ("a step of the fillet executive failed") say which step failed
 /// and why. A session that noted nothing gives [`failure`]'s; `None` as [`failure`].
 #[must_use]
 pub fn session_failure(s: &FilletSession<'_>, e: &SolidError) -> Option<Error> {
@@ -1450,7 +1614,7 @@ const NO_COMMENT: &str = "<no comment>";
 /// and their neighbours); with [`Corners::Open`], [`Error::NotSolid`] for a body that is no
 /// closed solid once blended and [`Error::Unsupported`] for a corner patch that is not a disc
 /// between faces outside every patch; the kernel's other refusals; [`Error::Empty`]
-/// and [`Error::NotSolid`] as the result contract gives them.
+/// and [`Error::NotSolidBecause`] as the result contract gives them.
 pub fn blend(
     body: &Body,
     kind: Blend,
@@ -1484,8 +1648,7 @@ pub fn blend(
 /// The errors of [`blend`], including [`Error::Argument`] for an absent index or an entity
 /// in the supplied order that does not belong to the body, for [`Turn::Swept`] with a blend
 /// other than [`Blend::Round`], and for [`ChamferCorner::Facet`] with one other than
-/// [`Blend::Chamfer`]; [`Error::Unsupported`] for the Facet without the kernel's
-/// `fillet_chamfer_corner` fix. A swept turn the kernel does not build is
+/// [`Blend::Chamfer`]. A swept turn the kernel does not build is
 /// [`Error::TurnRefused`] with the kernel's reason and the corner's point: `room` at a sharp
 /// concave side edge (no radius of the rounds passes it), else where the blend corner does not
 /// build one yet. A refusal the kernel gives no reason for is as it classifies it
@@ -1519,7 +1682,6 @@ pub fn blend_ordered(
 /// # Errors
 /// The errors of [`blend`]; [`Error::Argument`] for [`Turn::Swept`] with a blend other than
 /// [`Blend::Round`] and for [`ChamferCorner::Facet`] with one other than [`Blend::Chamfer`];
-/// [`Error::Unsupported`] for the Facet without the kernel's `fillet_chamfer_corner` fix;
 /// [`Error::TurnRefused`] for a swept turn the kernel does not build.
 pub fn blend_with(
     body: &Body,
@@ -1611,13 +1773,6 @@ fn blend_on_body(
     options: BlendOptions,
 ) -> solidcore::Result<Result<Blended>> {
     let turn = options.turn;
-    // the Facet is the kernel's blend corner's, under its fix: refused, not built as the
-    // Mitre, without it
-    if options.chamfer_corner == ChamferCorner::Facet && !k.fixes.fillet_chamfer_corner {
-        return Ok(Err(Error::Unsupported(
-            "the chamfered corner needs the kernel's fillet_chamfer_corner fix",
-        )));
-    }
     let edge_order = order.map_or_else(|| b.edge_list(), |o| o.edges.as_slice());
     let picked = match each_once(edge_order, edges) {
         Ok(p) => p,
@@ -1822,18 +1977,14 @@ fn blend_on_body(
                 _ => Vec::new(),
             };
             if let (Some(mapped), false) = (mapped, ends.is_empty()) {
-                let p = Pass {
-                    roll_over: RollOverStep::Concave(&ends),
-                    ..together(&mapped, section(each), turn, &[], contract)
+                let alone = Alone {
+                    chain: &mapped,
+                    sizes: each,
+                    ends: &ends,
+                    section,
+                    turn,
                 };
-                match pass_or_refuse(k, &mut copy, p).and_then(|r| match r {
-                    // taken only where it is proved a solid as the input is
-                    Ok(_) => {
-                        let proved = proved_as_given(k, input, expect, contract)?;
-                        finish(k, copy, proved)
-                    }
-                    Err(e) => Ok(Err(e)),
-                }) {
+                match chain_alone(k, copy, input, alone, expect, contract) {
                     Ok(Ok(rolled)) => {
                         *b = rolled;
                         return Ok(Ok(Blended {
@@ -2578,7 +2729,7 @@ pub fn chamfer_sides(
 }
 
 /// [`chamfer_sides`] under `contract`: [`Contract::Proved`] proves the body before and the result
-/// after, and refuses a result it cannot prove ([`Error::NotSolid`]).
+/// after, and refuses a result it cannot prove ([`Error::NotSolidBecause`]).
 ///
 /// # Errors
 /// As [`chamfer_sides`].
@@ -2625,7 +2776,7 @@ pub fn chamfer_sides_ordered(
 }
 
 /// [`chamfer_sides_ordered`] under `contract`: [`Contract::Proved`] proves the body before and the result
-/// after, and refuses a result it cannot prove ([`Error::NotSolid`]).
+/// after, and refuses a result it cannot prove ([`Error::NotSolidBecause`]).
 ///
 /// # Errors
 /// As [`chamfer_sides_ordered`].
@@ -2669,7 +2820,7 @@ pub fn chamfer_sides_facing(
 }
 
 /// [`chamfer_sides_facing`] under `contract`: [`Contract::Proved`] proves the body before and the result
-/// after, and refuses a result it cannot prove ([`Error::NotSolid`]).
+/// after, and refuses a result it cannot prove ([`Error::NotSolidBecause`]).
 ///
 /// # Errors
 /// As [`chamfer_sides_facing`].
@@ -2881,7 +3032,7 @@ pub fn fillet_variable(
 }
 
 /// [`fillet_variable`] under `contract`: [`Contract::Proved`] proves the body before and the result
-/// after, and refuses a result it cannot prove ([`Error::NotSolid`]).
+/// after, and refuses a result it cannot prove ([`Error::NotSolidBecause`]).
 ///
 /// # Errors
 /// As [`fillet_variable`].
@@ -2940,7 +3091,7 @@ pub fn fillet_variable_ordered(
 }
 
 /// [`fillet_variable_ordered`] under `contract`: [`Contract::Proved`] proves the body before and the result
-/// after, and refuses a result it cannot prove ([`Error::NotSolid`]).
+/// after, and refuses a result it cannot prove ([`Error::NotSolidBecause`]).
 ///
 /// # Errors
 /// As [`fillet_variable_ordered`].
@@ -2991,7 +3142,7 @@ pub fn fillet_variable_from(
 }
 
 /// [`fillet_variable_from`] under `contract`: [`Contract::Proved`] proves the body before and the result
-/// after, and refuses a result it cannot prove ([`Error::NotSolid`]).
+/// after, and refuses a result it cannot prove ([`Error::NotSolidBecause`]).
 ///
 /// # Errors
 /// As [`fillet_variable_from`].
