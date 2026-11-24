@@ -6495,15 +6495,16 @@ mod tests {
         let fragment_invariants = |source: &str| {
             let module = naga::front::wgsl::parse_str(source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(source)));
             let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all()).validate(&module).unwrap();
+            // The `override` constants resolved as wgpu does for a pipeline: the GLSL writer takes none.
+            let (module, info) = naga::back::pipeline_constants::process_overrides(&module, &info, None, &Default::default()).unwrap();
             let options = glsl::Options { version: glsl::Version::Embedded { version: 300, is_webgl: false }, ..Default::default() };
             let mut found = Vec::new();
             for ep in module.entry_points.iter().filter(|e| e.stage == naga::ShaderStage::Fragment) {
                 let pipeline = glsl::PipelineOptions { shader_stage: naga::ShaderStage::Fragment, entry_point: ep.name.clone(), multiview: None };
                 let mut out = String::new();
-                if let Ok(mut w) = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
-                    && w.write().is_ok()
-                    && out.contains("invariant gl_FragCoord")
-                {
+                let mut w = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default()).unwrap();
+                w.write().unwrap_or_else(|e| panic!("{}: {e:?}", ep.name));
+                if out.contains("invariant gl_FragCoord") {
                     found.push(ep.name.clone());
                 }
             }
