@@ -162,3 +162,4 @@
 | docs/screenshots/android/linear-stage-emu-0481a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on the Android emulator (a 0.48.1a test build): a 650 mm linear stage built over MCP | MIT OR Apache-2.0 |
 | docs/screenshots/android/linear-stage-end-emu-0481a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on the Android emulator (a 0.48.1a test build): the linear stage seen along its length | MIT OR Apache-2.0 |
 | docs/screenshots/android/linear-stage-mesh-emu-0481a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on the Android emulator (a 0.48.1a test build): a section through the rack and pinion | MIT OR Apache-2.0 |
+| docs/screenshots/android/linear-stage-fold-0481a.jpg | SolidCraft contributors | screenshot of SolidCraft itself on a Galaxy Z Fold (the 0.48.1a release build): the 650 mm linear stage built over MCP | MIT OR Apache-2.0 |

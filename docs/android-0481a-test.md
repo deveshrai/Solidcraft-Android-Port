@@ -2,7 +2,7 @@
 
 Upstream's 0.48.1 merged into SolidCraft for Android and Googlebook OS, and the build tested on the
 Android emulator (a Pixel Tablet image, Android 16, arm64, which draws on the CPU, so its times
-are slow and only show that everything works): by finger, then a 650 mm linear stage built over
+are slow and only show that everything works) and on a Galaxy Z Fold: by finger, then a 650 mm linear stage built over
 the MCP server with two plugins from the
 [SolidCraft plugin index](https://tharje.github.io/solidcraft-plugins/).
 
@@ -15,7 +15,8 @@ screen while [`stage.py`](../tools/mcp-cassette-test/stage.py) ran.*
 - [1. The merge](#1-the-merge)
 - [2. By finger](#2-by-finger)
 - [3. A linear stage over MCP, with plugins](#3-a-linear-stage-over-mcp-with-plugins)
-- [4. Not tested yet](#4-not-tested-yet)
+- [4. On a Galaxy Z Fold](#4-on-a-galaxy-z-fold)
+- [5. Not tested yet](#5-not-tested-yet)
 
 ## In short
 
@@ -24,7 +25,8 @@ screen while [`stage.py`](../tools/mcp-cassette-test/stage.py) ran.*
 | Upstream | 0.46.0 to 0.48.1 merged: 855 commits; 30 of the files they changed carry port changes, 7 conflicted, each keeping both sides |
 | The port's checks | every area's tests pass; the Android, desktop and browser builds have no warnings |
 | By finger | a cone chamfered on its base edge (the 0.45.0a crash), its arrow dragged, the view turned; Settings › Privacy and MCP server both there |
-| Linear stage | 60 calls, 76.8 s on the emulator while recording, none failed; 7 closed bodies, none overlapping |
+| Linear stage | 60 calls, none failed, 7 closed bodies, none overlapping: 12.3 s on a Galaxy Z Fold, 76.8 s on the emulator while recording |
+| Galaxy Z Fold | the stage, then a cone chamfered by finger on its base edge (the 0.45.0a crash), folded and unfolded twice: no crash |
 | Format | 66, upstream's own |
 
 ## 1. The merge
@@ -98,8 +100,24 @@ package only from a folder named after its id, so it has to be renamed `gears`; 
 is in the plugin's repository rather than on a release, so it has no checksum to check against.
 Extrusions 0.3.0 matched its published checksum.
 
-## 4. Not tested yet
+## 4. On a Galaxy Z Fold
 
-- On a phone or tablet: only the emulator was attached for this build.
+The release APK on a Galaxy Z Fold (Adreno, Vulkan), its inner screen, over the MCP server from a Mac
+on the same Wi-Fi (through `adb forward`):
+
+- **The linear stage**, the same `stage.py`: 60 calls in 12.3 s, none failed, no parts
+  overlapping. The plugins: rack and pinion 1.2 s, the 2060 extrusion 1.2 s; the rail's 26 holes
+  1.1 s, the interference check 1.2 s.
+- **By finger**: a cone, then Chamfer on its base edge, the step that closed 0.45.0a on this phone.
+  The edge picked with one tap and the preview showed; the arrow dragged by finger to 33 mm, which
+  the dialog refused in words (the most that fits is 30 mm), then 5 typed and OK. Then the phone
+  folded and unfolded twice and one finger turned the view. No crash, nothing in the log.
+- Settings lists Privacy and, after it, the port's MCP server page.
+
+![The stage on a Galaxy Z Fold](screenshots/android/linear-stage-fold-0481a.jpg)
+
+## 5. Not tested yet
+
+- Other devices: a Galaxy Tab, a Pixel 9, Googlebooks.
 - OpenGL ES: the emulator drew with Vulkan (llvmpipe). A release APK can't be switched to OpenGL
   ES from outside, so that needs a debug build or a device that falls back to it.

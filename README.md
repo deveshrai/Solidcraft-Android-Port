@@ -55,7 +55,8 @@ In 0.48.1a two plugins from the [plugin index](https://tharje.github.io/solidcra
 650 mm linear stage over MCP: [Extrusions](https://github.com/TechSquidTV/SolidCraft-Plugins) the
 2060 T-slot profile, [Gears](https://github.com/bbonsen/solidcraftGearsPlugin) the rack and its
 meshed pinion; an MGN12 rail, carriage and NEMA 17 motor were added around them, 60 calls in all,
-no parts overlapping ([the test](docs/android-0481a-test.md)):
+no parts overlapping: 12.3 s on a Galaxy Z Fold. The recording is the emulator's slower run
+([the test](docs/android-0481a-test.md)):
 
 ![A 650 mm linear stage built over MCP on the emulator from the Extrusions and Gears plugins](docs/screenshots/android/linear-stage-emu-0481a.gif)
 

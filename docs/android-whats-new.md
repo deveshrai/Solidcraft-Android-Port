@@ -36,8 +36,9 @@ in Preferences. The port's MCP server page now follows it.
 
 Designs saved by 0.48.1a are format 66 and don't open in earlier port releases.
 
-Tested: [android-0481a-test.md](android-0481a-test.md), on the emulator, with a 650 mm linear stage
-built over MCP from the Extrusions and Gears plugins.
+Tested: [android-0481a-test.md](android-0481a-test.md), on the emulator and a Galaxy Z Fold, with a
+650 mm linear stage built over MCP from the Extrusions and Gears plugins (12.3 s on the Fold) and a
+cone's base edge chamfered by finger.
 
 ## 0.45.0b
 
