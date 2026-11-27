@@ -123,8 +123,14 @@ impl McpHost {
                 // through `control.pending` (and tells the agent to call `pending` after a few
                 // minutes more), so a long boolean never looks like an app that stopped
                 // answering. Its requests join the app's.
-                let started = crate::control_server::start(solidcraft_control::auth::Listen::Exact(0), self.ctx.clone())
-                    .map_err(|_| tr("mcp.no_control").to_string())?;
+                let started = crate::control_server::start(
+                    solidcraft_control::auth::Listen::Exact(0),
+                    self.ctx.clone(),
+                    // No event loop proxy: requests wake the app with a repaint, as before 0.51
+                    // (Android pauses the app off screen anyway).
+                    crate::control_server::Wake::default(),
+                )
+                .map_err(|_| tr("mcp.no_control").to_string())?;
                 let (requests, p) = (started.requests, started.port);
                 let (forward, ctx) = (self.control.clone(), self.ctx.clone());
                 std::thread::Builder::new()
