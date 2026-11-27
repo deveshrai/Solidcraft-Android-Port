@@ -59,10 +59,8 @@
   "de": {
     "Bevel": "Kegelrad",
     "Bore": "Bohrung",
-    "GEAR": "ZAHNRAD",
     "Gear": "Zahnrad",
     "Geometry": "Geometrie",
-    "Groove": "Nut",
     "Hand": "Steigungsrichtung",
     "Left": "Links",
     "Module": "Modul",
@@ -179,10 +177,8 @@
   "ko": {
     "Bevel": "베벨 기어",
     "Bore": "보어",
-    "GEAR": "기어",
     "Gear": "기어",
     "Geometry": "형상",
-    "Groove": "홈",
     "Hand": "방향",
     "Left": "왼쪽",
     "Module": "모듈",
