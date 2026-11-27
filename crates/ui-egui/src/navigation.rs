@@ -927,7 +927,8 @@ fn handle_input(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &egui::
         (app.preferences.touchscreen_navigation || app.preferences.pencil_mode) && app.tool.is_none() && app.viewport.context_menu.is_none();
     let touch_start = inside && !crate::touch_pick::view_takes(app, ui.ctx(), &projection(app, rect), hover);
     let had_touch = app.viewport.touch.owned;
-    let touch = app.viewport.touch.frame(ui, resp.rect, &[axes, readout.unwrap_or(Rect::NOTHING)], touch_start, touch_enabled, caps.orbit);
+    let selects = crate::touch_pick::one_finger_selects(app);
+    let touch = app.viewport.touch.frame(ui, resp.rect, &[axes, readout.unwrap_or(Rect::NOTHING)], touch_start, touch_enabled, caps.orbit, selects);
 
     // ---- navigation ----
     let trackpad_pan = app.preferences.trackpad_pans();
@@ -2062,7 +2063,9 @@ fn finite_screen_vector(vector: [f64; 2]) -> Option<egui::Vec2> {
 }
 
 impl TouchNavigation {
-    fn frame(&mut self, ui: &egui::Ui, rect: Rect, excluded: &[Rect], can_start: bool, enabled: bool, orbit: bool) -> TouchMotion {
+    /// `selects` (SolidCraft Android port, issue #8): one finger leaves the view alone, so its drag
+    /// draws the selection box; two fingers still pan and pinch.
+    fn frame(&mut self, ui: &egui::Ui, rect: Rect, excluded: &[Rect], can_start: bool, enabled: bool, orbit: bool, selects: bool) -> TouchMotion {
         if !enabled || !ui.input(|i| i.focused) {
             *self = Self::default();
             return TouchMotion::default();
@@ -2164,6 +2167,7 @@ impl TouchNavigation {
                 self.multiple = true;
                 self.mode = Some(NavMode::Pan);
             } else if !self.multiple
+                && !selects
                 && let Some(origin) = self.origin
             {
                 let distance =
@@ -5108,7 +5112,7 @@ mod tests {
         };
         let mut motion = super::TouchMotion::default();
         let mut out = ctx.run_ui(raw, |ui| {
-            motion = touch.frame(ui, rect, &[], true, true, false);
+            motion = touch.frame(ui, rect, &[], true, true, false, false);
         });
         out.textures_delta.clear();
         motion

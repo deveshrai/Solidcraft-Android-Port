@@ -19559,6 +19559,63 @@ mod tests {
         assert_ne!(h.app.cam.yaw, cam.yaw, "a finger turns the view with the dialog open");
     }
 
+    /// SolidCraft (Android port), port issue #8: while a sketch is edited, one finger dragged
+    /// from empty view draws the selection box as a mouse does, and takes what it spans; two
+    /// fingers still pan.
+    #[test]
+    fn a_finger_box_selects_in_a_sketch_and_two_fingers_still_pan() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        for (id, p) in [("sketch.create", json!({"plane": "XY"})), ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [60, 20]}))] {
+            h.app.run(id, p).unwrap();
+        }
+        h.call("ui.camera", json!({"fit":true}));
+        // Zoomed out, so the box starts clear of the panels beside the view.
+        h.app.cam.distance *= 2.0;
+        h.frames(3);
+        h.app.session.selection.clear();
+        let proj = projection(&h.app, h.app.viewport.rect.unwrap());
+        let corners = [(0.0, 0.0), (60.0, 0.0), (60.0, 20.0), (0.0, 20.0)].map(|(x, y)| proj.to_screen(Vec3::new(x, y, 0.0)).unwrap());
+        let spans = Rect::from_points(&corners).expand(40.0);
+        let (from, to) = (spans.min, spans.max);
+        assert!(h.app.viewport.rect.unwrap().contains(from) && h.app.viewport.rect.unwrap().contains(to));
+        assert!(!crate::shell::covered(&h.app, from), "the box starts on the view");
+        let cam = h.app.cam;
+        finger(&mut h, 0, egui::TouchPhase::Start, from);
+        h.frame();
+        for step in 1..=6 {
+            finger(&mut h, 0, egui::TouchPhase::Move, from + (to - from) * (step as f32 / 6.0));
+            h.frame();
+        }
+        assert!(h.app.viewport.boxsel.is_some(), "a finger's drag in a sketch draws a selection box");
+        // The release as egui-winit sends it, in one frame: the pointer is gone with it.
+        h.frames(2);
+        let button = egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE };
+        let end = egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase: egui::TouchPhase::End, pos: to, force: None };
+        h.frame_with(vec![end, button, egui::Event::PointerGone]);
+        assert_eq!(h.app.cam, cam, "the finger didn't orbit");
+        let curves = h.app.session.selection.iter().filter(|s| matches!(s, Sel::SketchCurve { .. })).count();
+        assert_eq!(curves, 4, "the box took the rectangle's four lines: {:?}", h.app.session.selection);
+        // Two fingers pan.
+        let centre = h.app.viewport.rect.unwrap().center();
+        finger(&mut h, 0, egui::TouchPhase::Start, centre - vec2(100.0, 0.0));
+        h.frame();
+        finger(&mut h, 1, egui::TouchPhase::Start, centre + vec2(100.0, 0.0));
+        h.frame();
+        for step in 1..=5 {
+            let d = 12.0 * step as f32;
+            finger(&mut h, 0, egui::TouchPhase::Move, centre + vec2(-100.0, d));
+            finger(&mut h, 1, egui::TouchPhase::Move, centre + vec2(100.0, d));
+            h.frame();
+            assert!(h.app.viewport.boxsel.is_none(), "two fingers draw no box");
+        }
+        finger(&mut h, 1, egui::TouchPhase::End, centre + vec2(100.0, 60.0));
+        finger(&mut h, 0, egui::TouchPhase::End, centre + vec2(-100.0, 60.0));
+        h.frame();
+        assert_ne!(h.app.cam.target, cam.target, "two fingers pan in a sketch");
+        assert_eq!((h.app.cam.yaw, h.app.cam.pitch), (cam.yaw, cam.pitch));
+    }
+
     /// SolidCraft (Android port), port issue #2: the view bar's crosshair button, pressed by a
     /// finger, turns one finger on the model from orbiting to aiming a crosshair above it; lifting
     /// the finger selects what the crosshair is on. A mouse can't press the button, and a mouse
