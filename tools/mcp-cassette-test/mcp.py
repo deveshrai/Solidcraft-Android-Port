@@ -42,7 +42,8 @@ def tool(name, args=None, label=None, timeout=300, quiet=False):
     if err: raise RuntimeError(f"{rec['label']}: {err}")
     imgs = [c for c in res.get("content", []) if c.get("type") == "image"]
     try:
-        out = json.loads(text)
+        # The JSON reply, then (since 0.51) any note the server adds after it, such as the selection.
+        out = json.JSONDecoder().raw_decode(text.lstrip())[0]
         if isinstance(out, dict) and imgs: out["_images"] = imgs
         return out
     except Exception: return {"_text": text, "_images": imgs}
