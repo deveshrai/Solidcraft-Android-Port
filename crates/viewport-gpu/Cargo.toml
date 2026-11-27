@@ -32,3 +32,4 @@ wgpu = { workspace = true, features = ["gles"] }
 # The HLSL the D3D12 backend compiles (tests check it suits FXC), and the GLSL ES the GL backend
 # compiles (SolidCraft Android port: no `invariant` on a fragment input).
 naga = { workspace = true, features = ["wgsl-in", "hlsl-out", "glsl-out"] }
+serde_json = { workspace = true }
