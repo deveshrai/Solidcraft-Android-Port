@@ -5,6 +5,7 @@ until the next upstream release (0.24.0a, then 0.24.0b…). APKs:
 [releases](https://github.com/deveshrai/Solidcraft-Android-Port/releases). What is still wrong or
 missing: [android-known-issues.md](android-known-issues.md).
 
+- [0.51.0a](#0510a): upstream 0.49.0 to 0.51.0; in a sketch one finger draws the selection box (#8)
 - [0.48.1a](#0481a): upstream 0.46.0 to 0.48.1; tested with a linear stage built from plugins
 - [0.45.0b](#0450b): no more closing on a chamfer preview or after a while on Adreno phones
 - [0.45.0a](#0450a): upstream 0.43.0 to 0.45.0 (drawings); upstream's touch navigation, and a finger drags sketch geometry
@@ -24,6 +25,26 @@ missing: [android-known-issues.md](android-known-issues.md).
 - [0.23.0a](#0230a): gears, upstream 0.23.0
 - [0.22.0a](#0220a): helical B-rep threads, upstream 0.22.0
 - [0.21.0a](#0210a): the first lettered release, upstream 0.21.0
+
+## 0.51.0a
+
+**In a sketch, one finger draws the selection box**
+([#8](https://github.com/deveshrai/Solidcraft-Android-Port/issues/8), asked for by Vealdvyn).
+While a sketch is edited, one finger dragged from empty space no longer turns the view: it draws
+the selection box, as a mouse drag does, and lifting it selects what the box spans. A finger on
+the sketch's geometry still drags it, two fingers still pan and pinch-zoom, and with the view bar's
+orbit button on one finger turns the view. Outside a sketch nothing changed.
+
+**Upstream 0.49.0 to 0.51.0**: everything in upstream's release notes for
+[0.49.0](https://github.com/tangency-labs/solidcraft/releases/tag/v0.49.0),
+[0.49.1](https://github.com/tangency-labs/solidcraft/releases/tag/v0.49.1),
+[0.50.0](https://github.com/tangency-labs/solidcraft/releases/tag/v0.50.0) and
+[0.51.0](https://github.com/tangency-labs/solidcraft/releases/tag/v0.51.0).
+
+Designs saved by 0.51.0a are format 72 and don't open in earlier port releases.
+
+Tested: [android-0510a-test.md](android-0510a-test.md), on the emulator: box selection by finger,
+the 650 mm linear stage over MCP from the Extrusions and Gears plugins, and an upgrade from 0.48.1a.
 
 ## 0.48.1a
 

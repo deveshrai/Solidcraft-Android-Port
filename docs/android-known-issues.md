@@ -4,8 +4,8 @@ What is wrong or missing in the current port release, and what is planned for th
 entry says how to work around it today. Fixed entries move to [Fixed](#fixed) with the release that
 fixed them.
 
-Current: **port 0.48.1a** (upstream's 0.48.1). Next:
-**0.48.1b**, or the next upstream release's **a**, if upstream releases
+Current: **port 0.51.0a** (upstream's 0.51.0). Next:
+**0.51.0b**, or the next upstream release's **a**, if upstream releases
 first. See also [android-vs-upstream.md](android-vs-upstream.md) for what upstream has that the port
 doesn't, and the reverse.
 
@@ -20,7 +20,9 @@ doesn't, and the reverse.
 
 | Issue | Seen on | Work-around today | Plan |
 |---|---|---|---|
-| **0.48.1a hasn't been tried on OpenGL ES yet.** It was tested on the Android emulator and a Galaxy Z Fold, both on Vulkan. Upstream 0.48 draws edges a new way that needs a feature OpenGL ES lacks, so on OpenGL ES the view keeps the older way; no phone falling back to OpenGL ES has shown 0.48.1a yet. | Android emulator and Galaxy Z Fold, 0.48.1a | If the view or its edges look wrong, **Report a bug** in the app | Test on OpenGL ES with a debug build |
+| **0.51.0a hasn't been tried on a phone or tablet, or on OpenGL ES on a real GPU.** It was tested on the Android emulator. There it also ran on OpenGL ES (ANGLE over SwiftShader, all in software): it drew the model and its windows without errors, but each touch took about 2.7 s. | Android emulator, 0.51.0a | If the view or its edges look wrong, **Report a bug** in the app | Test on a Galaxy Z Fold and Galaxy Tab, and on OpenGL ES with a debug build |
+| **A launch with the screen off can be stopped as not responding on a slow GPU.** Compiling the view's shaders on the emulator's software Vulkan took longer than Android's 5 s, so Android stopped the app; the start-up guard then moved the next launch to OpenGL ES, as it is meant to. | Android emulator (software Vulkan), 0.51.0a | Start the app with the screen on; to go back to Vulkan, clear the app's data | Compile the shaders off the window thread on Android, or tell an ANR from graphics that don't start |
+| **On a slow device a drag that starts slowly counts as a long press.** With the emulator drawing in software, a finger that stayed still a moment before moving showed "Nothing to select here" (the long-press pick) instead of drawing the selection box. | Android emulator (software Vulkan), 0.51.0a | Start moving at once | Find whether the long press is timed by frames, and time it by the touch instead |
 | **A plugin runs only from a folder named after its id.** Gears 0.10.0's zip unpacks to `gears-0.10.0`; an agent that runs it from there (`plugin.inspect`) is refused until it is renamed `gears`. Installing through Settings › Plugins isn't affected. | Android emulator, 0.48.1a | Rename the folder to the plugin's id | Upstream's rule: suggest the plugin ship its folder under its id |
 | **On Adreno GPUs bodies are built on the CPU.** Upstream 0.40's GPU tessellation shader crashes Qualcomm's compiler, so the port skips it there. Showing a large design can take longer than it would on the GPU. | Galaxy Z Fold (Adreno 840), 0.40.0-rc.2a | None needed | Report the crash upstream with the shader; turn the GPU back on for Adreno once a driver or shader change avoids it |
 | **Googlebook screens differ.** The app runs on Googlebooks exactly as on other Android devices, since the Android underneath is the same; it was fine on an HP and a Dell XPS Googlebook (0.41.0a). Other models have other resolutions and scaling, which haven't been tried. | HP and Dell XPS Googlebooks, 0.41.0a | If the layout looks wrong, resize the app's window | Report screenshots from other models: [issues](https://github.com/deveshrai/Solidcraft-Android-Port/issues) |
@@ -105,6 +107,7 @@ reported or left to upstream, not patched in the port, so merges stay clean.
 
 | Issue | Fixed in |
 |---|---|
+| In a sketch, one finger on empty space turned the view, so several lines and points couldn't be box-selected by finger ([#8](https://github.com/deveshrai/Solidcraft-Android-Port/issues/8)) | 0.51.0a: in a sketch one finger draws the selection box; two fingers still pan and pinch, and the view bar's orbit button still turns the view by finger. Tested on the emulator |
 | The app closed when a chamfer was previewed (a cone's or a cylinder's edge picked), or now and then elsewhere after using it a while: Rust's std on Android takes a system thread-local key for each of the app's ~150 thread-locals and Android gives a process about 128, shared with the graphics driver, so std aborted ("out of TLS keys"). Adreno phones ran out first | 0.45.0b: the app's thread-locals share one system key (`apps/solidcraft-android/src/tls_keys.rs`). On the Galaxy Z Fold the same taps that crashed 0.45.0a every time (cone, Chamfer, base edge) previewed and applied, and so did a cylinder's top edge, through three folds and unfolds |
 | With upstream's touch navigation, a finger on sketch geometry orbited instead of dragging it, and with a dialog open a finger couldn't turn the view | 0.45.0a, the release that adopted it: a finger on what the view drags is the view's, and touch navigation stays on with a dialog open. Tested on a Galaxy Tab |
 | The on-screen keyboard came up whenever a window or tool focused a field by itself (Add parameter, a rectangle's dimension boxes), covering the dialog or the sketch: a rectangle's second corner landed on the keyboard ([#6](https://github.com/deveshrai/Solidcraft-Android-Port/issues/6)) | 0.42.0a: the keyboard comes up when you tap a field; a hardware keyboard still types into the focused field at once. Tested on a Galaxy Z Fold |

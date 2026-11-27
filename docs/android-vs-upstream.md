@@ -7,7 +7,7 @@ upstream release.
 
 ![The port and upstream](screenshots/android/hero-port-vs-upstream.png)
 
-Current: **port 0.48.1a**, against **upstream 0.48.1** ([what's new](android-whats-new.md)). This page is
+Current: **port 0.51.0a**, against **upstream 0.51.0** ([what's new](android-whats-new.md)). This page is
 kept up to date with each port release ([keeping this page current](#keeping-this-page-current)).
 
 - [At a glance](#at-a-glance)
@@ -20,24 +20,24 @@ kept up to date with each port release ([keeping this page current](#keeping-thi
 
 ## At a glance
 
-| | Upstream 0.48.1 | Port 0.48.1a |
+| | Upstream 0.51.0 | Port 0.51.0a |
 |---|---|---|
 | Platforms | Windows, macOS, Linux, web | All of upstream's, **plus Android and Googlebook OS**: phones, tablets, foldables, Samsung DeX, Googlebooks (an arm64 APK, and an x86_64 one for Intel Googlebooks) |
 | Modelling | Everything: sketches, the solver, every feature and workspace, exact modelled threads, plugins | The same, unchanged |
 | Plugins | Sandboxed WebAssembly plugins (first: [SolidCraft Gears](https://github.com/bherbruck/solidcraft-gears)), installed from a `.zip` | The same; the `.zip` comes through Android's file picker |
 | AI agents | MCP over stdio on the same computer (`solidcraft-cli mcp`), and the agent chat | Upstream's, **plus an MCP server on the network** (Settings › MCP server): Claude Code in Termux on the device, or on a computer on the same Wi-Fi; long calls answer "still running" and wait through `pending`, each session on its own thread, timed batches timed where they computed |
-| Touch | Touchscreen navigation (orbit, pan, pinch), off by default | Upstream's, on by default, also with a dialog open, and a finger drags sketch geometry; tap to select, finger-dragged dialog arrows, finger-scrolled drop-downs, **a crosshair to pick small edges and faces by finger** (view bar) |
+| Touch | Touchscreen navigation (orbit, pan, pinch), off by default | Upstream's, on by default, also with a dialog open, and a finger drags sketch geometry; in a sketch one finger draws the selection box; tap to select, finger-dragged dialog arrows, finger-scrolled drop-downs, **a crosshair to pick small edges and faces by finger** (view bar) |
 | Desktop windows | The operating system's | In a DeX or Googlebook OS window the app keeps below the window's title bar |
 | Files | Native file dialogs | Android's file picker: device, SD card, Google Drive, any storage app |
 | Graphics | Vulkan, Metal, DirectX, OpenGL; Windows retries other APIs | Vulkan or OpenGL ES; a launch that can't start makes the next one use OpenGL ES; the viewport shader compiles on OpenGL ES; bodies are built on the CPU on Adreno, whose compiler crashes on the GPU tessellation shader |
 | Crash reports | Kept, shown at the next start, Report… drafts an issue upstream | The same, plus **Save a copy** through Android's picker; Report… drafts it on the port's tracker |
-| Design file format | 66 | 66: upstream's own |
+| Design file format | 72 | 72: upstream's own |
 
 ## What the port adds
 
 Everything below is about running SolidCraft on Android; the modelling is upstream's.
 
-- **Touch:** one finger orbits, two fingers pan, a pinch zooms about the fingers, a tap selects,
+- **Touch:** one finger orbits (in a sketch it draws the selection box), two fingers pan, a pinch zooms about the fingers, a tap selects,
   a finger drags a dialog's arrows and scrolls a tall drop-down, and the view bar's crosshair
   button picks small edges and faces a finger would cover. All of it goes through upstream's single
   camera-input path (`navigation::handle`). Guide: [android-touch.md](android-touch.md).

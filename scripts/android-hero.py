@@ -1,6 +1,6 @@
 """The README's hero image: the port next to upstream, with a screenshot of the latest device test.
 
-    python3 scripts/android-hero.py SCREENSHOT.png docs/screenshots/android/hero-port-vs-upstream.png 0.48.1 0.48.1a
+    python3 scripts/android-hero.py SCREENSHOT.png docs/screenshots/android/hero-port-vs-upstream.png 0.51.0 0.51.0a
 
 Needs Pillow. Edit the call-out and caption text below for each release's test."""
 import sys
@@ -41,15 +41,15 @@ im.paste(shot, (fx + pad, fy + pad), mask)
 
 # Call-out over the screenshot: what the run did.
 cx, cy = fx + pad + 190, fy + pad + 96
-box = (cx, cy, cx + 470, cy + 66)
+box = (cx, cy, cx + 500, cy + 66)
 d.rounded_rectangle(box, radius=10, fill=(255, 236, 160), outline=YELLOW, width=3)
-d.text((cx + 14, cy + 6), "Linear stage, 650 mm, from two plugins", font=font(20, "SemiBold"), fill=(30, 30, 30))
-d.text((cx + 14, cy + 34), "0.48.1a; 60 MCP calls on the emulator; no part overlaps", font=font(16), fill=(60, 60, 60))
+d.text((cx + 14, cy + 6), "In a sketch, one finger draws the selection box", font=font(20, "SemiBold"), fill=(30, 30, 30))
+d.text((cx + 14, cy + 34), "0.51.0a, asked for in issue #8; two fingers still pan and zoom", font=font(16), fill=(60, 60, 60))
 
 d.text((60, fy + shot.height + 2 * pad + 22),
-       "2060 extrusion, MGN12 rail, rack and pinion, NEMA 17: built by an agent over the MCP server.",
+       "A rectangle and a circle taken in one drag by finger, the view left where it was.",
        font=font(20), fill=DIM)
-d.text((60, fy + shot.height + 2 * pad + 50), "New in 0.48.1a: upstream's 0.46.0 to 0.48.1, as an app for Android and Googlebook OS.", font=font(20), fill=DIM)
+d.text((60, fy + shot.height + 2 * pad + 50), "New in 0.51.0a: upstream's 0.49.0 to 0.51.0, as an app for Android and Googlebook OS.", font=font(20), fill=DIM)
 
 # The comparison table.
 tx, c1, c2 = 1060, 1530, 1670
@@ -69,7 +69,7 @@ def cross(x, y):
 
 
 rows = [
-    ("Android app", "touch, crosshair picks, mouse, keyboard", None, True),
+    ("Android app", "touch, box select, crosshair picks, mouse", None, True),
     ("Googlebook OS and DeX", "desktop windows; Arm and Intel APKs", None, True),
     ("MCP server on the network", "Claude Code from Termux or Wi-Fi", "stdio", True),
     ("Plugins", "upstream's; Gears and Extrusions run over MCP", True, True),

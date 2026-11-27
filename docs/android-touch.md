@@ -40,9 +40,12 @@ default on Android since 0.45.0a; turned off, a one-finger drag box-selects as a
 two fingers are down the touch stays a pan or pinch until every finger lifts, so lifting one
 finger first does not start an orbit. A finger that lands on a point, curve or dimension of the
 sketch being edited, or on a dialog's arrow, drags it as the mouse does instead of orbiting, and
-with a dialog open a finger on empty space still turns the view. While a sketch tool is on, a
-one-finger drag draws; the view bar at the bottom (orbit, pan, zoom buttons) still moves the view
-then.
+with a dialog open a finger on empty space still turns the view. While a sketch is edited (since
+0.51.0a, [#8](https://github.com/deveshrai/Solidcraft-Android-Port/issues/8)), one finger dragged
+from empty space draws the selection box instead of turning the view, and lifting it selects what
+the box spans; two fingers still pan and pinch, and with the view bar's orbit button on, one
+finger turns the view again. While a sketch tool is on, a one-finger drag draws; the view bar at the bottom
+(orbit, pan, zoom buttons) still moves the view then.
 
 | One finger: orbit | Pinch: zoom | Two fingers: pan |
 |---|---|---|
