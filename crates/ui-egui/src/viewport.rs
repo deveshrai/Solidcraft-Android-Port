@@ -19614,6 +19614,20 @@ mod tests {
         h.frame();
         assert_ne!(h.app.cam.target, cam.target, "two fingers pan in a sketch");
         assert_eq!((h.app.cam.yaw, h.app.cam.pitch), (cam.yaw, cam.pitch));
+        // With the view bar's orbit button on, one finger turns the view in a sketch too.
+        h.app.viewport.nav = Some(NavMode::Orbit);
+        h.frames(2);
+        let cam = h.app.cam;
+        finger(&mut h, 0, egui::TouchPhase::Start, from);
+        h.frame();
+        for step in 1..=6 {
+            finger(&mut h, 0, egui::TouchPhase::Move, from + vec2(20.0 * step as f32, 0.0));
+            h.frame();
+            assert!(h.app.viewport.boxsel.is_none(), "with the orbit button on, a finger draws no box");
+        }
+        finger(&mut h, 0, egui::TouchPhase::End, from + vec2(120.0, 0.0));
+        h.frames(3);
+        assert_ne!(h.app.cam.yaw, cam.yaw, "with the orbit button on, a finger turns the view");
     }
 
     /// SolidCraft (Android port), port issue #2: the view bar's crosshair button, pressed by a

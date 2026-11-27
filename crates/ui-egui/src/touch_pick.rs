@@ -87,10 +87,11 @@ pub(crate) fn view_takes(app: &SolveApp, ctx: &egui::Context, proj: &crate::view
 }
 
 /// Whether one finger on empty view draws the selection box instead of orbiting (port issue #8,
-/// asked for by Vealdvyn): while a sketch is being edited, as a mouse drag does there. Two
-/// fingers still pan and pinch, and a finger on the sketch's geometry still drags it.
+/// asked for by Vealdvyn): while a sketch is being edited, as a mouse drag does there, unless the
+/// view bar's orbit, pan or zoom button is on. Two fingers still pan and pinch, and a finger on the
+/// sketch's geometry still drags it.
 pub(crate) fn one_finger_selects(app: &SolveApp) -> bool {
-    app.session.active_sketch.is_some()
+    app.session.active_sketch.is_some() && app.viewport.nav.is_none()
 }
 
 /// The crosshair for a finger at `at`: above it, kept in the view.
